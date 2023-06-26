@@ -1,0 +1,45 @@
+direction: right
+
+v4l2src -> caps -> jpegparse -> jpegdec -> videoconvert
+
+videoconvert -> rawvideo
+
+rawvideo.type=tee
+
+rawvideo -> colockoverlay -> vaapih264enc -> h264src
+
+h264src.type=tee
+
+h264src -> queue1 -> h264parse1 -> splitmuxsink
+
+
+h264src -> queue2  -> h264parse2 -> mpegtsmux ->   hlssink
+
+rawvideo -> vaapipostproc -> caps2 -> colockoverlay2 -> pp
+
+pp.type=tee
+motion: {
+    videoconvert1_0 -> motioncells -> videoconvert1_1 -> vaapih264enc0 -> sink_queue0 -> hlssink1
+}
+
+edgedect: {
+    videoconvert2_0 -> edgedect -> videoconvert2_1 -> vaapih264enc1 -> sink_queue1 -> hlssink2
+}
+
+facedect: {
+    pre-queue -> videoconvert3_0 -> facedect -> videoconvert3_1 -> vaapih264enc2 -> sink_queue2 -> hlssink3
+}
+
+pp -> motion
+pp -> edgedect
+pp -> facedect
+
+
+pipewiresrc -> audio_caps
+audio_caps -> audio
+
+
+# splitmuxsink will store audio and hlssink will combine with audio.
+audio.type=tee
+audio -> queue3 -> splitmuxsink
+audio -> queue4 -> hlssink
