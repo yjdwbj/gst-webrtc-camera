@@ -5,13 +5,12 @@
 
 static GMainLoop *loop;
 static GstElement *pipeline;
-static GstElement *video_source, *audio_source, *h264_encoder;
+static GstElement *video_source, *audio_source, *h264_encoder, *va_pp;
 
 void sigintHandler(int unused) {
     g_print("You ctrl-c-ed! Sending EoS");
     gst_element_send_event(pipeline, gst_event_new_eos());
 }
-
 
 GstCaps *_getVideoCaps(gchar *type, gchar *format, int framerate, int width, int height) {
     return gst_caps_new_simple(type,
@@ -151,7 +150,7 @@ GstElement *video_src() {
     gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, srcvconvert, teesrc, NULL);
 
     if (!gst_element_link_many(source, capsfilter, srcvconvert, teesrc, NULL)) {
-        g_error("Failed to link elements src");
+        g_error("Failed to link elements src\n");
         return NULL;
     }
 
@@ -163,7 +162,7 @@ GstElement *audio_src() {
     GstElement *teesrc, *source, *srcvconvert, *capsfilter, *aenc;
     teesrc = gst_element_factory_make("tee", NULL);
     source = gst_element_factory_make("pipewiresrc", NULL);
-    srcvconvert = gst_element_factory_make("srcvconvert", NULL);
+    srcvconvert = gst_element_factory_make("audioconvert", NULL);
     capsfilter = gst_element_factory_make("capsfilter", NULL);
     aenc = gst_element_factory_make("avenc_aac", NULL);
 
@@ -171,7 +170,7 @@ GstElement *audio_src() {
         g_printerr("audio source all elements could be created.\n");
         return NULL;
     }
-    g_object_set(source, "path", 38, NULL);
+    // g_object_set(source, "path", 37, NULL);
 
     srcCaps = _getAudioCaps("audio/x-raw", "S16LE", 48000, 1);
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
@@ -206,7 +205,7 @@ GstElement *encoder_h264() {
 
     gst_bin_add_many(GST_BIN(pipeline), clock, encoder, teeh264, queue, NULL);
     if (!gst_element_link_many(queue, clock, encoder, teeh264, NULL)) {
-        g_error("Failed to link elements udpsink");
+        g_error("Failed to link elements encoder \n");
         return NULL;
     }
 
@@ -229,7 +228,7 @@ GstElement *vaapi_postproc() {
     GstPad *src_pad, *queue_pad;
 
     if (!gst_element_factory_find("vaapipostproc")) {
-        return NULL;
+        return video_source;
     }
     vaapipostproc = gst_element_factory_make("vaapipostproc", NULL);
     capsfilter = gst_element_factory_make("capsfilter", NULL);
@@ -247,7 +246,7 @@ GstElement *vaapi_postproc() {
     }
     gst_bin_add_many(GST_BIN(pipeline), clock, capsfilter, vaapipostproc, queue, tee, NULL);
     if (!gst_element_link_many(queue, vaapipostproc, capsfilter, clock, tee, NULL)) {
-        g_error("Failed to link elements udpsink");
+        g_error("Failed to link elements vaapi post proc.\n");
         return NULL;
     }
 
@@ -278,7 +277,7 @@ int splitfile_sink() {
     }
     gst_bin_add_many(GST_BIN(pipeline), splitmuxsink, h264parse, queue, NULL);
     if (!gst_element_link_many(queue, h264parse, splitmuxsink, NULL)) {
-        g_error("Failed to link elements udpsink");
+        g_error("Failed to link elements splitmuxsink.\n");
         return -1;
     }
 
@@ -291,7 +290,7 @@ int splitfile_sink() {
     // g_signal_connect(G_OBJECT(splitmuxsink), "split-now", G_CALLBACK(message_cb), NULL);
 
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-    g_print("Obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
+    g_print("split file obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
         g_error("Tee split file sink could not be linked.\n");
@@ -301,14 +300,11 @@ int splitfile_sink() {
 
     // add audio to muxer.
     if (audio_source != NULL) {
-        GstPad *asrc_pad, *split_pad;
-        asrc_pad = gst_element_request_pad_simple(audio_source, "src_%u");
-        g_print("Obtained request pad %s for from h264 source.\n", gst_pad_get_name(asrc_pad));
-        split_pad = gst_element_get_static_pad(splitmuxsink, "sink");
-        if (gst_pad_link(asrc_pad, split_pad) != GST_PAD_LINK_OK) {
-            g_error("Tee split file sink could not be linked.\n");
+        GstPad *asrc_pad;
+        asrc_pad = gst_element_request_pad_simple(audio_source, "audio_%u");
+        if (gst_element_add_pad(splitmuxsink,asrc_pad)) {
+            g_print("Could be add audio pad.\n");
         }
-        gst_object_unref(split_pad);
     }
 
     return 0;
@@ -329,19 +325,19 @@ int av_hlssink() {
     }
     gst_bin_add_many(GST_BIN(pipeline), hlssink, h264parse, mpegtsmux, queue, NULL);
     if (!gst_element_link_many(queue, h264parse, mpegtsmux, hlssink, NULL)) {
-        g_error("Failed to link elements udpsink");
+        g_error("Failed to link elements av hlssink\n");
         return -1;
     }
 
     g_object_set(hlssink,
                  "max-files", 10,
                  "target-duration", 10,
-                 "location", g_strconcat(outdir, "/segment%05d.ts",NULL),
+                 "location", g_strconcat(outdir, "/segment%05d.ts", NULL),
                  "playlist-root", outdir,
                  NULL);
     _mkdir(outdir, 0700);
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-    g_print("Obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
+    g_print("av obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
         g_error("Tee av hlssink could not be linked.\n");
@@ -349,30 +345,30 @@ int av_hlssink() {
     }
     gst_object_unref(queue_pad);
 
-    // add audio to muxer.
+    //add audio to muxer.
     if (audio_source != NULL) {
-        GstPad *asrc_pad, *split_pad;
-        GstElement *queue2;
-        queue2 = gst_element_factory_make("queue", NULL);
+        GstPad *tee_pad;
 
-        if (!queue2) {
-            g_printerr("av_hlssink audio not all elements could be created!!!\n");
+        GstElement *aqueue;
+        aqueue = gst_element_factory_make("queue", NULL);
+
+        if (!aqueue) {
+            g_printerr("av_hlssink audio queue elements could not be created!!!\n");
             return -1;
         }
-        gst_bin_add_many(GST_BIN(pipeline), queue2, NULL);
-
-        if (!gst_element_link_many(queue2, mpegtsmux, hlssink, NULL)) {
-            g_error("Failed to link elements audio av hlssink");
+        gst_bin_add_many(GST_BIN(pipeline), aqueue, NULL);
+        if (!gst_element_link(aqueue,  mpegtsmux)) {
+            g_error("Failed to link elements audio to mpegtsmux.\n");
             return -1;
         }
-
-        asrc_pad = gst_element_request_pad_simple(audio_source, "src_%u");
-        g_print("Obtained request pad %s for from h264 source.\n", gst_pad_get_name(asrc_pad));
-        split_pad = gst_element_get_static_pad(queue2, "sink");
-        if (gst_pad_link(asrc_pad, split_pad) != GST_PAD_LINK_OK) {
+        tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
+        g_print("av hlssin audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
+        queue_pad = gst_element_get_static_pad(aqueue, "sink");
+        if (gst_pad_link(tee_pad, queue_pad) != GST_PAD_LINK_OK) {
             g_error("Tee split file sink could not be linked.\n");
+            return -1;
         }
-        gst_object_unref(split_pad);
+        gst_object_unref(queue_pad);
     }
     return 0;
 }
@@ -390,14 +386,14 @@ int udp_multicast() {
     }
     gst_bin_add_many(GST_BIN(pipeline), udpsink, rtph264pay, queue, NULL);
     if (!gst_element_link_many(queue, rtph264pay, udpsink, NULL)) {
-        g_error("Failed to link elements udpsink");
+        g_error("Failed to link elements udpsink\n");
         return -1;
     }
     g_object_set(udpsink, "host", "224.1.1.1", "port", 5000, "auto-multicast", TRUE, NULL);
     g_object_set(rtph264pay, "name", "pay0", "pt", 96, NULL);
 
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-    g_print("Obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
+    g_print("udp obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
         g_error("Tee udp hlssink could not be linked.\n");
@@ -422,28 +418,28 @@ int motion_hlssink() {
     textoverlay = gst_element_factory_make("textoverlay", NULL);
 
     if (gst_element_factory_find("vaapih264enc")) {
-        encoder = gst_element_factory_make("vappih264enc", "vappih264enc");
+        encoder = gst_element_factory_make("vappih264enc", NULL);
     } else {
-        encoder = gst_element_factory_make("x264enc", "x264");
+        encoder = gst_element_factory_make("x264enc", NULL);
     }
     if (!hlssink || !h264parse || !queue || !mpegtsmux || !pre_convert || !post_convert || !motioncells || !encoder || !textoverlay) {
         g_printerr("motion hlssink not all elements could be created!!!\n");
         return -1;
     }
-    gst_bin_add_many(GST_BIN(pipeline), hlssink, h264parse,
-                     mpegtsmux, queue, pre_convert,
-                     post_convert, motioncells, encoder, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), pre_convert, motioncells,
+                     post_convert,textoverlay, encoder, queue,
+                     h264parse,mpegtsmux, hlssink, NULL);
     if (!gst_element_link_many(pre_convert, motioncells, post_convert,
                                textoverlay, encoder, queue, h264parse,
                                mpegtsmux, hlssink, NULL)) {
-        g_error("Failed to link elements motion sink");
+        g_error("Failed to link elements motion sink.\n");
         return -1;
     }
 
     g_object_set(hlssink,
                  "max-files", 10,
                  "target-duration", 10,
-                 "location", g_strconcat(outdir, "/motion-%05d.ts",NULL),
+                 "location", g_strconcat(outdir, "/motion-%05d.ts", NULL),
                  "playlist-root", outdir,
                  NULL);
     g_object_set(motioncells, "postallmotion", TRUE, NULL);
@@ -454,8 +450,9 @@ int motion_hlssink() {
                  NULL);
 
     _mkdir(outdir, 0700);
-    src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-    g_print("Obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
+
+    src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
+    g_print("motion obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
         g_error("Tee motion hlssink could not be linked.\n");
@@ -481,21 +478,21 @@ int facedetect_hlssink() {
     textoverlay = gst_element_factory_make("textoverlay", NULL);
 
     if (gst_element_factory_find("vaapih264enc")) {
-        encoder = gst_element_factory_make("vappih264enc", "vappih264enc");
+        encoder = gst_element_factory_make("vappih264enc", NULL);
     } else {
-        encoder = gst_element_factory_make("x264enc", "x264");
+        encoder = gst_element_factory_make("x264enc", NULL);
     }
     if (!hlssink || !h264parse || !queue || !post_queue || !mpegtsmux || !pre_convert || !post_convert || !facedetect || !encoder) {
         g_printerr("facedetect hlssink not all elements could be created!!!\n");
         return -1;
     }
-    gst_bin_add_many(GST_BIN(pipeline), hlssink, h264parse,
+    gst_bin_add_many(GST_BIN(pipeline), hlssink, h264parse, textoverlay,
                      mpegtsmux, queue, post_queue, pre_convert,
                      post_convert, facedetect, encoder, NULL);
     if (!gst_element_link_many(queue, pre_convert, facedetect, post_convert,
                                textoverlay, encoder, post_queue, h264parse,
                                mpegtsmux, hlssink, NULL)) {
-        g_error("Failed to link elements facedetect sink");
+        g_error("Failed to link elements facedetect sink.\n");
         return -1;
     }
 
@@ -505,7 +502,8 @@ int facedetect_hlssink() {
                  "location", g_strconcat(outdir, "/motion-%05d.ts", NULL),
                  "playlist-root", outdir,
                  NULL);
-    g_object_set(facedetect, "min-stddev", 24, "scale-factor", 2.8, NULL);
+    g_object_set(facedetect, "min-stddev", 24, "scale-factor", 2.8,
+                 "eyes-profile", "/usr/local/share/OpenCV/haarcascades/haarcascade_eye_tree_eyeglasses.xml", NULL);
 
     g_object_set(textoverlay, "text", "queue ! videoconvert ! facedetect min-stddev=24 scale-factor=2.8 ! videoconvert",
                  "valignment", 1, // bottom
@@ -513,8 +511,8 @@ int facedetect_hlssink() {
                  NULL);
 
     _mkdir(outdir, 0700);
-    src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-    g_print("Obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
+    src_pad = gst_element_request_pad_simple(video_source, "src_%u");
+    g_print("face obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
         g_error("Tee av hlssink could not be linked.\n");
@@ -539,21 +537,22 @@ int edgedect_hlssink() {
     textoverlay = gst_element_factory_make("textoverlay", NULL);
 
     if (gst_element_factory_find("vaapih264enc")) {
-        encoder = gst_element_factory_make("vappih264enc", "vappih264enc");
+        encoder = gst_element_factory_make("vappih264enc", NULL);
     } else {
-        encoder = gst_element_factory_make("x264enc", "x264");
+        encoder = gst_element_factory_make("x264enc", NULL);
     }
-    if (!hlssink || !h264parse  || !post_queue || !mpegtsmux || !pre_convert || !post_convert || !edgedetect || !encoder) {
+    if (!hlssink || !h264parse || !post_queue || !mpegtsmux || !pre_convert || !post_convert || !edgedetect || !encoder) {
         g_printerr("edgedect hlssink not all elements could be created!!!\n");
         return -1;
     }
     gst_bin_add_many(GST_BIN(pipeline), hlssink, h264parse,
                      mpegtsmux, post_queue, pre_convert,
-                     post_convert, edgedetect, encoder, NULL);
+                     textoverlay, post_convert, edgedetect,
+                     encoder, NULL);
     if (!gst_element_link_many(pre_convert, edgedetect, post_convert,
                                textoverlay, encoder, post_queue, h264parse,
                                mpegtsmux, hlssink, NULL)) {
-        g_error("Failed to link elements edgedect_hlssink");
+        g_error("Failed to link elements edgedect_hlssink.\n");
         return -1;
     }
 
@@ -571,8 +570,8 @@ int edgedect_hlssink() {
                  NULL);
 
     _mkdir(outdir, 0700);
-    src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-    g_print("Obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
+    src_pad = gst_element_request_pad_simple(video_source, "src_%u");
+    g_print("edge obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
         g_error("Tee edgedect_hlssink could not be linked.\n");
@@ -595,7 +594,7 @@ int main(int argc, char *argv[]) {
     gst_debug_set_default_threshold(GST_LEVEL_ERROR);
 
     if (!gst_is_initialized()) {
-        g_printerr("gst initialize failed.");
+        g_printerr("gst initialize failed.\n");
         return -1;
     }
 
@@ -603,20 +602,27 @@ int main(int argc, char *argv[]) {
     pipeline = gst_pipeline_new("pipeline");
     video_source = video_src();
     if (video_source == NULL) {
-        g_printerr("unable to open video device.");
+        g_printerr("unable to open video device.\n");
         return -1;
     }
     audio_source = audio_src();
     if (audio_source == NULL) {
-        g_printerr("unable to open audio device.");
+        g_printerr("unable to open audio device.\n");
     }
 
     h264_encoder = encoder_h264();
 
+    va_pp = vaapi_postproc();
+    if (va_pp == NULL) {
+        g_printerr("unable to open vaapi post proc.\n");
+    }
+
     if (h264_encoder == NULL) {
-        g_printerr("unable to open h264 encoder.");
+        g_printerr("unable to open h264 encoder.\n");
         return -1;
     }
+
+
     udp_multicast();
     splitfile_sink();
     av_hlssink();
@@ -624,23 +630,18 @@ int main(int argc, char *argv[]) {
     facedetect_hlssink();
     edgedect_hlssink();
 
-    // if (!gst_element_link_many(source, capsfilter, srcvconvert, encoder, rtph264pay, udpsink, NULL)) {
-    //     g_error("Failed to link elements");
-    //     return -2;
-    // }
-
     loop = g_main_loop_new(NULL, FALSE);
     bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
     gst_bus_add_signal_watch(bus);
     g_signal_connect(G_OBJECT(bus), "message", G_CALLBACK(message_cb), NULL);
 
     if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-        g_printerr("unable to set the pipeline to playing state");
+        g_printerr("unable to set the pipeline to playing state.\n");
         gst_object_unref(pipeline);
         return -2;
     }
     gst_object_unref(GST_OBJECT(bus));
-    g_print("Starting loop");
+    g_print("Starting loop.\n");
     g_main_loop_run(loop);
 
     return 0;
