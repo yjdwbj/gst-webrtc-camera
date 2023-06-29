@@ -6,6 +6,17 @@
 static GMainLoop *loop;
 static GstElement *pipeline;
 static GstElement *video_source, *audio_source, *h264_encoder, *va_pp;
+static GstState target_state = GST_STATE_PAUSED;
+
+/* exit codes */
+typedef enum _LaunchExitCode {
+    LEC_STATE_CHANGE_FAILURE = -1,
+    LEC_NO_ERROR = 0,
+    LEC_ERROR,
+    LEC_INTERRUPT
+} LaunchExitCode;
+
+static LaunchExitCode last_launch_code = LEC_NO_ERROR;
 
 void sigintHandler(int unused) {
     g_print("You ctrl-c-ed! Sending EoS");
@@ -131,26 +142,31 @@ GstElement *launch_from_shell(char *pipeline) {
 
 GstElement *video_src() {
     GstCaps *srcCaps;
-    GstElement *teesrc, *source, *srcvconvert, *capsfilter;
-    teesrc = gst_element_factory_make("tee", "teesrc");
-    source = gst_element_factory_make("v4l2src", "source");
-    srcvconvert = gst_element_factory_make("videoconvert", "srcvconvert");
-    capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
+    GstElement *teesrc, *source, *srcvconvert, *capsfilter, *jpegparse, *jpegdec;
+    teesrc = gst_element_factory_make("tee", NULL);
+    source = gst_element_factory_make("v4l2src", NULL);
+    srcvconvert = gst_element_factory_make("videoconvert", NULL);
+    jpegparse = gst_element_factory_make("jpegparse", "jpegparse");
+    jpegdec = gst_element_factory_make("jpegdec", "jpegdec");
+
+    capsfilter = gst_element_factory_make("capsfilter", NULL);
 
     if (!teesrc || !source || !srcvconvert || !capsfilter) {
         g_printerr("video_src all elements could be created.\n");
         return NULL;
     }
-    g_object_set(source, "device", "/dev/video1", NULL);
+    g_object_set(source, "device", "/dev/video0", NULL);
 
-    srcCaps = _getVideoCaps("video/x-raw", "YUY2", 30, 640, 480);
+    // srcCaps = _getVideoCaps("video/x-raw", "YUY2", 30, 640, 480);
+
+    srcCaps = _getVideoCaps("image/jpeg", "NV12", 30, 1280, 720);
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
     gst_caps_unref(srcCaps);
 
-    gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, srcvconvert, teesrc, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, srcvconvert, teesrc, jpegdec, jpegparse,NULL);
 
-    if (!gst_element_link_many(source, capsfilter, srcvconvert, teesrc, NULL)) {
-        g_error("Failed to link elements src\n");
+    if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, srcvconvert, teesrc, NULL)) {
+        g_error("Failed to link elements video src\n");
         return NULL;
     }
 
@@ -194,12 +210,13 @@ GstElement *encoder_h264() {
     queue = gst_element_factory_make("queue", NULL);
 
     if (gst_element_factory_find("vaapih264enc")) {
-        encoder = gst_element_factory_make("vappih264enc", "vappih264enc");
+        encoder = gst_element_factory_make("vaapih264enc", NULL);
     } else {
-        encoder = gst_element_factory_make("x264enc", "x264");
+        encoder = gst_element_factory_make("x264enc", NULL);
     }
     if (!encoder || !clock || !teeh264 || !queue) {
-        g_printerr("encoder_h264 all elements could be created.\n");
+        g_printerr("encoder_h264 all elements could not be created.\n");
+        // g_printerr("encoder %x ; clock %x.\n", encoder, clock);
         return NULL;
     }
 
@@ -236,7 +253,9 @@ GstElement *vaapi_postproc() {
     queue = gst_element_factory_make("queue", NULL);
     tee = gst_element_factory_make("tee", NULL);
 
-    GstCaps *srcCaps = _getVideoCaps("video/x-raw", "YUY2", 30, 640, 480);
+    // GstCaps *srcCaps = _getVideoCaps("video/x-raw", "YUY2", 30, 640, 480);
+    GstCaps *srcCaps = _getVideoCaps("video/x-raw", "NV12", 30, 1280, 720);
+
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
     gst_caps_unref(srcCaps);
 
@@ -303,7 +322,7 @@ int splitfile_sink() {
         GstPad *asrc_pad;
         asrc_pad = gst_element_request_pad_simple(audio_source, "audio_%u");
         if (gst_element_add_pad(splitmuxsink,asrc_pad)) {
-            g_print("Could be add audio pad.\n");
+            g_error("Could be add audio pad.\n");
         }
     }
 
@@ -418,7 +437,7 @@ int motion_hlssink() {
     textoverlay = gst_element_factory_make("textoverlay", NULL);
 
     if (gst_element_factory_find("vaapih264enc")) {
-        encoder = gst_element_factory_make("vappih264enc", NULL);
+        encoder = gst_element_factory_make("vaapih264enc", NULL);
     } else {
         encoder = gst_element_factory_make("x264enc", NULL);
     }
@@ -450,7 +469,6 @@ int motion_hlssink() {
                  NULL);
 
     _mkdir(outdir, 0700);
-
     src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
     g_print("motion obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
@@ -478,7 +496,7 @@ int facedetect_hlssink() {
     textoverlay = gst_element_factory_make("textoverlay", NULL);
 
     if (gst_element_factory_find("vaapih264enc")) {
-        encoder = gst_element_factory_make("vappih264enc", NULL);
+        encoder = gst_element_factory_make("vaapih264enc", NULL);
     } else {
         encoder = gst_element_factory_make("x264enc", NULL);
     }
@@ -503,7 +521,7 @@ int facedetect_hlssink() {
                  "playlist-root", outdir,
                  NULL);
     g_object_set(facedetect, "min-stddev", 24, "scale-factor", 2.8,
-                 "eyes-profile", "/usr/local/share/OpenCV/haarcascades/haarcascade_eye_tree_eyeglasses.xml", NULL);
+                 "eyes-profile", "/usr/share/opencv4/haarcascades/haarcascade_eye_tree_eyeglasses.xml", NULL);
 
     g_object_set(textoverlay, "text", "queue ! videoconvert ! facedetect min-stddev=24 scale-factor=2.8 ! videoconvert",
                  "valignment", 1, // bottom
@@ -511,7 +529,7 @@ int facedetect_hlssink() {
                  NULL);
 
     _mkdir(outdir, 0700);
-    src_pad = gst_element_request_pad_simple(video_source, "src_%u");
+    src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
     g_print("face obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
@@ -537,7 +555,7 @@ int edgedect_hlssink() {
     textoverlay = gst_element_factory_make("textoverlay", NULL);
 
     if (gst_element_factory_find("vaapih264enc")) {
-        encoder = gst_element_factory_make("vappih264enc", NULL);
+        encoder = gst_element_factory_make("vaapih264enc", NULL);
     } else {
         encoder = gst_element_factory_make("x264enc", NULL);
     }
@@ -570,7 +588,7 @@ int edgedect_hlssink() {
                  NULL);
 
     _mkdir(outdir, 0700);
-    src_pad = gst_element_request_pad_simple(video_source, "src_%u");
+    src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
     g_print("edge obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
@@ -581,8 +599,64 @@ int edgedect_hlssink() {
     return 0;
 }
 
+static GstBusSyncReply
+bus_sync_handler(GstBus *bus, GstMessage *message, gpointer data) {
+    GstElement *pipeline = (GstElement *)data;
+
+    switch (GST_MESSAGE_TYPE(message)) {
+    case GST_MESSAGE_STATE_CHANGED:
+        /* we only care about pipeline state change messages */
+        if (GST_MESSAGE_SRC(message) == GST_OBJECT_CAST(pipeline)) {
+            GstState old, new, pending;
+            gchar *state_transition_name;
+
+            gst_message_parse_state_changed(message, &old, &new, &pending);
+
+            state_transition_name = g_strdup_printf("%s_%s",
+                                                    gst_element_state_get_name(old), gst_element_state_get_name(new));
+
+            /* dump graph for (some) pipeline state changes */
+            {
+                gchar *dump_name = g_strconcat("gst-launch.", state_transition_name,
+                                               NULL);
+                GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS(GST_BIN(pipeline),
+                                                  GST_DEBUG_GRAPH_SHOW_ALL, dump_name);
+                g_free(dump_name);
+            }
+
+            /* place a marker into e.g. strace logs */
+            {
+                gchar *access_name = g_strconcat(g_get_tmp_dir(), G_DIR_SEPARATOR_S,
+                                                 "gst-launch", G_DIR_SEPARATOR_S, state_transition_name, NULL);
+                g_file_test(access_name, G_FILE_TEST_EXISTS);
+                g_free(access_name);
+            }
+
+            g_free(state_transition_name);
+        }
+        break;
+    case GST_MESSAGE_ERROR: {
+        /* dump graph on error */
+        GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS(GST_BIN(pipeline),
+                                          GST_DEBUG_GRAPH_SHOW_ALL, "gst-launch.error");
+
+
+        if (target_state == GST_STATE_PAUSED) {
+            g_printerr("ERROR: pipeline doesn't want to preroll.\n");
+        }
+
+        /* we have an error */
+        last_launch_code = LEC_ERROR;
+        g_main_loop_quit(loop);
+        break;
+    }
+    default:
+        break;
+    }
+    return GST_BUS_PASS;
+}
+
 int main(int argc, char *argv[]) {
-    GMainLoop *loop;
     GstBus *bus;
 
     signal(SIGINT, sigintHandler);
@@ -600,6 +674,7 @@ int main(int argc, char *argv[]) {
 
     gst_segtrap_set_enabled(TRUE);
     pipeline = gst_pipeline_new("pipeline");
+
     video_source = video_src();
     if (video_source == NULL) {
         g_printerr("unable to open video device.\n");
@@ -610,39 +685,48 @@ int main(int argc, char *argv[]) {
         g_printerr("unable to open audio device.\n");
     }
 
+
     h264_encoder = encoder_h264();
+    if (h264_encoder == NULL) {
+        g_printerr("unable to open h264 encoder.\n");
+        return -1;
+    }
 
     va_pp = vaapi_postproc();
     if (va_pp == NULL) {
         g_printerr("unable to open vaapi post proc.\n");
     }
 
-    if (h264_encoder == NULL) {
-        g_printerr("unable to open h264 encoder.\n");
-        return -1;
-    }
-
-
-    udp_multicast();
+    // udp_multicast();
     splitfile_sink();
-    av_hlssink();
-    motion_hlssink();
-    facedetect_hlssink();
-    edgedect_hlssink();
+    // av_hlssink();
+    // motion_hlssink();
+    // facedetect_hlssink();
+    // edgedect_hlssink();
 
-    loop = g_main_loop_new(NULL, FALSE);
+
     bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
+    // gst_bus_set_sync_handler(bus, bus_sync_handler, (gpointer)pipeline, NULL);
     gst_bus_add_signal_watch(bus);
     g_signal_connect(G_OBJECT(bus), "message", G_CALLBACK(message_cb), NULL);
 
-    if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-        g_printerr("unable to set the pipeline to playing state.\n");
+    int ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    if (ret == GST_STATE_CHANGE_FAILURE) {
+        g_printerr("unable to set the pipeline to playing state %d.\n",ret);
         gst_object_unref(pipeline);
-        return -2;
+        goto bail;
     }
-    gst_object_unref(GST_OBJECT(bus));
+    loop = g_main_loop_new(NULL, FALSE);
     g_print("Starting loop.\n");
     g_main_loop_run(loop);
+
+bail:
+    gst_object_unref(GST_OBJECT(bus));
+
+    gst_element_set_state(pipeline, GST_STATE_NULL);
+    // gst_bus_remove_watch(GST_ELEMENT_BUS(pipeline));
+
+    gst_object_unref(pipeline);
 
     return 0;
 }
