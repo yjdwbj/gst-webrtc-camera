@@ -706,7 +706,7 @@ int main(int argc, char *argv[]) {
 
 
     bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
-    // gst_bus_set_sync_handler(bus, bus_sync_handler, (gpointer)pipeline, NULL);
+    gst_bus_set_sync_handler(bus, bus_sync_handler, (gpointer)pipeline, NULL);
     gst_bus_add_signal_watch(bus);
     g_signal_connect(G_OBJECT(bus), "message", G_CALLBACK(message_cb), NULL);
 
