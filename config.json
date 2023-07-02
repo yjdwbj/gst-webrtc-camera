@@ -1,0 +1,24 @@
+{
+  "v4l2src": {
+    "width": 1280,
+    "height": 720,
+    "framterate": 30,
+    "io_mode": 2,
+    "device": "/dev/video2",
+    "type": "image/jpeg",
+    "format": "NV12"
+  },
+  "pipewire_path": 0,
+  "rootdir": "/tmp/output",
+  "showtext": false,
+  "streams": {
+    "udp_multicastsink": true,
+    "av_hlssink": true,
+    "motion_hlssink": true,
+    "edge_hlssink": true,
+    "cvtracker_hlssink": true,
+    "splitfile_sink": true,
+    "facedetect_hlssink": true,
+    "app_sink": false
+  }
+}
