@@ -2,7 +2,7 @@
   "v4l2src": {
     "width": 1280,
     "height": 720,
-    "framterate": 30,
+    "framerate": 30,
     "io_mode": 2,
     "device": "/dev/video2",
     "type": "image/jpeg",
@@ -10,7 +10,9 @@
   },
   "pipewire_path": 0,
   "rootdir": "/tmp/output",
-  "showtext": false,
+  "showtext": true,
+  "max-size-time": 6,
+  "showdot": true,
   "streams": {
     "udp_multicastsink": true,
     "av_hlssink": true,

@@ -13,7 +13,6 @@ GstConfigData config_data;
             gst_printerrln("%s is not available", name);          \
             return -1;                                            \
         }                                                         \
-        gst_println("Adding element %s", name);                   \
         elem = _elem;                                             \
         gst_bin_add(GST_BIN(pipeline), elem);                     \
     }                                                             \
@@ -21,15 +20,15 @@ GstConfigData config_data;
 
 static void _initial_device();
 
-// static GstCaps *_getVideoCaps(gchar *type, gchar *format, int framerate, int width, int height) {
-//     return gst_caps_new_simple(type,
-//                                "format", G_TYPE_STRING, format,
-//                                "framerate", GST_TYPE_FRACTION, framerate, 1,
-//                                "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
-//                                "width", G_TYPE_INT, width,
-//                                "height", G_TYPE_INT, height,
-//                                NULL);
-// }
+static GstCaps *_getVideoCaps(gchar *type, gchar *format, int framerate, int width, int height) {
+    return gst_caps_new_simple(type,
+                               "format", G_TYPE_STRING, format,
+                               "framerate", GST_TYPE_FRACTION, framerate, 1,
+                               "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
+                               "width", G_TYPE_INT, width,
+                               "height", G_TYPE_INT, height,
+                               NULL);
+}
 
 static GstCaps *_getAudioCaps(gchar *type, gchar *format, int rate, int channel) {
     return gst_caps_new_simple(type,
@@ -92,7 +91,7 @@ static GstElement *video_src() {
 
     g_object_set(G_OBJECT(source),
                  "device", config_data.v4l2src_data.device,
-                //  "io-mode", config_data.v4l2src_data.io_mode,
+                 "io-mode", config_data.v4l2src_data.io_mode,
                  NULL);
     gst_caps_unref(srcCaps);
 
@@ -201,7 +200,6 @@ static GstElement *vaapi_postproc() {
     clock = gst_element_factory_make("clockoverlay", NULL);
     tee = gst_element_factory_make("tee", NULL);
 
-
     if (!vaapipostproc || !capsfilter || !clock || !tee) {
         g_printerr("splitfile_sink not all elements could be created.\n");
         return NULL;
@@ -221,7 +219,7 @@ static GstElement *vaapi_postproc() {
     //     config_data.v4l2src_data.height);
 
     sprintf(capBuf, "%s, width=%d, height=%d, framerate=(fraction)%d/1",
-            config_data.v4l2src_data.type,
+            "video/x-raw",
             config_data.v4l2src_data.width,
             config_data.v4l2src_data.height,
             config_data.v4l2src_data.framerate);
@@ -230,7 +228,6 @@ static GstElement *vaapi_postproc() {
     gst_caps_unref(srcCaps);
 
     g_object_set(G_OBJECT(vaapipostproc), "format", 23, NULL);
-    // g_signal_connect(G_OBJECT(splitmuxsink), "split-now", G_CALLBACK(message_cb), NULL);
 
     src_pad = gst_element_request_pad_simple(video_source, "src_%u");
     g_print("Obtained request pad %s for from device source.\n", gst_pad_get_name(src_pad));
@@ -260,8 +257,15 @@ int splitfile_sink() {
     MAKE_ELEMENT_AND_ADD(splitmuxsink, "splitmuxsink");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
     MAKE_ELEMENT_AND_ADD(queue, "queue");
-    MAKE_ELEMENT_AND_ADD(matroskamux, "matroskamux");
+    matroskamux = gst_element_factory_make("matroskamux", NULL);
 
+    // if(!matroskamux)
+    // {
+    //     g_printerr("matroskamux element could not be created.\n");
+    //     return -1;
+    // }
+
+    gst_bin_add(GST_BIN(splitmuxsink), matroskamux);
     if (!gst_element_link_many(queue, h264parse, splitmuxsink, NULL)) {
         g_error("Failed to link elements splitmuxsink.\n");
         return -1;
@@ -270,31 +274,59 @@ int splitfile_sink() {
     g_object_set(splitmuxsink,
                  "location", g_strconcat(outdir, "/segment-%05d.mkv", NULL),
                  "muxer", matroskamux,
-                 "max-size-time", (guint64)600 * GST_SECOND, // 600000000000,
+                //  "async-finalize", TRUE, "muxer-factory", "matroskamux",
+                 "max-size-time", (guint64)3 * GST_SECOND, // 600000000000,
                  NULL);
     _mkdir(outdir, 0700);
-    // g_signal_connect(G_OBJECT(splitmuxsink), "split-now", G_CALLBACK(message_cb), NULL);
-
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
     g_print("split file obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
+
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
         g_error("Tee split file sink could not be linked.\n");
         return -1;
     }
     gst_object_unref(queue_pad);
 
+
     // add audio to muxer.
     if (audio_source != NULL) {
-        GstPad *tee_pad;
-        tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
 
-        queue_pad = gst_element_request_pad_simple(splitmuxsink, "audio_%u");
-        if (gst_pad_link(tee_pad, queue_pad) != GST_PAD_LINK_OK) {
+        GstPad *tee_pad, *audio_pad;
+        tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
+        audio_pad = gst_element_request_pad_simple(splitmuxsink, "audio_%u");
+        if (gst_pad_link(tee_pad, audio_pad) != GST_PAD_LINK_OK) {
             g_error("Tee split file sink could not be linked.\n");
             return -1;
         }
-        gst_object_unref(queue_pad);
+        // gst_pad_set_active(audio_pad, TRUE);
+        gst_object_unref(audio_pad);
+
+        // GList *iter;
+        // for (iter = splitmuxsink->sinkpads; iter; iter = iter->next) {
+        //     gchar *name;
+        //     name = gst_pad_get_name(iter->data);
+        //     gst_println("----> A new pad %s is created!!!!\n", name);
+        //     g_free(name);
+        // }
+
+        // GList *iter;
+        // for (iter = splitmuxsink->sinkpads; iter; iter = iter->next) {
+        //     gchar *name;
+        //     name = gst_pad_get_name(iter->data);
+        //     gst_println("----> A new pad %s is created!!!!\n", name);
+        //     g_free(name);
+        // }
+
+        // queue_pad = gst_element_request_pad_simple(matroskamux, "audio_%u");
+        // if (gst_pad_link(tee_pad, audio_pad) != GST_PAD_LINK_OK) {
+        //     g_error("Tee split file sink could not be linked.\n");
+        //     return -1;
+        // }
+
+        // gst_object_unref(queue_pad);
+        // gst_object_unref(audio_pad);
+        // gst_object_unref(video_pad);
     }
 
     return 0;
@@ -490,14 +522,14 @@ int cvtracker_hlssink() {
     if (!gst_element_link_many(pre_convert, motioncells, post_convert,
                                textoverlay, encoder, queue, h264parse,
                                hlssink, NULL)) {
-        g_error("Failed to link elements motion sink.\n");
+        g_error("Failed to link elements cvtracker sink.\n");
         return -1;
     }
 
     g_object_set(hlssink,
                  "max-files", 10,
                  "target-duration", 10,
-                 "location", g_strconcat(outdir, "/motion-%05d.ts", NULL),
+                 "location", g_strconcat(outdir, "/cvtracker-%05d.ts", NULL),
                  "playlist-root", outdir,
                  NULL);
 
@@ -508,10 +540,10 @@ int cvtracker_hlssink() {
 
     _mkdir(outdir, 0700);
     src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
-    g_print("motion obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
+    g_print("cvtracker obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
-        g_error("Tee motion hlssink could not be linked.\n");
+        g_error("Tee cvtracker hlssink could not be linked.\n");
         return -1;
     }
     gst_object_unref(queue_pad);
@@ -566,7 +598,7 @@ int facedetect_hlssink() {
     g_object_set(hlssink,
                  "max-files", 10,
                  "target-duration", 10,
-                 "location", g_strconcat(outdir, "/motion-%05d.ts", NULL),
+                 "location", g_strconcat(outdir, "/face-%05d.ts", NULL),
                  "playlist-root", outdir,
                  NULL);
     g_object_set(facedetect, "min-stddev", 24, "scale-factor", 2.8,
@@ -617,7 +649,7 @@ int edgedect_hlssink() {
     g_object_set(hlssink,
                  "max-files", 10,
                  "target-duration", 10,
-                 "location", g_strconcat(outdir, "/motion-%05d.ts", NULL),
+                 "location", g_strconcat(outdir, "/edge-%05d.ts", NULL),
                  "playlist-root", outdir,
                  NULL);
     g_object_set(edgedetect, "threshold1", 80, "threshold2", 240, NULL);
@@ -642,7 +674,13 @@ int edgedect_hlssink() {
 static void _initial_device() {
     if (is_initial)
         return;
-    _mkdir(config_data.root_dir,0700);
+    _mkdir(config_data.root_dir, 0700);
+
+    if (config_data.showdot) {
+        gchar *dotdir = g_strconcat(config_data.root_dir, "/dot", NULL);
+        _mkdir(dotdir, 0700);
+        g_setenv("GST_DEBUG_DUMP_DOT_DIR", dotdir, TRUE);
+    }
 
     video_source = video_src();
     if (video_source == NULL) {

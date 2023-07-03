@@ -34,7 +34,8 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
     case GST_MESSAGE_ERROR: {
         GError *err = NULL;
         gchar *name, *debug = NULL;
-
+        GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
+                                  GST_DEBUG_GRAPH_SHOW_ALL, "error");
         name = gst_object_get_path_string(message->src);
         gst_message_parse_error(message, &err, &debug);
 
@@ -52,7 +53,8 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
     case GST_MESSAGE_WARNING: {
         GError *err = NULL;
         gchar *name, *debug = NULL;
-
+        GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
+                                  GST_DEBUG_GRAPH_SHOW_ALL, "warning");
         name = gst_object_get_path_string(message->src);
         gst_message_parse_warning(message, &err, &debug);
 
@@ -100,6 +102,67 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
             gst_message_parse_state_changed(message, &old_state, &new_state, &pending_state);
             g_print("Pipeline state changed from %s to %s:\n",
                     gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
+            GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
+                                      GST_DEBUG_GRAPH_SHOW_ALL, gst_element_state_get_name(new_state));
+
+            if (new_state == GST_STATE_READY) {
+                // Fixed me. Why the splitmuxsink change the default muxer by g_object_set not effect.
+                // I just find these complex approach to replace the default muxer but also can not remove it from memory.
+                GstElement *splitmuxsink = gst_bin_get_by_name(GST_BIN(pipeline), "splitmuxsink0");
+                GstElement *muxer = gst_bin_get_by_name(GST_BIN(splitmuxsink), "muxer");
+                GstElement *matroskamux = gst_bin_get_by_name(GST_BIN(splitmuxsink), "matroskamux0");
+                GstElement *sink = gst_bin_get_by_name(GST_BIN(splitmuxsink), "sink");
+
+                if (muxer) {
+                    gst_println("----> get pad from muxer sink pads size: %d.\n", muxer->numsinkpads);
+                    gst_println("----> get pad from muxer src pads size: %d.\n", muxer->numsrcpads);
+
+                    GstPad *old_src_pad = muxer->srcpads->data;
+                    GstPad *fsink = gst_pad_get_peer(old_src_pad);
+                    gst_pad_unlink(old_src_pad, fsink);
+                    gst_object_unref(old_src_pad);
+
+                    GstPad *mkv_src_pad = gst_element_get_static_pad(matroskamux, "src");
+
+                    if (gst_pad_link(mkv_src_pad, fsink) != GST_PAD_LINK_OK) {
+                        gst_println("---> mkv src sink link to file sink failed.\n");
+                    }
+                    // gst_element_link(matroskamux, sink);
+
+                    GList *iter;
+                    for (iter = muxer->sinkpads; iter; iter = iter->next) {
+                        gchar *name;
+                        name = gst_pad_get_name(iter->data);
+                        gst_println("----> get pad from muxer %s is created!!!!\n", name);
+
+                        GstPad *old_src_vpad = gst_pad_get_peer(iter->data);
+                        g_print("***  %s peer pad name %s.\n", name, gst_pad_get_name(old_src_vpad));
+                        gst_pad_unlink(old_src_vpad, iter->data);
+
+                        GstPad *mkv_vpad = gst_element_request_pad_simple(matroskamux, strncmp(name, "video", 5) == 0 ? "video_%u" : "audio_%u");
+                        if (gst_pad_link(old_src_vpad, mkv_vpad) != GST_PAD_LINK_OK) {
+                            g_error("Tee split new video pad could not be linked.\n");
+                            // return -1;
+                        }
+
+                        gst_object_unref(old_src_vpad);
+                        gst_object_unref(mkv_vpad);
+                        g_free(name);
+                    }
+                    gst_object_unref(muxer);
+                }
+                GstPad *old_pad = gst_element_get_static_pad(muxer, "audio_0");
+                gst_object_set_parent(GST_OBJECT_CAST(old_pad),NULL);
+                gst_object_unref(old_pad);
+
+                old_pad = gst_element_get_static_pad(muxer, "video_0");
+                gst_object_set_parent(GST_OBJECT_CAST(old_pad), NULL);
+                gst_object_unref(old_pad);
+
+                gst_object_set_parent(GST_OBJECT_CAST(muxer), NULL);
+                g_object_set(muxer, "name", "mp4mux0", NULL);
+                g_object_set(matroskamux, "name", "muxer", NULL);
+            }
         }
         break;
     default:
@@ -169,6 +232,7 @@ static void read_config_json(gchar *fullpath) {
     tmpstr = json_object_get_string_member(root_obj, "rootdir");
     memcpy(config_data.root_dir, tmpstr, strlen(tmpstr));
     config_data.showtext = json_object_get_boolean_member_with_default(root_obj, "showtext", FALSE);
+    config_data.showdot = json_object_get_boolean_member_with_default(root_obj, "showdot", FALSE);
     config_data.pipewire_path = json_object_get_int_member_with_default(object, "pipewire_path", 0);
 
     g_object_unref(parser);

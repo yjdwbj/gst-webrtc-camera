@@ -19,6 +19,7 @@ struct _GstConfigData {
     int pipewire_path;
     gchar root_dir[255];   // streams output root path;
     gboolean showtext; // show some custom text overlay video;
+    gboolean showdot; // generate gstreamer pipeline graphs;
     struct _streams_onoff {
         gboolean udp_multicastsink;  // udp multicastsink hls output.
         gboolean av_hlssink;         // audio and video hls output.
