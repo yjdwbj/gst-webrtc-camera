@@ -1,4 +1,8 @@
 {
+  "http":{
+    "port": 7788,
+    "host": "127.0.0.1"
+  },
   "v4l2src": {
     "width": 1280,
     "height": 720,
@@ -8,19 +12,30 @@
     "type": "image/jpeg",
     "format": "NV12"
   },
-  "pipewire_path": 0,
+  "audio": {
+    "pipewire_path": 0,
+    "buf_time": 5000000
+  },
   "rootdir": "/tmp/output",
-  "showtext": true,
-  "max-size-time": 6,
   "showdot": true,
-  "streams": {
-    "udp_multicastsink": true,
+  "udp": {
+    "enable": true,
+    "port": 5000,
+    "host": "224.1.1.1",
+    "multicast": true
+  },
+  "splitfile_sink": true,
+  "app_sink": false,
+  "hls_onoff": {
     "av_hlssink": true,
     "motion_hlssink": true,
     "edge_hlssink": true,
     "cvtracker_hlssink": true,
-    "splitfile_sink": true,
-    "facedetect_hlssink": true,
-    "app_sink": false
+    "facedetect_hlssink": true
+  },
+  "hls": {
+    "duration": 10,
+    "files": 10,
+    "showtext": true
   }
 }

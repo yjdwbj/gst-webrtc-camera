@@ -20,6 +20,29 @@ compare_strings(gconstpointer a, gconstpointer b) {
     return strcmp(*sa, *sb);
 }
 
+static int port = 7788;
+static const char *root_path;
+static const char *host;
+static const char *tls_cert_file, *tls_key_file;
+
+static GOptionEntry entries[] = {
+    {"cert-file", 'c', 0,
+     G_OPTION_ARG_STRING, &tls_cert_file,
+     "Use FILE as the TLS certificate file", "FILE"},
+    {"key-file", 'k', 0,
+     G_OPTION_ARG_STRING, &tls_key_file,
+     "Use FILE as the TLS private key file", "FILE"},
+    {"port", 'p', 0,
+     G_OPTION_ARG_INT, &port,
+     "Port to listen on", NULL},
+    {"path", 'r', 0,
+     G_OPTION_ARG_STRING, &root_path,
+     "root path of web server", NULL},
+    {"host", 'h', 0,
+     G_OPTION_ARG_STRING, &host,
+     "Host to listen on", NULL},
+    {NULL}};
+
 static GString *
 get_directory_listing(const char *path) {
     GPtrArray *entries;
@@ -205,6 +228,7 @@ server_callback(SoupServer *server,
         g_print("%s\n", request_body->data);
 
     file_path = g_strdup_printf(".%s", path);
+    // file_path = g_strdup_printf("%s",root_path);
 
     if (soup_server_message_get_method(msg) == SOUP_METHOD_GET || soup_server_message_get_method(msg) == SOUP_METHOD_HEAD)
         do_get(server, msg, file_path);
@@ -217,20 +241,7 @@ server_callback(SoupServer *server,
     g_print("  -> %d %s\n\n", soup_server_message_get_status(msg), soup_server_message_get_reason_phrase(msg));
 }
 
-static int port;
-static const char *tls_cert_file, *tls_key_file;
 
-static GOptionEntry entries[] = {
-    {"cert-file", 'c', 0,
-     G_OPTION_ARG_STRING, &tls_cert_file,
-     "Use FILE as the TLS certificate file", "FILE"},
-    {"key-file", 'k', 0,
-     G_OPTION_ARG_STRING, &tls_key_file,
-     "Use FILE as the TLS private key file", "FILE"},
-    {"port", 'p', 0,
-     G_OPTION_ARG_INT, &port,
-     "Port to listen on", NULL},
-    {NULL}};
 
 int start_httpd(int argc, char **argv) {
     GOptionContext *opts;
@@ -250,11 +261,11 @@ int start_httpd(int argc, char **argv) {
                    g_option_context_get_help(opts, TRUE, NULL));
         exit(1);
     }
-    if (argc != 1) {
-        g_printerr("%s",
-                   g_option_context_get_help(opts, TRUE, NULL));
-        exit(1);
-    }
+    // if (argc != 1) {
+    //     g_printerr("%s",
+    //                g_option_context_get_help(opts, TRUE, NULL));
+    //     exit(1);
+    // }
     g_option_context_free(opts);
 
     if (tls_cert_file && tls_key_file) {

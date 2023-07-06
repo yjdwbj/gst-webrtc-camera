@@ -81,9 +81,9 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
         const GstStructure *s = gst_message_get_structure(message);
         if (gst_structure_has_name(s, "splitmuxsink-fragment-opened")) {
             location = gst_structure_get_string(s, "location");
-            g_message("get message: %s\n location: %s",
-                      gst_structure_to_string(gst_message_get_structure(message)),
-                      location);
+            // g_message("get message: %s\n location: %s",
+            //           gst_structure_to_string(gst_message_get_structure(message)),
+            //           location);
 
             // gst_debug_log(cat,
             //               GST_LEVEL_INFO,
@@ -105,66 +105,76 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
             GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
                                       GST_DEBUG_GRAPH_SHOW_ALL, gst_element_state_get_name(new_state));
 
-            if (new_state == GST_STATE_READY) {
+            if (0 /*new_state == GST_STATE_READY*/) {
                 // Fixed me. Why the splitmuxsink change the default muxer by g_object_set not effect.
                 // I just find these complex approach to replace the default muxer but also can not remove it from memory.
                 GstElement *splitmuxsink = gst_bin_get_by_name(GST_BIN(pipeline), "splitmuxsink0");
                 GstElement *muxer = gst_bin_get_by_name(GST_BIN(splitmuxsink), "muxer");
-                GstElement *matroskamux = gst_bin_get_by_name(GST_BIN(splitmuxsink), "matroskamux0");
                 GstElement *sink = gst_bin_get_by_name(GST_BIN(splitmuxsink), "sink");
 
-                if (muxer) {
-                    gst_println("----> get pad from muxer sink pads size: %d.\n", muxer->numsinkpads);
-                    gst_println("----> get pad from muxer src pads size: %d.\n", muxer->numsrcpads);
+                GstPad *old_src_vpad, *old_src_apad, *old_sink_fpad;
 
+                if (muxer) {
                     GstPad *old_src_pad = muxer->srcpads->data;
-                    GstPad *fsink = gst_pad_get_peer(old_src_pad);
-                    gst_pad_unlink(old_src_pad, fsink);
+                    old_sink_fpad = gst_pad_get_peer(old_src_pad);
+                    gst_pad_unlink(old_src_pad, old_sink_fpad);
                     gst_object_unref(old_src_pad);
 
-                    GstPad *mkv_src_pad = gst_element_get_static_pad(matroskamux, "src");
-
-                    if (gst_pad_link(mkv_src_pad, fsink) != GST_PAD_LINK_OK) {
-                        gst_println("---> mkv src sink link to file sink failed.\n");
-                    }
                     // gst_element_link(matroskamux, sink);
 
-                    GList *iter;
-                    for (iter = muxer->sinkpads; iter; iter = iter->next) {
-                        gchar *name;
-                        name = gst_pad_get_name(iter->data);
-                        gst_println("----> get pad from muxer %s is created!!!!\n", name);
+                    // gchar *name;
+                    GList *iter = muxer->sinkpads;
+                    // name = gst_pad_get_name(iter->data);
+                    old_src_vpad = gst_pad_get_peer(iter->data);
+                    gst_pad_unlink(old_src_vpad, iter->data);
+                    gst_object_unref(iter->data);
 
-                        GstPad *old_src_vpad = gst_pad_get_peer(iter->data);
-                        g_print("***  %s peer pad name %s.\n", name, gst_pad_get_name(old_src_vpad));
-                        gst_pad_unlink(old_src_vpad, iter->data);
+                    // unlink audio 0
+                    old_src_apad = gst_pad_get_peer(iter->next->data);
+                    gst_pad_unlink(old_src_apad, iter->next->data);
+                    gst_object_unref(iter->next->data);
 
-                        GstPad *mkv_vpad = gst_element_request_pad_simple(matroskamux, strncmp(name, "video", 5) == 0 ? "video_%u" : "audio_%u");
-                        if (gst_pad_link(old_src_vpad, mkv_vpad) != GST_PAD_LINK_OK) {
-                            g_error("Tee split new video pad could not be linked.\n");
-                            // return -1;
-                        }
+                    gst_object_unref(old_src_vpad);
 
-                        gst_object_unref(old_src_vpad);
-                        gst_object_unref(mkv_vpad);
-                        g_free(name);
-                    }
-                    gst_object_unref(muxer);
+                    gst_element_set_locked_state(muxer, TRUE);
+                    gst_element_set_state(muxer, GST_STATE_NULL);
+                    gst_bin_remove(GST_BIN(splitmuxsink), muxer);
+                    gst_element_set_locked_state(muxer, FALSE);
                 }
-                GstPad *old_pad = gst_element_get_static_pad(muxer, "audio_0");
-                gst_object_set_parent(GST_OBJECT_CAST(old_pad),NULL);
-                gst_object_unref(old_pad);
+                GstElement *matroskamux;
+                matroskamux = gst_element_factory_make("matroskamux", "muxer");
+                gst_bin_add(GST_BIN(splitmuxsink), matroskamux);
+                gst_element_sync_state_with_parent(matroskamux);
 
-                old_pad = gst_element_get_static_pad(muxer, "video_0");
-                gst_object_set_parent(GST_OBJECT_CAST(old_pad), NULL);
-                gst_object_unref(old_pad);
+                // gst_println("muxer parent addr: %x, file sink parent: %x, mkv parent: %x\n",
+                //             gst_object_get_parent(muxer), gst_object_get_parent(sink), gst_object_get_parent(matroskamux));
 
-                gst_object_set_parent(GST_OBJECT_CAST(muxer), NULL);
-                g_object_set(muxer, "name", "mp4mux0", NULL);
-                g_object_set(matroskamux, "name", "muxer", NULL);
+                // link to old file sink pad.
+                // GstPad *mkv_src_pad = gst_element_get_static_pad(matroskamux, "src");
+                // if (gst_pad_link(mkv_src_pad, old_sink_fpad) != GST_PAD_LINK_OK) {
+                //     gst_println("---> mkv src sink link to file sink failed.\n");
+                // }
+                if (!gst_element_link(matroskamux, sink)) {
+                    gst_println(" what problem?\n");
+                }
+
+                // link to old src pad.
+                GstPad *mkv_vpad = gst_element_request_pad_simple(matroskamux, "video_%u");
+                if (gst_pad_link(old_src_vpad, mkv_vpad) != GST_PAD_LINK_OK) {
+                    g_error("Tee split new video pad could not be linked.\n");
+                    // return -1;
+                }
+                gst_object_unref(mkv_vpad);
+
+                mkv_vpad = gst_element_request_pad_simple(matroskamux, "audio_%u");
+                if (gst_pad_link(old_src_apad, mkv_vpad) != GST_PAD_LINK_OK) {
+                    g_error("Tee split new video pad could not be linked.\n");
+                    // return -1;
+                }
+                gst_object_unref(mkv_vpad);
             }
+            break;
         }
-        break;
     default:
         break;
     }
@@ -193,7 +203,7 @@ static void read_config_json(gchar *fullpath) {
         g_print("Unable to parse file '%s': %s\n", fullpath, error->message);
         g_error_free(error);
         g_object_unref(parser);
-        return;
+        exit(1);
     }
 
     root = json_parser_get_root(parser);
@@ -219,21 +229,42 @@ static void read_config_json(gchar *fullpath) {
     config_data.v4l2src_data.io_mode = json_object_get_int_member_with_default(object, "io_mode", 0);
     config_data.v4l2src_data.framerate = json_object_get_int_member_with_default(object, "framerate", 25);
 
-    object = json_object_get_object_member(root_obj, "streams");
-    config_data.streams_onoff.udp_multicastsink = json_object_get_boolean_member_with_default(object, "udp_multicastsink", FALSE);
-    config_data.streams_onoff.av_hlssink = json_object_get_boolean_member_with_default(object, "av_hlssink", FALSE);
-    config_data.streams_onoff.motion_hlssink = json_object_get_boolean_member_with_default(object, "motion_hlssink", FALSE);
-    config_data.streams_onoff.edge_hlssink = json_object_get_boolean_member_with_default(object, "edge_hlssink", FALSE);
-    config_data.streams_onoff.splitfile_sink = json_object_get_boolean_member_with_default(object, "splitfile_sink", FALSE);
-    config_data.streams_onoff.facedetect_hlssink = json_object_get_boolean_member_with_default(object, "facedetect_sink", FALSE);
-    config_data.streams_onoff.cvtracker_hlssink = json_object_get_boolean_member_with_default(object, "cvtracker_hlssink", FALSE);
-    config_data.streams_onoff.app_sink = json_object_get_boolean_member_with_default(object, "app_sink", FALSE);
+    config_data.splitfile_sink = json_object_get_boolean_member_with_default(root_obj, "splitfile_sink", FALSE);
+    config_data.app_sink = json_object_get_boolean_member_with_default(root_obj, "app_sink", FALSE);
+
+    object = json_object_get_object_member(root_obj, "hls_onoff");
+
+    config_data.hls_onoff.av_hlssink = json_object_get_boolean_member_with_default(object, "av_hlssink", FALSE);
+    config_data.hls_onoff.motion_hlssink = json_object_get_boolean_member_with_default(object, "motion_hlssink", FALSE);
+    config_data.hls_onoff.edge_hlssink = json_object_get_boolean_member_with_default(object, "edge_hlssink", FALSE);
+    config_data.hls_onoff.facedetect_hlssink = json_object_get_boolean_member_with_default(object, "facedetect_hlssink", FALSE);
+    config_data.hls_onoff.cvtracker_hlssink = json_object_get_boolean_member_with_default(object, "cvtracker_hlssink", FALSE);
 
     tmpstr = json_object_get_string_member(root_obj, "rootdir");
     memcpy(config_data.root_dir, tmpstr, strlen(tmpstr));
-    config_data.showtext = json_object_get_boolean_member_with_default(root_obj, "showtext", FALSE);
     config_data.showdot = json_object_get_boolean_member_with_default(root_obj, "showdot", FALSE);
-    config_data.pipewire_path = json_object_get_int_member_with_default(object, "pipewire_path", 0);
+
+    object = json_object_get_object_member(root_obj, "audio");
+    config_data.audio.path = json_object_get_int_member_with_default(root_obj, "path", 0);
+    config_data.audio.buf_time = json_object_get_int_member_with_default(root_obj, "buf_time", 5000000);
+
+    object = json_object_get_object_member(root_obj, "http");
+    config_data.http_data.port = json_object_get_int_member_with_default(object, "port", 7788);
+    tmpstr = json_object_get_string_member(object, "host");
+    memcpy(config_data.http_data.host, tmpstr, strlen(tmpstr));
+
+    object = json_object_get_object_member(root_obj, "udp");
+    config_data.udp.port = json_object_get_int_member_with_default(object, "port", 5000);
+    tmpstr = json_object_get_string_member(object, "host");
+    memcpy(config_data.udp.host, tmpstr, strlen(tmpstr));
+    config_data.udp.multicast = json_object_get_boolean_member_with_default(object, "multicast", FALSE);
+    config_data.udp.enable = json_object_get_boolean_member_with_default(object, "enable", FALSE);
+
+    object = json_object_get_object_member(root_obj, "hls");
+    config_data.hls.duration = json_object_get_int_member_with_default(object, "duration", 10);
+    config_data.hls.files = json_object_get_int_member_with_default(object, "files", 10);
+    config_data.hls.showtext = json_object_get_int_member_with_default(object, "files", 10);
+    config_data.hls.showtext = json_object_get_boolean_member_with_default(object, "showtext", FALSE);
 
     g_object_unref(parser);
 }
@@ -255,10 +286,30 @@ static gchar *_get_config_path() {
 
 int main(int argc, char *argv[]) {
 
+    char port[16] = {
+        0,
+    };
+    char rpath[256] = {
+        0,
+    };
+    char host[128] = {
+        0,
+    };
+
+    gchar *http_arg[] = {
+        port,
+        rpath,
+        host};
     gchar *fullpath = _get_config_path();
     if (fullpath != NULL)
         read_config_json(fullpath);
     _get_cpuid();
+
+    sprintf(port, "--port=%d", config_data.http_data.port);
+    sprintf(rpath,"--path=%s", config_data.root_dir);
+    sprintf(host, "--host=%s", config_data.http_data.host);
+
+    gst_object_unref(pipeline);
 
     signal(SIGINT, sigintHandler);
 
@@ -274,9 +325,11 @@ int main(int argc, char *argv[]) {
     }
 
     gst_segtrap_set_enabled(TRUE);
-
     loop = g_main_loop_new(NULL, FALSE);
-    // start_httpd(argc, argv);
+
+    // gst_println("http args :%d, port: %d\n", sizeof(http_arg) / sizeof(http_arg[0]), config_data.http_data.port);
+    // gst_println("http path :%s, host: %s\n", config_data.root_dir, config_data.http_data.host);
+    // start_httpd(sizeof(http_arg) / sizeof(http_arg[0]), http_arg);
 
     pipeline = create_instance();
     GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
@@ -296,6 +349,7 @@ int main(int argc, char *argv[]) {
     gst_element_set_state(pipeline, GST_STATE_NULL);
 
 bail:
-    gst_object_unref(pipeline);
+
+
     return 0;
 }

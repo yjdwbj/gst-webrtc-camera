@@ -16,20 +16,36 @@ struct _GstConfigData {
         gchar type[16];
         gchar format[8];
     } v4l2src_data;
-    int pipewire_path;
     gchar root_dir[255];   // streams output root path;
-    gboolean showtext; // show some custom text overlay video;
     gboolean showdot; // generate gstreamer pipeline graphs;
-    struct _streams_onoff {
-        gboolean udp_multicastsink;  // udp multicastsink hls output.
+    gboolean splitfile_sink; // splitmuxsink save multipart file.
+    gboolean app_sink;       // appsink for webrtc.
+    struct _hls_onoff {
         gboolean av_hlssink;         // audio and video hls output.
-        gboolean splitfile_sink;     // splitmuxsink save multipart file.
         gboolean motion_hlssink;     // motioncells video hls output.
         gboolean facedetect_hlssink; // facedetect video hls output.
         gboolean edge_hlssink;       // edge detect video hls output.
         gboolean cvtracker_hlssink;  // cvtracker video hls output.
-        gboolean app_sink;           // appsink for webrtc.
-    } streams_onoff;
+    } hls_onoff;
+    struct _http_data {
+        int port;
+        gchar host[128];
+    } http_data;
+    struct _udp_data { // udp multicastsink hls output.
+        gboolean enable;
+        gboolean multicast;
+        int port;
+        gchar host[128];
+    } udp;
+    struct _hls_data {
+        int files;
+        int duration;
+        gboolean showtext; // show some custom text overlay video;
+    } hls;
+    struct _audio_data {
+        int path;
+        int buf_time;
+    } audio;
 };
 
 // } config_data_init = {
