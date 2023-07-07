@@ -24,14 +24,14 @@
     "host": "224.1.1.1",
     "multicast": true
   },
-  "splitfile_sink": true,
+  "splitfile_sink": false,
   "app_sink": false,
   "hls_onoff": {
     "av_hlssink": true,
     "motion_hlssink": true,
     "edge_hlssink": true,
-    "cvtracker_hlssink": true,
-    "facedetect_hlssink": true
+    "cvtracker_hlssink": false,
+    "facedetect_hlssink": false
   },
   "hls": {
     "duration": 10,

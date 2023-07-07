@@ -7,11 +7,7 @@
                 "/usr/include/glib-2.0",
                 "/usr/lib/x86_64-linux-gnu/glib-2.0/include",
                 "/usr/local/include/gstreamer-1.0",
-                "/usr/include/json-glib-1.0",
-                "/usr/include/libmount",
-                "/usr/include/blkid",
-                "/usr/include/libsoup-3.0",
-                "/usr/include/sysprof-4"
+                "/usr/include/json-glib-1.0"
             ],
             "browse": {
                 "path": [
@@ -29,10 +25,8 @@
                 "-lgstreamer-1.0",
                 "-lgobject-2.0",
                 "-lglib-2.0",
-                "-lsoup-3.0",
                 "-ljson-glib-1.0",
-                "-lgio-2.0",
-                "-lgmodule-2.0"
+                "-lgio-2.0"
             ],
             "configurationProvider": "ms-vscode.makefile-tools"
         }

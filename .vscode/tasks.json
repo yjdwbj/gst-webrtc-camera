@@ -8,7 +8,6 @@
                 "-fdiagnostics-color=always",
                 "-g",
                 "${workspaceFolder}/main.c",
-                "${workspaceFolder}/httpd.c",
                 "${workspaceFolder}/gst-app.c",
                 "-o",
                 "${workspaceFolder}/v4l2-record",
@@ -24,12 +23,10 @@
                 "-I/usr/include/x86_64-linux-gnu",
                 "-L/usr/local/lib/x86_64-linux-gnu",
                 "-lgstreamer-1.0",
-                "-lsoup-3.0",
                 "-lgobject-2.0",
                 "-lglib-2.0",
                 "-ljson-glib-1.0",
-                "-lgio-2.0",
-                "-lgmodule-2.0"
+                "-lgio-2.0"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

@@ -81,9 +81,9 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
         const GstStructure *s = gst_message_get_structure(message);
         if (gst_structure_has_name(s, "splitmuxsink-fragment-opened")) {
             location = gst_structure_get_string(s, "location");
-            // g_message("get message: %s\n location: %s",
-            //           gst_structure_to_string(gst_message_get_structure(message)),
-            //           location);
+            g_message("get message: %s\n location: %s",
+                      gst_structure_to_string(gst_message_get_structure(message)),
+                      location);
 
             // gst_debug_log(cat,
             //               GST_LEVEL_INFO,
@@ -213,7 +213,7 @@ static void read_config_json(gchar *fullpath) {
 
     object = json_object_get_object_member(root_obj, "v4l2src");
 
-    gchar *tmpstr = json_object_get_string_member_with_default(object, "device", "/dev/video0");
+    const gchar *tmpstr = json_object_get_string_member_with_default(object, "device", "/dev/video0");
     memcpy(config_data.v4l2src_data.device, tmpstr, strlen(tmpstr));
 
     tmpstr = json_object_get_string_member_with_default(object, "format", "NV12");
@@ -285,31 +285,10 @@ static gchar *_get_config_path() {
 }
 
 int main(int argc, char *argv[]) {
-
-    char port[16] = {
-        0,
-    };
-    char rpath[256] = {
-        0,
-    };
-    char host[128] = {
-        0,
-    };
-
-    gchar *http_arg[] = {
-        port,
-        rpath,
-        host};
     gchar *fullpath = _get_config_path();
     if (fullpath != NULL)
         read_config_json(fullpath);
     _get_cpuid();
-
-    sprintf(port, "--port=%d", config_data.http_data.port);
-    sprintf(rpath,"--path=%s", config_data.root_dir);
-    sprintf(host, "--host=%s", config_data.http_data.host);
-
-    gst_object_unref(pipeline);
 
     signal(SIGINT, sigintHandler);
 
@@ -327,29 +306,22 @@ int main(int argc, char *argv[]) {
     gst_segtrap_set_enabled(TRUE);
     loop = g_main_loop_new(NULL, FALSE);
 
-    // gst_println("http args :%d, port: %d\n", sizeof(http_arg) / sizeof(http_arg[0]), config_data.http_data.port);
-    // gst_println("http path :%s, host: %s\n", config_data.root_dir, config_data.http_data.host);
-    // start_httpd(sizeof(http_arg) / sizeof(http_arg[0]), http_arg);
-
     pipeline = create_instance();
     GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
     gst_bus_add_signal_watch(bus);
     g_signal_connect(G_OBJECT(bus), "message", G_CALLBACK(message_cb), NULL);
     gst_object_unref(GST_OBJECT(bus));
 
-    gst_element_set_state(pipeline, GST_STATE_PLAYING);
-
-    // if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-    //     g_printerr("unable to set the pipeline to playing state %d.\n", GST_STATE_CHANGE_FAILURE);
-    //     goto bail;
-    // }
+    if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+        g_printerr("unable to set the pipeline to playing state %d.\n", GST_STATE_CHANGE_FAILURE);
+        goto bail;
+    }
 
     g_print("Starting loop.\n");
     g_main_loop_run(loop);
     gst_element_set_state(pipeline, GST_STATE_NULL);
 
 bail:
-
-
+    g_object_unref(pipeline);
     return 0;
 }

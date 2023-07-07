@@ -6,10 +6,10 @@ EXE=v4l2-record
 # https://makefiletutorial.com/#makefile-cookbook
 # https://github.com/theicfire/makefiletutorial
 #
-CFLAGS=$$(pkg-config --cflags gstreamer-1.0 libsoup-3.0 json-glib-1.0)
-LIBS=$$(pkg-config --libs gstreamer-1.0 libsoup-3.0 json-glib-1.0)
+CFLAGS=$$(pkg-config --cflags gstreamer-1.0 json-glib-1.0)
+LIBS=$$(pkg-config --libs gstreamer-1.0  json-glib-1.0)
 all:
-	${CC} -Wall httpd.c gst-app.c main.c -g -o ${EXE} ${CFLAGS} ${LIBS}
+	${CC} -Wall  gst-app.c main.c -g -o ${EXE} ${CFLAGS} ${LIBS}
 
 
 clean:
