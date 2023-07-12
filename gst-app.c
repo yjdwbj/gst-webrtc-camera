@@ -1,10 +1,17 @@
 #include "gst-app.h"
 #include <limits.h>
 #include <sys/inotify.h>
+#include <sys/types.h>
 
 static GstElement *pipeline;
 static GstElement *video_source, *audio_source, *h264_encoder, *va_pp;
 static gboolean is_initial = FALSE;
+
+static volatile int threads_running = 0;
+static int record_time = 7;
+static volatile gboolean reading_inotify = TRUE;
+
+static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 
 GstConfigData config_data;
 
@@ -33,6 +40,7 @@ GstConfigData config_data;
     G_STMT_END
 
 static void _initial_device();
+static int start_motion_record();
 
 // static GstCaps *_getVideoCaps(gchar *type, gchar *format, int framerate, int width, int height) {
 //     return gst_caps_new_simple(type,
@@ -79,10 +87,9 @@ launch_from_shell(char *pipeline) {
     return gst_parse_launch(pipeline, &error);
 }
 
-static gchar * get_format_current_time()
-{
+static gchar *get_format_current_time() {
     GDateTime *datetime;
-    gchar *time_str, *ret;
+    gchar *time_str;
 
     datetime = g_date_time_new_now_local();
 
@@ -161,32 +168,76 @@ static GstElement *video_src() {
 
 static GstElement *audio_src() {
     GstCaps *srcCaps;
-    GstElement *teesrc, *source, *srcvconvert, *capsfilter, *aenc;
+    GstElement *teesrc, *source, *srcvconvert, *capsfilter, *enc, *audioresample;
     teesrc = gst_element_factory_make("tee", NULL);
     source = gst_element_factory_make("pipewiresrc", NULL);
     srcvconvert = gst_element_factory_make("audioconvert", NULL);
     capsfilter = gst_element_factory_make("capsfilter", NULL);
-    aenc = gst_element_factory_make("avenc_aac", NULL);
+    audioresample = gst_element_factory_make("audioresample", NULL);
+    enc = gst_element_factory_make("faac", NULL);
 
-    if (!teesrc || !source || !capsfilter || !srcvconvert || !aenc) {
+    if (!teesrc || !source || !capsfilter || !srcvconvert || !audioresample || !enc) {
         g_printerr("audio source all elements could be created.\n");
         return NULL;
     }
-    // g_object_set(source, "path", 37, NULL);
+    g_object_set(source,
+                 //  "path", 37,
+                 "always-copy", TRUE,
+                 "resend-last", TRUE, NULL);
 
     srcCaps = _getAudioCaps("audio/x-raw", "S16LE", 48000, 1);
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
 
     gst_caps_unref(srcCaps);
 
-    gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, teesrc, srcvconvert, aenc, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, teesrc, srcvconvert, audioresample, enc, NULL);
 
-    if (!gst_element_link_many(source, capsfilter, srcvconvert, aenc, teesrc, NULL)) {
+    if (!gst_element_link_many(source, capsfilter, srcvconvert, audioresample, enc, teesrc, NULL)) {
         g_error("Failed to link elements audio src.\n");
         return NULL;
     }
 
     return teesrc;
+}
+
+static GstElement *get_audio_encoder(const char *codename) {
+    GstElement *queue, *enc, *tee;
+    GstPad *src_pad, *queue_pad;
+    GstElement *audioresample;
+
+    audioresample = gst_element_factory_make("audioresample", NULL);
+    if (!audioresample) {
+        g_printerr("audioresample element could be created.\n");
+        return NULL;
+    }
+
+    // gst_println("create audio encoder : %s .\n", codename);
+    enc = gst_element_factory_make(codename, NULL);
+    tee = gst_element_factory_make("tee", NULL);
+    queue = gst_element_factory_make("queue", NULL);
+
+    if (!enc || !tee || !queue) {
+        g_printerr("audio encoder all elements could be created.\n");
+        return NULL;
+    }
+    gst_bin_add_many(GST_BIN(pipeline), audioresample, queue, enc, tee, NULL);
+
+    if (!gst_element_link_many(queue, audioresample, enc, tee, NULL)) {
+        g_error("Failed to link elements in audio encoder.\n");
+        return NULL;
+    }
+
+    g_object_set(enc, "bitrate", 128000, NULL);
+    src_pad = gst_element_request_pad_simple(audio_source, "src_%u");
+    g_print("Obtained request pad %s for from audio source.\n", gst_pad_get_name(src_pad));
+    queue_pad = gst_element_get_static_pad(queue, "sink");
+    if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
+        g_error("Audio encoder source could not be linked.\n");
+        return NULL;
+    }
+    gst_object_unref(queue_pad);
+
+    return tee;
 }
 
 static GstElement *encoder_h264() {
@@ -282,36 +333,50 @@ static GstElement *vaapi_postproc() {
     return tee;
 }
 
-// static void cb_new_pad(GstElement *element, GstPad *pad, gpointer data) {
-//     gchar *name;
-//     name = gst_pad_get_name(pad);
-//     gst_println("A new pad %s is created!!!!\n", name);
-//     g_free(name);
-// }
+static void _start_record_thread() {
+    int ret;
+    pthread_t t1;
+    char abpath[PATH_MAX] = {
+        0,
+    };
 
-static volatile int threads_running = 0;
-static double record_time = 7;
-static volatile gboolean reading_inotify = TRUE;
-static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
-static int start_motion_record();
+    ret = pthread_create(&t1, NULL, start_motion_record, NULL);
+
+    if (ret) {
+        gst_printerr("pthread create start record thread failed, ret: %d.\n", ret);
+    }
+    ret = pthread_detach(t1);
+    if (ret) {
+        gst_printerr("pthread detach start record thread failed!!!!, ret: %d .\n", ret);
+    }
+
+    gst_printerr("_start_record_thread  pthread  detached , tid %lu .\n", t1);
+}
 
 static void *_inotify_thread(void *filename) {
-    static int inotifyFd, wd, ret;
+    static int inotifyFd, wd;
+    int ret;
     ssize_t rsize;
     static char buf[4096];
     struct inotify_event *event;
 
-    inotifyFd = inotify_init();
+    inotifyFd = inotify_init1(IN_NONBLOCK);
 
     if (inotifyFd == -1) {
         gst_printerr("inotify init failed %d.\n", errno);
         exit(EXIT_FAILURE);
     }
-    gst_println(" inotify monitor for file: %s .\n", (char *)filename);
-    wd = inotify_add_watch(inotifyFd, (char *)filename, IN_MODIFY | IN_CREATE);
+    // gst_println("inotify monitor for file: %s .\n", (char *)filename);
+    if (!g_file_test((char *)filename, G_FILE_TEST_EXISTS)) {
+        gst_println(" inotify monitor exists?\n");
+        FILE *file;
+        file = fopen((char *)filename, "w");
+        fclose(file);
+    }
+    wd = inotify_add_watch(inotifyFd, (char *)filename, IN_ALL_EVENTS);
     if (wd == -1) {
         gst_printerr("inotify_add_watch failed, errno: %d.\n", errno);
-        // exit(EXIT_FAILURE);
+        exit(EXIT_FAILURE);
     }
 
     for (;;) {
@@ -327,14 +392,25 @@ static void *_inotify_thread(void *filename) {
 
         for (char *ptr = buf; ptr < buf + rsize;) {
             event = (struct inotify_event *)ptr;
-            if (event->mask & IN_MODIFY) {
-                gst_println("Got IN Modify event :%s .\n", get_format_current_time());
+            if (event->mask & IN_MODIFY || event->mask & IN_OPEN) {
+                // gst_println("Got IN Modify event :%s .\n", get_format_current_time());
 
                 if (!threads_running) {
-                    threads_running = TRUE;
-                    start_motion_record();
-                }
 
+                    ret = pthread_mutex_lock(&mtx);
+                    if (ret) {
+                        g_error("Failed to lock on mutex.\n");
+                    }
+                    threads_running = TRUE;
+                    ret = pthread_mutex_unlock(&mtx);
+                    if (ret) {
+                        g_error("Failed to lock on mutex.\n");
+                    }
+                    // _start_record_thread();
+                    g_thread_new("start_record_mkv", (GThreadFunc)start_motion_record, NULL);
+                    // start_motion_record();
+                }
+                break;
             }
             ptr += sizeof(struct inotify_event) + event->len;
         }
@@ -343,110 +419,183 @@ static void *_inotify_thread(void *filename) {
     gst_println("Exiting inotify thread..., errno: %d .\n", errno);
 }
 
-static int start_motion_record() {
-    if (!_check_initial_status())
-        return -1;
+static void _start_watch_motion_file() {
+    int ret;
+    pthread_t t1;
+    char abpath[PATH_MAX] = {
+        0,
+    };
 
+    realpath(g_strconcat(config_data.root_dir, "/hls/motion/motioncells-0.vamc", NULL), abpath);
+    // gst_println("absolute path: %s .\n", abpath);
+    ret = pthread_create(&t1, NULL, _inotify_thread, g_strdup(abpath));
+    gst_printerr("pthread _inotify_thread created, tid %lu \n", t1);
+    if (ret) {
+        gst_printerr("pthread create monitor motion detect failed, ret: %d .\n", ret);
+    }
+    ret = pthread_detach(t1);
+    if (ret) {
+        gst_printerr("pthread_detach inotify monitor motion detect failed, ret: %d \n", ret);
+    }
+
+    gst_printerr("pthread _inotify_thread  pthread  detached , tid %lu \n", t1);
+}
+
+static void
+gst_rtp_sink_rtpbin_element_added_cb(GstBin *element,
+                                     GstElement *new_element, gpointer data) {
+    gst_println("Added new element: %s .\n", gst_element_get_name(new_element));
+}
+
+static void
+gst_rtp_sink_rtpbin_element_removed_cb(GstBin *element,
+                                     GstElement *new_element, gpointer data) {
+    gst_println("Removed element: %s .\n", gst_element_get_name(new_element));
+}
+
+static void
+gst_rtp_sink_rtpbin_pad_added_cb(GstElement *element, GstPad *pad,
+                                 gpointer data) {
+
+    /* Expose RTP data pad only */
+    gst_println("Added new pad: %s .\n", gst_pad_get_name(pad));
+}
+
+static void
+gst_rtp_sink_rtpbin_pad_removed_cb(GstElement *element, GstPad *pad,
+                                   gpointer data) {
+    gst_println("Remove pad: %s .\n", gst_pad_get_name(pad));
+}
+
+static const char *rec_bin_name = "motion_bin";
+static int start_motion_record() {
+    int ret;
+    GstBin *recpipe;
     const gchar *outdir = g_strconcat(config_data.root_dir, "/mkv", NULL);
     GstElement *filesink, *vqueue, *matroskamux, *bin, *h264parse;
-    GstPad *src_pad, *sub_sink_vpad, *sub_sink_apad;
+    GstPad *src_apad, *src_vpad, *sub_sink_vpad, *sub_sink_apad, *file_pad;
+    GstPadLinkReturn lret;
+
     GTimer *timer = g_timer_new();
+    recpipe = gst_bin_get_by_name(GST_BIN(pipeline), rec_bin_name);
+    recpipe = gst_bin_new(rec_bin_name);
 
-    bin = gst_bin_new("motion_bin");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, filesink, "filesink");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, vqueue, "queue");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, h264parse, "h264parse");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, matroskamux, "matroskamux");
+    g_signal_connect_object(recpipe, "element-added",
+                            G_CALLBACK(gst_rtp_sink_rtpbin_element_added_cb), NULL, 0);
+    g_signal_connect_object(recpipe, "element-removed",
+                            G_CALLBACK(gst_rtp_sink_rtpbin_element_removed_cb), NULL, 0);
+    g_signal_connect_object(recpipe, "pad-added",
+                            G_CALLBACK(gst_rtp_sink_rtpbin_pad_added_cb), NULL, 0);
+    g_signal_connect_object(recpipe, "pad-removed",
+                            G_CALLBACK(gst_rtp_sink_rtpbin_pad_removed_cb), NULL, 0);
 
-    if (!gst_element_link_many(vqueue, h264parse,matroskamux, filesink, NULL)) {
+
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(recpipe, filesink, "filesink");
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(recpipe, vqueue, "queue");
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(recpipe, h264parse, "h264parse");
+    // matroskamux have a lot of problem.
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(recpipe, matroskamux, "matroskamux");
+    gst_bin_add(GST_BIN(pipeline), recpipe);
+    if (!gst_element_link_many(vqueue, h264parse, matroskamux, filesink, NULL)) {
         g_error("Failed to link elements splitmuxsink.\n");
         return -1;
     }
 
+    // create ghost pads for sub bin. added video to muxer
+    sub_sink_vpad = gst_element_get_static_pad(vqueue, "sink");
+    gst_element_add_pad(recpipe, gst_ghost_pad_new("video0", sub_sink_vpad));
+    gst_object_unref(GST_OBJECT(sub_sink_vpad));
+
+    // filesink = gst_bin_get_by_name(GST_BIN(recpipe), "filesink0");
     g_object_set(filesink, "location", g_strconcat(outdir, g_strdup_printf("/motion-%s.mkv", get_current_time_str()), NULL), NULL);
     _mkdir(outdir, 0755);
 
-    // create ghost pads for sub bin.
-    sub_sink_vpad = gst_element_get_static_pad(vqueue, "sink");
-    gst_element_add_pad(bin, gst_ghost_pad_new("video0", sub_sink_vpad));
-    gst_object_unref(GST_OBJECT(sub_sink_vpad));
-
-    // set the new bin to PAUSE to preroll
-    gst_element_set_state(bin, GST_STATE_PAUSED);
-    src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-    g_print("mkv obtained request pad %s for from  h264 source.\n", gst_pad_get_name(src_pad));
-    sub_sink_vpad = gst_element_get_static_pad(bin, "video0");
-
-    gst_bin_add(GST_BIN(pipeline), bin);
-    if (gst_pad_link(src_pad, sub_sink_vpad) != GST_PAD_LINK_OK) {
-        g_error("Tee mkv file video sink could not be linked.\n");
-        return -1;
+    src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
+    g_print("mkv obtained request pad %s for from  h264 source.\n", gst_pad_get_name(src_vpad));
+    sub_sink_vpad = gst_element_get_static_pad(recpipe, "video0");
+    if ((lret = gst_pad_link(src_vpad, sub_sink_vpad)) != GST_PAD_LINK_OK) {
+        g_error("Tee mkv file video sink could not be linked. ret: %d \n", lret);
+        goto fail1;
     }
     gst_object_unref(sub_sink_vpad);
 
     // add audio to muxer.
-    // if (audio_source != NULL) {
-    //     GstPad *src_apad;
-    //     GstPadLinkReturn lret;
-    //     GstElement *aqueue;
-    //     SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, aqueue, "queue");
-    //     gst_element_sync_state_with_parent(aqueue);
-    //     if (!gst_element_link(aqueue, matroskamux)) {
-    //         g_error("Failed to link elements audio to mpegtsmux.\n");
-    //         return -1;
-    //     }
+    // sub_sink_apad = gst_element_request_pad_simple(matroskamux, "audio_%u");
+    // gst_pad_add_probe(sub_sink_apad,
+    //                   GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_DATA_DOWNSTREAM,
+    //                   (GstPadProbeCallback)srcpad_blocked_cb, bin, NULL);
+    // gst_element_add_pad(bin, gst_ghost_pad_new("audio0", sub_sink_apad));
+    // gst_object_unref(GST_OBJECT(sub_sink_apad));
+    // src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
 
-    //     // create ghost pads for sub bin.
-    //     sub_sink_apad = gst_element_get_static_pad(aqueue, "sink");
-    //     gst_element_add_pad(bin, gst_ghost_pad_new("audio0", sub_sink_apad));
-    //     gst_object_unref(GST_OBJECT(sub_sink_apad));
-
-    //     src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
-    //     g_print("mkv obtained request pad %s for from audio source.\n", gst_pad_get_name(src_apad));
-    //     sub_sink_apad = gst_element_get_static_pad(bin, "audio0");
-    //     if ( (lret = gst_pad_link(src_apad, sub_sink_apad)) != GST_PAD_LINK_OK) {
-    //         gst_printerrln("Tee mkv file audio sink could not be linked, link return :%d .\n", lret);
-    //         return -1;
-    //     }
-    //     gst_object_unref(sub_sink_apad);
+    // g_print("mkv obtained request pad %s for from audio source.\n", gst_pad_get_name(src_apad));
+    // sub_sink_apad = gst_element_get_static_pad(bin, "audio0");
+    // if ((lret = gst_pad_link(src_apad, sub_sink_apad)) != GST_PAD_LINK_OK) {
+    //     // May be the src and sink are not match the format. ex: aac could not link to matroskamux.
+    //     gst_printerrln("Tee mkv file audio sink could not be linked, link return :%d .\n", lret);
+    //     return -1;
     // }
-    GstState state, pending;
-    gst_element_get_state(GST_ELEMENT(pipeline), &state, &pending, 0);
-    if(state > GST_STATE_PAUSED || pending > GST_STATE_PAUSED)
-    {
-        gst_element_set_state(bin, GST_STATE_PLAYING);
-    }
+    // gst_object_unref(sub_sink_apad);
 
-    gst_println("start record at: %s.\n", get_format_current_time());
-
+    gst_println("start record at: %s .\n", get_format_current_time());
+    gst_element_set_state(recpipe, GST_STATE_PLAYING);
+    gst_element_set_state(pipeline, GST_STATE_PLAYING);
     g_timer_start(timer);
     while (g_timer_elapsed(timer, NULL) < record_time) {
     }
 
-
+fail1:
+    g_timer_destroy(timer);
     // stop recording after timer timeout.
-    gst_println("stoping record at: %s.\n",get_format_current_time());
-    gst_element_set_state(bin, GST_STATE_NULL);
+    gst_println("stoping record at: %s .\n", get_format_current_time());
+    // sub_sink_apad = gst_element_get_static_pad(bin, "audio0");
+    // src_apad = gst_pad_get_peer(sub_sink_apad);
+
+    sub_sink_vpad = gst_element_get_static_pad(recpipe, "video0");
+    src_vpad = gst_pad_get_peer(sub_sink_vpad);
+
+    gst_element_set_state(recpipe, GST_STATE_NULL);
+    gst_element_set_state(vqueue, GST_STATE_NULL);
+    gst_element_set_state(h264parse, GST_STATE_NULL);
+    gst_element_set_state(matroskamux, GST_STATE_NULL);
+    gst_element_set_state(filesink, GST_STATE_NULL);
+
+    gst_bin_remove(GST_BIN(recpipe), filesink);
+    gst_bin_remove(GST_BIN(recpipe), matroskamux);
+    gst_bin_remove(GST_BIN(recpipe), h264parse);
+    gst_bin_remove(GST_BIN(recpipe), vqueue);
+
+    // gst_pad_send_event(sub_sink_apad, gst_event_new_eos());
+    gst_pad_send_event(sub_sink_vpad, gst_event_new_eos());
+
+    gst_pad_unlink(src_vpad, sub_sink_vpad);
+    // gst_pad_unlink(src_apad, sub_sink_apad);
+
+    gst_bin_remove(pipeline, recpipe);
+    gst_element_set_state(pipeline, GST_STATE_PLAYING);
 
     // unlink sink pad and release src pad for video.
-    sub_sink_vpad = gst_element_get_static_pad(bin, "video0");
-    src_pad = gst_pad_get_peer(sub_sink_vpad);
-    gst_pad_unlink(src_pad, sub_sink_vpad);
 
-    gst_println("vpad peer pad name: %s\n", gst_pad_get_name(src_pad));
-    gst_element_release_request_pad(h264_encoder, src_pad);
-    gst_element_remove_pad(bin, sub_sink_vpad);
+    gst_element_release_request_pad(h264_encoder, src_vpad);
     gst_object_unref(sub_sink_vpad);
-    gst_object_unref(src_pad);
+    gst_object_unref(src_vpad);
 
-    // sub_sink_apad = gst_element_get_static_pad(bin, "audio0");
-    // gst_pad_unlink(gst_pad_get_peer(sub_sink_apad), sub_sink_apad);
-    // g_object_unref(sub_sink_apad);
+    // unlink audio pad.
+    // g_print("mkv relase get peer %s for from audio source.\n", gst_pad_get_name(src_apad));
+    // gst_element_release_request_pad(audio_source, src_apad);
+    // gst_object_unref(sub_sink_apad);
+    // gst_object_unref(src_apad);
 
-    gst_bin_remove(GST_BIN(pipeline), bin);
-    // gst_object_unref(bin);
+    ret = pthread_mutex_lock(&mtx);
+    if (ret) {
+        g_error("Failed to lock on mutex.\n");
+    }
     threads_running = FALSE;
-    g_timer_destroy(timer);
+    ret = pthread_mutex_unlock(&mtx);
+    if (ret) {
+        g_error("Failed to lock on mutex.\n");
+    }
+    // gst_println("Stop  motion record thread Id: %d\n", tid);
     return 0;
 }
 
@@ -455,6 +604,7 @@ int splitfile_sink() {
         return -1;
     GstElement *splitmuxsink, *h264parse, *queue;
     GstPad *src_pad, *queue_pad;
+    GstPadLinkReturn lret;
 
     const gchar *outdir = g_strconcat(config_data.root_dir, "/mp4", NULL);
     MAKE_ELEMENT_AND_ADD(splitmuxsink, "splitmuxsink");
@@ -477,21 +627,21 @@ int splitfile_sink() {
     g_print("split file obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
 
-    if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
-        g_error("Tee split file sink could not be linked.\n");
+    if ((lret = gst_pad_link(src_pad, queue_pad)) != GST_PAD_LINK_OK) {
+        g_printerr("Split file video sink could not be linked. return: %d \n", lret);
         return -1;
     }
     gst_object_unref(queue_pad);
 
     // add audio to muxer.
     if (audio_source != NULL) {
-
         GstPad *tee_pad, *audio_pad;
+
         tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
         g_print("split file obtained request pad %s for from audio source.\n", gst_pad_get_name(tee_pad));
         audio_pad = gst_element_request_pad_simple(splitmuxsink, "audio_%u");
-        if (gst_pad_link(tee_pad, audio_pad) != GST_PAD_LINK_OK) {
-            g_error("Tee split file sink could not be linked.\n");
+        if ((lret = gst_pad_link(tee_pad, audio_pad)) != GST_PAD_LINK_OK) {
+            g_printerr("Split file audio sink could not be linked. return: %d .\n", lret);
             return -1;
         }
         gst_object_unref(audio_pad);
@@ -503,6 +653,7 @@ int splitfile_sink() {
 int av_hlssink() {
     GstElement *hlssink, *h264parse, *mpegtsmux, *queue;
     GstPad *src_pad, *queue_pad;
+    GstPadLinkReturn lret;
     if (!_check_initial_status())
         return -1;
 
@@ -527,8 +678,8 @@ int av_hlssink() {
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
     g_print("av obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
-    if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
-        g_error("Tee av hlssink could not be linked.\n");
+    if ((lret = gst_pad_link(src_pad, queue_pad)) != GST_PAD_LINK_OK) {
+        g_error("Tee av hls audio sink could not be linked.\n");
         return -1;
     }
     gst_object_unref(queue_pad);
@@ -544,10 +695,10 @@ int av_hlssink() {
             return -1;
         }
         tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
-        g_print("av hlssin audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
+        g_print("av hlssink audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
         queue_pad = gst_element_get_static_pad(aqueue, "sink");
-        if (gst_pad_link(tee_pad, queue_pad) != GST_PAD_LINK_OK) {
-            g_error("Tee split file sink could not be linked.\n");
+        if ((lret = gst_pad_link(tee_pad, queue_pad)) != GST_PAD_LINK_OK) {
+            g_error("Av hls audio sink could not be linked. return: %d \n", lret);
             return -1;
         }
         gst_object_unref(queue_pad);
@@ -889,10 +1040,12 @@ static void _initial_device() {
     if (is_initial)
         return;
     _mkdir(config_data.root_dir, 0755);
+    record_time = config_data.rec_len;
 
     if (config_data.showdot) {
         gchar *dotdir = g_strconcat(config_data.root_dir, "/dot", NULL);
         _mkdir(dotdir, 0755);
+        // https://gstreamer.freedesktop.org/documentation/gstreamer/running.html?gi-language=c
         g_setenv("GST_DEBUG_DUMP_DOT_DIR", dotdir, TRUE);
     }
 
@@ -913,6 +1066,9 @@ static void _initial_device() {
         g_printerr("unable to open audio device.\n");
     }
 
+    // aac_enc = get_audio_encoder("faac");
+    // mkv_aenc = get_audio_encoder("avenc_ac3");
+
     va_pp = vaapi_postproc();
     if (va_pp == NULL) {
         g_printerr("unable to open vaapi post proc.\n");
@@ -920,30 +1076,15 @@ static void _initial_device() {
     is_initial = TRUE;
 }
 
-static void _start_watch_motion_file() {
-    int ret;
-    pthread_t t1;
-    pthread_attr_t attr;
+gboolean timeout_callback(gpointer d) {
+    // _start_watch_motion_file();
     char abpath[PATH_MAX] = {
         0,
     };
 
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
     realpath(g_strconcat(config_data.root_dir, "/hls/motion/motioncells-0.vamc", NULL), abpath);
-    gst_println("absolute path: %s .\n", abpath);
-    ret = pthread_create(&t1, &attr, _inotify_thread, g_strdup(abpath));
-
-    pthread_attr_destroy(&attr);
-    if (ret) {
-        gst_printerr("create inotify monitor motion detect failed.\n");
-    }
-
-    ret = pthread_detach(t1);
-    if (ret) {
-        gst_printerr("pthread_join inotify monitor motion detect failed.\n");
-    }
+    g_thread_new("_inotify_thread", _inotify_thread, g_strdup(abpath));
+    return 0;
 }
 
 GstElement *create_instance() {
@@ -968,9 +1109,8 @@ GstElement *create_instance() {
 
     if (config_data.hls_onoff.motion_hlssink) {
         motion_hlssink();
+        g_timeout_add_once(10 * 1000, timeout_callback, NULL);
     }
-
-    _start_watch_motion_file();
 
     return pipeline;
 }

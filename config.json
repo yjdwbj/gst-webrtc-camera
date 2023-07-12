@@ -8,7 +8,7 @@
     "height": 720,
     "framerate": 30,
     "io_mode": 2,
-    "device": "/dev/video2",
+    "device": "/dev/video0",
     "type": "image/jpeg",
     "format": "NV12"
   },
@@ -21,16 +21,17 @@
   "udp": {
     "enable": true,
     "port": 5000,
-    "host": "224.1.1.1",
-    "multicast": true
+    "host": "127.0.0.1",
+    "multicast": false
   },
   "splitfile_sink": false,
   "app_sink": false,
+  "rec_len": 10,
   "hls_onoff": {
     "av_hlssink": true,
     "motion_hlssink": true,
     "edge_hlssink": true,
-    "cvtracker_hlssink": false,
+    "cvtracker_hlssink": true,
     "facedetect_hlssink": false
   },
   "hls": {

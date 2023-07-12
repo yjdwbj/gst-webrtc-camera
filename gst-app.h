@@ -46,6 +46,7 @@ struct _GstConfigData {
         int path;
         int buf_time;
     } audio;
+    int rec_len; // motion detect record duration, seconds.
 };
 
 // } config_data_init = {

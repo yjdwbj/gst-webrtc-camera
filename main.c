@@ -92,9 +92,42 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
             //               0,
             //               NULL,
             //               location);
+        } else if (gst_structure_has_name(s, "GstBinForwarded")) {
+            GstMessage *forward_msg = NULL;
+
+            gst_structure_get(s, "message", GST_TYPE_MESSAGE, &forward_msg, NULL);
+            if (GST_MESSAGE_TYPE(forward_msg) == GST_MESSAGE_EOS) {
+                g_print("EOS from element %s\n",
+                        GST_OBJECT_NAME(GST_MESSAGE_SRC(forward_msg)));
+                // gst_element_set_state(app->filesink, GST_STATE_NULL);
+                // gst_element_set_state(app->muxer, GST_STATE_NULL);
+                // app_update_filesink_location(app);
+                // gst_element_set_state(app->filesink, GST_STATE_PLAYING);
+                // gst_element_set_state(app->muxer, GST_STATE_PLAYING);
+                // /* do another recording in 10 secs time */
+                // g_timeout_add_seconds(10, start_recording_cb, app);
+            }
+            gst_message_unref(forward_msg);
         }
-        break;
+
+            break;
     }
+    // case GST_MESSAGE_BUFFERING:{
+    //     gint percent = 0;
+
+    //     /* If the stream is live, we do not care about buffering. */
+    //     if (data->is_live)
+    //         break;
+
+    //     gst_message_parse_buffering(message, &percent);
+    //     g_print("Buffering (%3d%%)\r", percent);
+    //     /* Wait until buffering is complete before start/resume playing */
+    //     if (percent < 100)
+    //         gst_element_set_state(pipeline, GST_STATE_PAUSED);
+    //     else
+    //         gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    //     break;
+    // }
     case GST_MESSAGE_STATE_CHANGED:
         /* We are only interested in state-changed messages from the pipeline */
         if (GST_MESSAGE_SRC(message) == GST_OBJECT(pipeline)) {
@@ -104,7 +137,10 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
                     gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
             GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
                                       GST_DEBUG_GRAPH_SHOW_ALL, gst_element_state_get_name(new_state));
+            if(new_state == GST_STATE_PLAYING)
+            {
 
+            }
             if (0 /*new_state == GST_STATE_READY*/) {
                 // Fixed me. Why the splitmuxsink change the default muxer by g_object_set not effect.
                 // I just find these complex approach to replace the default muxer but also can not remove it from memory.
@@ -181,8 +217,6 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
     return TRUE;
 }
 
-extern int start_httpd(int argc, char **argv);
-
 void sigintHandler(int unused) {
     g_print("You ctrl-c-ed! Sending EoS");
     gst_element_send_event(pipeline, gst_event_new_eos());
@@ -244,6 +278,8 @@ static void read_config_json(gchar *fullpath) {
     memcpy(config_data.root_dir, tmpstr, strlen(tmpstr));
     config_data.showdot = json_object_get_boolean_member_with_default(root_obj, "showdot", FALSE);
 
+    config_data.rec_len = json_object_get_int_member_with_default(root_obj, "rec_len", 60);
+
     object = json_object_get_object_member(root_obj, "audio");
     config_data.audio.path = json_object_get_int_member_with_default(root_obj, "path", 0);
     config_data.audio.buf_time = json_object_get_int_member_with_default(root_obj, "buf_time", 5000000);
@@ -265,6 +301,7 @@ static void read_config_json(gchar *fullpath) {
     config_data.hls.files = json_object_get_int_member_with_default(object, "files", 10);
     config_data.hls.showtext = json_object_get_int_member_with_default(object, "files", 10);
     config_data.hls.showtext = json_object_get_boolean_member_with_default(object, "showtext", FALSE);
+
 
     g_object_unref(parser);
 }
