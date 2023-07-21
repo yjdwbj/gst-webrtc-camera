@@ -23,6 +23,8 @@
             "compilerArgs": [
                 "-pthread",
                 "-lgstreamer-1.0",
+                "-lgstapp-1.0",
+                "-lgstbase-1.0",
                 "-lgobject-2.0",
                 "-lglib-2.0",
                 "-ljson-glib-1.0",

@@ -139,7 +139,7 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
                                       GST_DEBUG_GRAPH_SHOW_ALL, gst_element_state_get_name(new_state));
             if(new_state == GST_STATE_PLAYING)
             {
-
+                //  get_mkv_mux();
             }
             if (0 /*new_state == GST_STATE_READY*/) {
                 // Fixed me. Why the splitmuxsink change the default muxer by g_object_set not effect.
@@ -219,7 +219,8 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
 
 void sigintHandler(int unused) {
     g_print("You ctrl-c-ed! Sending EoS");
-    gst_element_send_event(pipeline, gst_event_new_eos());
+    gboolean ret = gst_element_send_event(pipeline, gst_event_new_eos());
+    g_print("send Eos ret: %b .\n", ret);
     exit(0);
 }
 

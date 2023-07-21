@@ -69,12 +69,31 @@ struct _GstConfigData {
 
 typedef struct _GstConfigData GstConfigData;
 
-GstElement *create_instance();
+typedef struct {
+    GstElement *appsrc;
+    GstElement *appsink;
+    GstElement *muxer;
+    gulong appsink_connected_id;
+} CustomAppData;
+
+/* Structure to contain all our information, so we can pass it to callbacks */
+typedef struct {
+    GstElement *h264parse;
+    GstElement *aqueue;
+    GstElement *vqueue;
+    GstElement *muxer;
+    GstElement *filesink;
+    GstElement *bin;
+} CustomBinData;
+
+GstElement *
+create_instance();
 
 int splitfile_sink();
 int av_hlssink();
 int udp_multicastsink();
 
+GstElement *get_mkv_mux();
 // opencv plugin
 int motion_hlssink();
 int cvtracker_hlssink();
