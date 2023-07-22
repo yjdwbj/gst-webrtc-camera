@@ -24,9 +24,9 @@
     "host": "127.0.0.1",
     "multicast": false
   },
-  "splitfile_sink": true,
+  "splitfile_sink": false,
   "app_sink": true,
-  "rec_len": 10,
+  "rec_len": 20,
   "hls_onoff": {
     "av_hlssink": false,
     "motion_hlssink": true,

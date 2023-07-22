@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <stdio.h>
 
+
 struct _GstConfigData {
     struct _v4l2src_data {
         gchar device[16];
@@ -93,12 +94,12 @@ int splitfile_sink();
 int av_hlssink();
 int udp_multicastsink();
 
-GstElement *get_mkv_mux();
 // opencv plugin
 int motion_hlssink();
 int cvtracker_hlssink();
 int facedetect_hlssink();
 int edgedect_hlssink();
+GThread *start_inotify_thread(void);
 
 GstStateChangeReturn start_app();
 

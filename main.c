@@ -5,6 +5,9 @@
 
 static GMainLoop *loop;
 static GstElement *pipeline;
+extern GstConfigData config_data;
+
+static GThread *inotify_watch = NULL;
 
 static void _get_cpuid() {
     char str[9] = {0};
@@ -30,10 +33,27 @@ static void _get_cpuid() {
 
 static gboolean
 message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
+    gchar *name;
+    name = gst_object_get_path_string(message->src);
     switch (GST_MESSAGE_TYPE(message)) {
+    case GST_MESSAGE_CLOCK_LOST:
+        g_printerr("!!clock lost, src name %s \n", name);
+        break;
+    case GST_MESSAGE_SEGMENT_START:
+        g_printerr("GST_MESSAGE_SEGMENT_START, src name %s \n", name);
+        break;
+    case GST_MESSAGE_SEGMENT_DONE:
+        g_printerr("GST_MESSAGE_SEGMENT_DONE, src name %s \n", name);
+        break;
+    case GST_MESSAGE_ASYNC_START:
+        g_printerr("GST_MESSAGE_ASYNC_START, src name %s \n", name);
+        break;
+    case GST_MESSAGE_ASYNC_DONE:
+        g_printerr("GST_MESSAGE_ASYNC_START, src name %s \n", name);
+        break;
     case GST_MESSAGE_ERROR: {
         GError *err = NULL;
-        gchar *name, *debug = NULL;
+        gchar *debug = NULL;
         GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
                                   GST_DEBUG_GRAPH_SHOW_ALL, "error");
         name = gst_object_get_path_string(message->src);
@@ -42,11 +62,8 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
         g_printerr("ERROR: from element %s: %s\n", name, err->message);
         if (debug != NULL)
             g_printerr("Additional debug info:\n%s\n", debug);
-
         g_error_free(err);
         g_free(debug);
-        g_free(name);
-
         g_main_loop_quit(loop);
         break;
     }
@@ -96,38 +113,28 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
             GstMessage *forward_msg = NULL;
 
             gst_structure_get(s, "message", GST_TYPE_MESSAGE, &forward_msg, NULL);
-            if (GST_MESSAGE_TYPE(forward_msg) == GST_MESSAGE_EOS) {
-                g_print("EOS from element %s\n",
-                        GST_OBJECT_NAME(GST_MESSAGE_SRC(forward_msg)));
-                // gst_element_set_state(app->filesink, GST_STATE_NULL);
-                // gst_element_set_state(app->muxer, GST_STATE_NULL);
-                // app_update_filesink_location(app);
-                // gst_element_set_state(app->filesink, GST_STATE_PLAYING);
-                // gst_element_set_state(app->muxer, GST_STATE_PLAYING);
-                // /* do another recording in 10 secs time */
-                // g_timeout_add_seconds(10, start_recording_cb, app);
+            g_assert(forward_msg);
+            // gst_println("GstBinForwarded message source %s\n", GST_MESSAGE_SRC_NAME(forward_msg));
+            switch (GST_MESSAGE_TYPE(forward_msg)) {
+            case GST_MESSAGE_ASYNC_DONE:
+                // g_print("ASYNC done %s\n", GST_MESSAGE_SRC_NAME(forward_msg));
+                if (g_strcmp0("bin0", GST_MESSAGE_SRC_NAME(forward_msg)) == 0) {
+                    g_print("prerolled, starting synchronized playback and recording\n");
+                    /* returns ASYNC because the sink linked to the live source is not
+                     * prerolled */
+                    if (gst_element_set_state(pipeline,
+                                              GST_STATE_PLAYING) != GST_STATE_CHANGE_ASYNC) {
+                        g_warning("State change failed");
+                    }
+                }
+                break;
+            default:
+                break;
             }
             gst_message_unref(forward_msg);
         }
-
-            break;
+        break;
     }
-    // case GST_MESSAGE_BUFFERING:{
-    //     gint percent = 0;
-
-    //     /* If the stream is live, we do not care about buffering. */
-    //     if (data->is_live)
-    //         break;
-
-    //     gst_message_parse_buffering(message, &percent);
-    //     g_print("Buffering (%3d%%)\r", percent);
-    //     /* Wait until buffering is complete before start/resume playing */
-    //     if (percent < 100)
-    //         gst_element_set_state(pipeline, GST_STATE_PAUSED);
-    //     else
-    //         gst_element_set_state(pipeline, GST_STATE_PLAYING);
-    //     break;
-    // }
     case GST_MESSAGE_STATE_CHANGED:
         /* We are only interested in state-changed messages from the pipeline */
         if (GST_MESSAGE_SRC(message) == GST_OBJECT(pipeline)) {
@@ -137,83 +144,17 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
                     gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
             GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
                                       GST_DEBUG_GRAPH_SHOW_ALL, gst_element_state_get_name(new_state));
-            if(new_state == GST_STATE_PLAYING)
-            {
-                //  get_mkv_mux();
-            }
-            if (0 /*new_state == GST_STATE_READY*/) {
-                // Fixed me. Why the splitmuxsink change the default muxer by g_object_set not effect.
-                // I just find these complex approach to replace the default muxer but also can not remove it from memory.
-                GstElement *splitmuxsink = gst_bin_get_by_name(GST_BIN(pipeline), "splitmuxsink0");
-                GstElement *muxer = gst_bin_get_by_name(GST_BIN(splitmuxsink), "muxer");
-                GstElement *sink = gst_bin_get_by_name(GST_BIN(splitmuxsink), "sink");
-
-                GstPad *old_src_vpad, *old_src_apad, *old_sink_fpad;
-
-                if (muxer) {
-                    GstPad *old_src_pad = muxer->srcpads->data;
-                    old_sink_fpad = gst_pad_get_peer(old_src_pad);
-                    gst_pad_unlink(old_src_pad, old_sink_fpad);
-                    gst_object_unref(old_src_pad);
-
-                    // gst_element_link(matroskamux, sink);
-
-                    // gchar *name;
-                    GList *iter = muxer->sinkpads;
-                    // name = gst_pad_get_name(iter->data);
-                    old_src_vpad = gst_pad_get_peer(iter->data);
-                    gst_pad_unlink(old_src_vpad, iter->data);
-                    gst_object_unref(iter->data);
-
-                    // unlink audio 0
-                    old_src_apad = gst_pad_get_peer(iter->next->data);
-                    gst_pad_unlink(old_src_apad, iter->next->data);
-                    gst_object_unref(iter->next->data);
-
-                    gst_object_unref(old_src_vpad);
-
-                    gst_element_set_locked_state(muxer, TRUE);
-                    gst_element_set_state(muxer, GST_STATE_NULL);
-                    gst_bin_remove(GST_BIN(splitmuxsink), muxer);
-                    gst_element_set_locked_state(muxer, FALSE);
-                }
-                GstElement *matroskamux;
-                matroskamux = gst_element_factory_make("matroskamux", "muxer");
-                gst_bin_add(GST_BIN(splitmuxsink), matroskamux);
-                gst_element_sync_state_with_parent(matroskamux);
-
-                // gst_println("muxer parent addr: %x, file sink parent: %x, mkv parent: %x\n",
-                //             gst_object_get_parent(muxer), gst_object_get_parent(sink), gst_object_get_parent(matroskamux));
-
-                // link to old file sink pad.
-                // GstPad *mkv_src_pad = gst_element_get_static_pad(matroskamux, "src");
-                // if (gst_pad_link(mkv_src_pad, old_sink_fpad) != GST_PAD_LINK_OK) {
-                //     gst_println("---> mkv src sink link to file sink failed.\n");
-                // }
-                if (!gst_element_link(matroskamux, sink)) {
-                    gst_println(" what problem?\n");
-                }
-
-                // link to old src pad.
-                GstPad *mkv_vpad = gst_element_request_pad_simple(matroskamux, "video_%u");
-                if (gst_pad_link(old_src_vpad, mkv_vpad) != GST_PAD_LINK_OK) {
-                    g_error("Tee split new video pad could not be linked.\n");
-                    // return -1;
-                }
-                gst_object_unref(mkv_vpad);
-
-                mkv_vpad = gst_element_request_pad_simple(matroskamux, "audio_%u");
-                if (gst_pad_link(old_src_apad, mkv_vpad) != GST_PAD_LINK_OK) {
-                    g_error("Tee split new video pad could not be linked.\n");
-                    // return -1;
-                }
-                gst_object_unref(mkv_vpad);
+            if (new_state == GST_STATE_PLAYING) {
+                if (inotify_watch == NULL && config_data.app_sink && config_data.hls_onoff.motion_hlssink)
+                    start_inotify_thread();
             }
             break;
         }
     default:
         break;
     }
+
+    g_free(name);
     return TRUE;
 }
 
@@ -223,8 +164,6 @@ void sigintHandler(int unused) {
     g_print("send Eos ret: %b .\n", ret);
     exit(0);
 }
-
-extern GstConfigData config_data;
 
 static void read_config_json(gchar *fullpath) {
     JsonParser *parser;
@@ -303,7 +242,6 @@ static void read_config_json(gchar *fullpath) {
     config_data.hls.showtext = json_object_get_int_member_with_default(object, "files", 10);
     config_data.hls.showtext = json_object_get_boolean_member_with_default(object, "showtext", FALSE);
 
-
     g_object_unref(parser);
 }
 
@@ -318,7 +256,6 @@ static gchar *_get_config_path() {
     if (access(fullpath, F_OK) == 0) {
         return fullpath;
     }
-
     return NULL;
 }
 
@@ -345,6 +282,8 @@ int main(int argc, char *argv[]) {
     loop = g_main_loop_new(NULL, FALSE);
 
     pipeline = create_instance();
+    /* this enables messages of individual elements inside the pipeline */
+    g_object_set(pipeline, "message-forward", TRUE, NULL);
     GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
     gst_bus_add_signal_watch(bus);
     g_signal_connect(G_OBJECT(bus), "message", G_CALLBACK(message_cb), NULL);

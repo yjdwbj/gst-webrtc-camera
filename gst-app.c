@@ -7,8 +7,6 @@
 
 static GstElement *pipeline;
 static GstElement *video_source, *audio_source, *h264_encoder, *va_pp;
-static GstElement *mkv_mux;
-// static GstElement *faac_tee, *ac3_tee, *opus_tee;
 static gboolean is_initial = FALSE;
 
 static volatile int threads_running = 0;
@@ -20,6 +18,7 @@ static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 GstConfigData config_data;
 
 static CustomAppData app_data;
+static CustomBinData bin_data;
 
 #define MAKE_ELEMENT_AND_ADD(elem, name)                          \
     G_STMT_START {                                                \
@@ -47,8 +46,8 @@ static CustomAppData app_data;
 
 static void
 _initial_device();
-static int start_motion_record();
 static int start_record_bin();
+static int start_appsrc_record();
 
 // static GstCaps *_getVideoCaps(gchar *type, gchar *format, int framerate, int width, int height) {
 //     return gst_caps_new_simple(type,
@@ -68,13 +67,31 @@ static GstCaps *_getAudioCaps(gchar *type, gchar *format, int rate, int channel)
                                NULL);
 }
 
-static int _mkdir(const char *path, int mask) {
+static void _mkdir(const char *path, int mask) {
+
+#if 0
     struct stat st = {0};
     int result = 0;
     if (stat(path, &st) == -1) {
         result = mkdir(path, mask);
     }
     return result;
+#endif
+    char tmp[256];
+    char *p = NULL;
+    size_t len;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    len = strlen(tmp);
+    if (tmp[len - 1] == '/')
+        tmp[len - 1] = 0;
+    for (p = tmp + 1; *p; p++)
+        if (*p == '/') {
+            *p = 0;
+            mkdir(tmp, S_IRWXU);
+            *p = '/';
+        }
+    mkdir(tmp, S_IRWXU);
 }
 
 static gboolean _check_initial_status() {
@@ -109,11 +126,23 @@ static gchar *get_format_current_time() {
 
 static gchar *get_current_time_str() {
     GDateTime *datetime;
-    gchar *time_str, *ret;
+    gchar *time_str;
 
     datetime = g_date_time_new_now_local();
 
     time_str = g_date_time_format(datetime, "%F_%H-%M-%S");
+
+    g_date_time_unref(datetime);
+    return g_strdup(time_str);
+}
+
+static gchar *get_today_str() {
+    GDateTime *datetime;
+    gchar *time_str;
+
+    datetime = g_date_time_new_now_local();
+
+    time_str = g_date_time_format(datetime, "%F");
 
     g_date_time_unref(datetime);
     return g_strdup(time_str);
@@ -349,7 +378,7 @@ static void _start_record_thread() {
         0,
     };
 
-    ret = pthread_create(&t1, NULL, start_motion_record, NULL);
+    ret = pthread_create(&t1, NULL, (void *)start_appsrc_record, NULL);
 
     if (ret) {
         gst_printerr("pthread create start record thread failed, ret: %d.\n", ret);
@@ -402,10 +431,7 @@ static void *_inotify_thread(void *filename) {
         for (char *ptr = buf; ptr < buf + rsize;) {
             event = (struct inotify_event *)ptr;
             if (event->mask & IN_MODIFY || event->mask & IN_OPEN) {
-                // gst_println("Got IN Modify event :%s .\n", get_format_current_time());
-
                 if (!threads_running) {
-
                     ret = pthread_mutex_lock(&mtx);
                     if (ret) {
                         g_error("Failed to lock on mutex.\n");
@@ -415,11 +441,8 @@ static void *_inotify_thread(void *filename) {
                     if (ret) {
                         g_error("Failed to lock on mutex.\n");
                     }
-                    // _start_record_thread();
-
                     // g_thread_new("start_record_mkv", (GThreadFunc)start_record_bin, NULL);
-                    g_thread_new("start_record_mkv", (GThreadFunc)start_motion_record, NULL);
-                    // g_thread_new("start_record_mkv", (GThreadFunc)udp_multicastsink, NULL);
+                    g_thread_new("start_record_mkv", (GThreadFunc)start_appsrc_record, NULL);
                     // start_motion_record();
                 }
                 break;
@@ -431,108 +454,7 @@ static void *_inotify_thread(void *filename) {
     gst_println("Exiting inotify thread..., errno: %d .\n", errno);
 }
 
-static void _start_watch_motion_file() {
-    int ret;
-    pthread_t t1;
-    char abpath[PATH_MAX] = {
-        0,
-    };
-
-    realpath(g_strconcat(config_data.root_dir, "/hls/motion/motioncells-0.vamc", NULL), abpath);
-    // gst_println("absolute path: %s .\n", abpath);
-    ret = pthread_create(&t1, NULL, _inotify_thread, g_strdup(abpath));
-    gst_printerr("pthread _inotify_thread created, tid %lu \n", t1);
-    if (ret) {
-        gst_printerr("pthread create monitor motion detect failed, ret: %d .\n", ret);
-    }
-    ret = pthread_detach(t1);
-    if (ret) {
-        gst_printerr("pthread_detach inotify monitor motion detect failed, ret: %d \n", ret);
-    }
-
-    gst_printerr("pthread _inotify_thread  pthread  detached , tid %lu \n", t1);
-}
-
-static const char *rec_bin_name = "motion_bin";
-static const char *motion_parse = "motion_parse";
-
-static int stop_motion_record(CustomBinData *data) {
-    GstPad *video_sinkpad, *audio_sinkpad, *video_srcpad, *audio_srcpad;
-    GstPadLinkReturn lret;
-    GstStateChangeReturn state_res;
-    GstElement *bin = data->bin;
-    gst_element_set_state(data->bin, GST_STATE_NULL);
-
-    gst_element_set_locked_state(data->muxer, TRUE);
-    gst_element_set_state(data->muxer, GST_STATE_NULL);
-    gst_element_set_locked_state(data->muxer, FALSE);
-
-    gst_bin_remove(GST_BIN(data->bin), data->muxer);
-
-    gst_element_set_locked_state(data->filesink, TRUE);
-    gst_element_set_state(data->filesink, GST_STATE_NULL);
-    gst_element_set_locked_state(data->filesink, FALSE);
-
-    gst_bin_remove(GST_BIN(data->bin), data->filesink);
-
-    gst_element_set_locked_state(data->aqueue, TRUE);
-    gst_element_set_state(data->aqueue, GST_STATE_NULL);
-    gst_element_set_locked_state(data->aqueue, FALSE);
-    gst_bin_remove(GST_BIN(data->bin), data->aqueue);
-
-    gst_element_set_locked_state(data->vqueue, TRUE);
-    gst_element_set_state(data->vqueue, GST_STATE_NULL);
-    gst_element_set_locked_state(data->vqueue, FALSE);
-
-    gst_bin_remove(GST_BIN(data->bin), data->vqueue);
-
-    gst_element_set_locked_state(data->h264parse, TRUE);
-    gst_element_set_state(data->h264parse, GST_STATE_NULL);
-    gst_element_set_locked_state(data->h264parse, FALSE);
-
-    gst_bin_remove(GST_BIN(data->bin), data->h264parse);
-
-    // h264parse = gst_bin_new(motion_parse);
-    // gst_element_unlink(h264parse, bin);
-    // stop recording after timer timeout.
-    gst_println("stoping record at: %s , ref count: %d.\n", get_format_current_time(), ((GObject *)bin)->ref_count);
-    video_sinkpad = gst_element_get_static_pad(data->bin, "videosink");
-    video_srcpad = gst_pad_get_peer(video_sinkpad);
-    gst_pad_unlink(video_srcpad, video_sinkpad);
-    gst_element_release_request_pad(h264_encoder, video_srcpad);
-    gst_element_remove_pad(data->bin, video_sinkpad);
-    gst_object_unref(video_sinkpad);
-    gst_object_unref(video_srcpad);
-    // unlink audio
-    audio_sinkpad = gst_element_get_static_pad(data->bin, "audiosink");
-    audio_srcpad = gst_pad_get_peer(audio_sinkpad);
-    gst_pad_unlink(audio_srcpad, audio_sinkpad);
-    gst_element_release_request_pad(audio_source, audio_srcpad);
-    gst_element_remove_pad(data->bin, audio_sinkpad);
-    gst_object_unref(audio_sinkpad);
-    gst_object_unref(audio_srcpad);
-
-    gst_bin_remove(pipeline, data->bin);
-
-    gst_println("before send eos on motion bin at: %s .\n", get_format_current_time());
-
-    gst_element_set_state(pipeline, GST_STATE_PLAYING);
-
-    if (pthread_mutex_lock(&mtx)) {
-        g_error("Failed to lock on mutex.\n");
-    }
-    threads_running = FALSE;
-    if (pthread_mutex_unlock(&mtx)) {
-        g_error("Failed to lock on mutex.\n");
-    }
-
-    gst_println("after send eos on motion bin at: %s .\n", get_format_current_time());
-    g_free(data);
-
-    gst_println("before exit ref count: %d\n", ((GObject *)bin)->ref_count);
-
-    return 0;
-}
+static const char *src_name = "motion_bin";
 
 /* called when the appsink notifies us that there is a new buffer ready for
  * processing */
@@ -541,7 +463,7 @@ on_new_sample_from_sink(GstElement *elt, CustomAppData *data) {
     GstSample *sample;
     GstBuffer *app_buffer, *buffer;
     GstElement *source;
-    GstFlowReturn ret;
+    GstFlowReturn ret = GST_FLOW_NOT_LINKED;
 
     /* get the sample from appsink */
     sample = gst_app_sink_pull_sample(GST_APP_SINK(elt));
@@ -552,11 +474,10 @@ on_new_sample_from_sink(GstElement *elt, CustomAppData *data) {
 
     /* we don't need the appsink sample anymore */
     gst_sample_unref(sample);
-    gst_print("got new sample!!!!\n");
     /* get source an push new buffer */
     if (data->appsrc == NULL)
         return ret;
-    source = gst_bin_get_by_name(data->appsrc, "record");
+    source = gst_bin_get_by_name(GST_BIN(data->appsrc), src_name);
     if (source) {
         ret = gst_app_src_push_buffer(GST_APP_SRC(source), app_buffer);
         gst_object_unref(source);
@@ -603,25 +524,61 @@ on_source_message(GstBus *bus, GstMessage *message, CustomAppData *data) {
     return TRUE;
 }
 
-static int record_timeout(CustomAppData *data) {
-    GstFlowReturn ret;
-    GstElement *muxer = NULL;
-    GstStateChangeReturn lret;
-    GstState state, pending;
-    GstPad *pad, *peer, *sink_pad;
-    gst_element_send_event(data->appsrc, gst_event_new_eos());
-    gst_element_set_state(data->appsrc, GST_STATE_NULL);
+static gboolean stop_record_bin(CustomBinData *data) {
+    GstPad *video_sinkpad, *audio_sinkpad, *video_srcpad, *audio_srcpad;
+    gst_element_set_state(data->bin, GST_STATE_NULL);
 
+    // gst_println("stoping record at: %s , ref count: %d.\n", get_format_current_time(), ((GObject *)bin)->ref_count);
+    video_sinkpad = gst_element_get_static_pad(data->bin, "videosink");
+    video_srcpad = gst_pad_get_peer(video_sinkpad);
+    gst_pad_unlink(video_srcpad, video_sinkpad);
+    gst_element_release_request_pad(h264_encoder, video_srcpad);
+    gst_element_remove_pad(data->bin, video_sinkpad);
+    gst_object_unref(video_sinkpad);
+    gst_object_unref(video_srcpad);
+    // unlink audio
+    audio_sinkpad = gst_element_get_static_pad(data->bin, "audiosink");
+    audio_srcpad = gst_pad_get_peer(audio_sinkpad);
+    gst_pad_unlink(audio_srcpad, audio_sinkpad);
+    gst_element_release_request_pad(audio_source, audio_srcpad);
+    gst_element_remove_pad(data->bin, audio_sinkpad);
+    gst_object_unref(audio_sinkpad);
+    gst_object_unref(audio_srcpad);
 
-    gst_println("record now timeout, at: %s!!!!\n", get_format_current_time());
-    g_signal_handler_disconnect(data->appsink, data->appsink_connected_id);
-    // gst_element_set_state(data->muxer, GST_STATE_PAUSED);
-    // gst_element_get_state(GST_ELEMENT(data->muxer), &state, NULL, -1);
-    // gst_element_set_state(data->muxer, GST_STATE_READY);
-    // gst_element_get_state(GST_ELEMENT(data->muxer), &state, NULL, -1);
-    // gst_element_set_state(data->muxer, GST_STATE_PLAYING);
+    gst_bin_remove(GST_BIN(pipeline), data->bin);
 
-    gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    gst_element_set_locked_state(data->muxer, TRUE);
+    gst_element_set_state(data->muxer, GST_STATE_NULL);
+    gst_element_set_locked_state(data->muxer, FALSE);
+
+    gst_bin_remove(GST_BIN(data->bin), data->muxer);
+
+    gst_element_set_locked_state(data->filesink, TRUE);
+    gst_element_set_state(data->filesink, GST_STATE_NULL);
+    gst_element_set_locked_state(data->filesink, FALSE);
+
+    gst_bin_remove(GST_BIN(data->bin), data->filesink);
+
+    gst_element_set_locked_state(data->aqueue, TRUE);
+    gst_element_set_state(data->aqueue, GST_STATE_NULL);
+    gst_element_set_locked_state(data->aqueue, FALSE);
+    gst_bin_remove(GST_BIN(data->bin), data->aqueue);
+
+    gst_element_set_locked_state(data->vqueue, TRUE);
+    gst_element_set_state(data->vqueue, GST_STATE_NULL);
+    gst_element_set_locked_state(data->vqueue, FALSE);
+
+    gst_bin_remove(GST_BIN(data->bin), data->vqueue);
+
+    gst_element_set_locked_state(data->h264parse, TRUE);
+    gst_element_set_state(data->h264parse, GST_STATE_NULL);
+    gst_element_set_locked_state(data->h264parse, FALSE);
+
+    gst_bin_remove(GST_BIN(data->bin), data->h264parse);
+
+    // gst_println("before send eos on motion bin at: %s .\n", get_format_current_time());
+
+    // gst_element_set_state(pipeline, GST_STATE_PLAYING);
 
     if (pthread_mutex_lock(&mtx)) {
         g_error("Failed to lock on mutex.\n");
@@ -630,111 +587,87 @@ static int record_timeout(CustomAppData *data) {
     if (pthread_mutex_unlock(&mtx)) {
         g_error("Failed to lock on mutex.\n");
     }
-    gst_println("after stop record, at: %s!!!!\n", get_format_current_time());
+
+    // gst_println("after send eos on motion bin at: %s .\n", get_format_current_time());
+
+    // gst_println("before exit ref count: %d\n", ((GObject *)bin)->ref_count);
+
+    return TRUE;
 }
 
-static int start_motion_record() {
-    GstElement *app_src = NULL;
-    gchar *string = NULL;
-    GstBus *bus = NULL;
-
-    const gchar *outdir = g_strconcat(config_data.root_dir, "/mkv", NULL);
-    gst_println("starting record at: %s .\n", get_format_current_time());
-    g_timeout_add_once(record_time * 1000, record_timeout, &app_data);
-    _mkdir(outdir, 0755);
-    gchar *filename = g_strdup_printf("/motion-%s.mkv", get_current_time_str());
-
-    string = g_strdup_printf("appsrc name=record ! filesink location=\"%s\" name=fileout async=false",
-                             g_strconcat(outdir, filename, NULL));
-    g_free(filename);
-
-    app_data.appsrc = gst_parse_launch(string, NULL);
-    g_free(string);
-
-    app_src = gst_bin_get_by_name(app_data.appsrc, "record");
-    g_object_set(app_src, "block", TRUE, NULL);
-    bus = gst_element_get_bus(app_data.appsrc);
-    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, &app_data);
-    gst_object_unref(bus);
-
-
-    app_data.appsink_connected_id = g_signal_connect(app_data.appsink, "new-sample", G_CALLBACK(on_new_sample_from_sink), &app_data);
-
-    gst_element_set_state(app_data.appsrc, GST_STATE_PLAYING);
-    // gst_element_set_state(app_data.appsink, GST_STATE_PAUSED);
-    gst_element_set_state(app_data.appsink, GST_STATE_PLAYING);
-    gst_println(" new muxer name: %s, new signal id: %d\n", gst_element_get_name(app_data.muxer),app_data.appsink_connected_id);
-}
-
-int start_record_bin() {
+static int start_record_bin() {
+    /**
+     * @brief I want to create a module for recording, but it cannot be dynamically added and deleted while the pipeline is running。
+     * Maybe it's because I'm not familiar with its mechanics.
+     *
+     */
     GstPad *src_vpad, *src_apad, *sink_vpad, *sink_apad;
     GstPad *i_sink, *i_src;
     GstPadLinkReturn lret;
-    GstBus *bus = NULL;
-
-    CustomBinData *data = NULL;
-    data = g_new0(CustomBinData, 1);
+    GstState state;
+    gchar *timestr = NULL;
 
     const gchar *outdir = g_strconcat(config_data.root_dir, "/mkv", NULL);
-    gst_println("starting record at: %s .\n", get_format_current_time());
-    g_timeout_add_once(record_time * 1000, stop_motion_record, data);
+    timestr = get_format_current_time();
+    gst_println("starting record at: %s .\n", timestr);
+    g_free(timestr);
+
     _mkdir(outdir, 0755);
-    gchar *filename = g_strdup_printf("/motion-%s.mkv", get_current_time_str());
+    timestr = get_current_time_str();
+    gchar *filename = g_strdup_printf("/motion-%s.mkv", timestr);
+    g_free(timestr);
 
-    data->bin = gst_bin_new(NULL);
+    bin_data.bin = gst_bin_new("motion_bin");
 
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(data->bin, data->vqueue, "queue");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(data->bin, data->aqueue, "queue");
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin_data.bin, bin_data.vqueue, "queue");
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin_data.bin, bin_data.aqueue, "queue");
     // matroskamux have a lot of problem.
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(data->bin, data->muxer, "matroskamux");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(data->bin, data->filesink, "filesink");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(data->bin, data->h264parse, "h264parse");
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin_data.bin, bin_data.muxer, "matroskamux");
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin_data.bin, bin_data.filesink, "filesink");
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin_data.bin, bin_data.h264parse, "h264parse");
 
-    if (!gst_element_link_many(data->h264parse, data->vqueue, data->muxer, data->filesink, NULL)) {
+    if (!gst_element_link_many(bin_data.h264parse, bin_data.vqueue, bin_data.muxer, bin_data.filesink, NULL)) {
         g_error("Failed to link elements to video queue.\n");
         return -1;
     }
 
-    g_object_set(data->muxer, "streamable", TRUE, NULL);
-    g_object_set(data->filesink, "location", g_strconcat(outdir, filename, NULL), "sync", FALSE, NULL);
+    g_object_set(bin_data.filesink, "location", g_strconcat(outdir, filename, NULL), "async", FALSE, NULL);
     g_free(filename);
 
-    gst_element_set_state(data->bin, GST_STATE_PAUSED);
-    gst_bin_add(GST_BIN(pipeline), data->bin);
-
-    sink_vpad = gst_element_get_static_pad(data->h264parse, "sink");
-    gst_element_add_pad(data->bin, gst_ghost_pad_new("videosink", sink_vpad));
-    gst_object_unref(sink_vpad);
-
-    src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-    sink_vpad = gst_element_get_static_pad(data->bin, "videosink");
-    if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
-        g_error("Tee mkv file video sink could not be linked. ret: %d \n", lret);
-        return -1;
-    }
-
-    gst_object_unref(sink_vpad);
-    gst_object_unref(src_vpad);
-
     // link second queue to matroskamux, element link not working because queue default link to the video_%u.
-    i_src = gst_element_get_static_pad(data->aqueue, "src");
-    i_sink = gst_element_request_pad_simple(data->muxer, "audio_%u");
+    i_src = gst_element_get_static_pad(bin_data.aqueue, "src");
+    i_sink = gst_element_request_pad_simple(bin_data.muxer, "audio_%u");
     if ((lret = gst_pad_link(i_src, i_sink)) != GST_PAD_LINK_OK) {
         g_error("Tee mkv file audio sink could not be linked. ret: %d \n", lret);
         return -1;
     }
-
     gst_object_unref(i_sink);
     gst_object_unref(i_src);
 
+    sink_vpad = gst_element_get_static_pad(bin_data.h264parse, "sink");
+    gst_element_add_pad(bin_data.bin, gst_ghost_pad_new("videosink", sink_vpad));
+    gst_object_unref(sink_vpad);
+
+    src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
+    sink_vpad = gst_element_get_static_pad(bin_data.bin, "videosink");
+
+    gst_bin_add(GST_BIN(pipeline), bin_data.bin);
+    gst_element_set_state(GST_ELEMENT(pipeline), GST_STATE_READY); // it's very important to set GST_STATE_READ.
+    if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
+        g_error("Tee mkv file video sink could not be linked. ret: %d \n", lret);
+        return -1;
+    }
+    gst_object_unref(sink_vpad);
+    gst_object_unref(src_vpad);
+
     // add audio to muxer.
-    sink_apad = gst_element_get_static_pad(data->aqueue, "sink");
-    gst_element_add_pad(data->bin, gst_ghost_pad_new("audiosink", sink_apad));
+    sink_apad = gst_element_get_static_pad(bin_data.aqueue, "sink");
+    gst_element_add_pad(bin_data.bin, gst_ghost_pad_new("audiosink", sink_apad));
     gst_object_unref(sink_apad);
 
     src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
     g_print("mkv obtained request pad %s for from audio source.\n", gst_pad_get_name(src_apad));
-    sink_apad = gst_element_get_static_pad(data->bin, "audiosink");
+    sink_apad = gst_element_get_static_pad(bin_data.bin, "audiosink");
     if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
         // May be the src and sink are not match the format. ex: aac could not link to matroskamux.
         gst_printerrln("Tee mkv file audio sink could not be linked, link return :%d .\n", lret);
@@ -743,9 +676,125 @@ int start_record_bin() {
     gst_object_unref(GST_OBJECT(sink_apad));
     gst_object_unref(src_apad);
 
-    gst_element_set_state(data->bin, GST_STATE_PLAYING);
+    gst_element_set_state(GST_ELEMENT(pipeline), GST_STATE_PLAYING);
+    gst_element_get_state(GST_ELEMENT(pipeline), &state, NULL, -1);
+    g_timeout_add_once(record_time * 1000, (GSourceOnceFunc)stop_record_bin, &app_data);
+    return 0;
+}
+
+static gboolean stop_appsrc(CustomAppData *data) {
+    GstStateChangeReturn lret;
+    GstState state, pending;
+    gchar *timestr;
+
+    gst_element_send_event(data->appsrc, gst_event_new_eos());
+    gst_element_set_state(data->appsrc, GST_STATE_NULL);
+    timestr = get_format_current_time();
+    gst_println("stop record at: %s .\n", timestr);
+    g_free(timestr);
+    g_signal_handler_disconnect(data->appsink, data->appsink_connected_id);
+    // gst_println("stop record muxer state: %s !!!!\n", gst_element_state_get_name(state));
+    lret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    if (lret == GST_STATE_CHANGE_FAILURE) {
+        g_error("Failed to change pipepline state.\n");
+    }
+    gst_element_get_state(GST_ELEMENT(pipeline), &state, &pending, -1);
+    // gst_println("after stop record pipeline state: %s !!!!\n", gst_element_state_get_name(state));
+    if (pthread_mutex_lock(&mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+    threads_running = FALSE;
+    if (pthread_mutex_unlock(&mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+
+    gst_object_unref(data->appsrc);
+    // gst_element_get_state(GST_ELEMENT(pipeline), &state, NULL, -1);
+    // gst_println("after stop record, at: %s!!!!\n", get_format_current_time());
+    return TRUE;
+}
+
+/** It must run after appsink. */
+static int start_appsrc_record() {
+    gchar *string = NULL;
+    gchar *timestr = NULL;
+    gchar *today = NULL;
+    GstBus *bus;
+    today = get_today_str();
+
+    const gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
+    g_free(today);
+
+    timestr = get_format_current_time();
+    gst_println("start record at: %s .\n", timestr);
+    g_free(timestr);
+
+    _mkdir(outdir, 0755);
+    timestr = get_current_time_str();
+
+    /** here just work for mpegtsmux */
+    gchar *filename = g_strdup_printf("/motion-%s.ts", timestr);
+    g_free(timestr);
+
+    string = g_strdup_printf("appsrc name=%s ! filesink location=\"%s\" name=fileout ", src_name,
+                             g_strconcat(outdir, filename, NULL));
+    g_free(filename);
+
+    app_data.appsrc = gst_parse_launch(string, NULL);
+    g_free(string);
+
+    // g_object_set(app_src, "block", TRUE, NULL);
+    bus = gst_element_get_bus(app_data.appsrc);
+    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, &app_data);
+    gst_object_unref(bus);
+
+#if 0 // dynamic replace element not working， maybe my approach is wrong。
+    GstElement *muxer;
+    GstPad *peer_pad, *src_pad, *sink_pad;
+
+    MAKE_ELEMENT_AND_ADD(muxer, "matroskamux");
+    gst_element_set_state(pipeline, GST_STATE_READY);
+    gst_element_set_state(app_data.muxer, GST_STATE_NULL);
+
+    // replace muxer src_pad.
+    src_pad= app_data.muxer->srcpads->data;
+    peer_pad = gst_pad_get_peer(src_pad);
+    gst_pad_unlink(src_pad, peer_pad);
+    src_pad = gst_element_get_static_pad(muxer, "src");
+    gst_pad_link_full(src_pad, peer_pad,GST_PAD_LINK_CHECK_NO_RECONFIGURE);
+    gst_object_unref(peer_pad);
+    gst_object_unref(src_pad);
+
+    // replace muxer video_0 sink_pad
+    sink_pad = app_data.muxer->sinkpads->data;
+    gst_println("sink pads name: %s\n", gst_pad_get_name(sink_pad));
+    peer_pad = gst_pad_get_peer(sink_pad);
+    gst_pad_unlink(peer_pad, sink_pad);
+    gst_element_release_request_pad(app_data.muxer, sink_pad);
+    sink_pad = gst_element_request_pad_simple(muxer, "video_%u");
+    gst_pad_link_full(peer_pad, sink_pad, GST_PAD_LINK_CHECK_NO_RECONFIGURE);
+    gst_object_unref(peer_pad);
+    gst_object_unref(sink_pad);
+
+    // replace muxer audio_0 sink_pad
+    sink_pad = app_data.muxer->sinkpads->data;
+    peer_pad = gst_pad_get_peer(sink_pad);
+    gst_pad_unlink(peer_pad, sink_pad);
+    gst_element_release_request_pad(app_data.muxer, sink_pad);
+    sink_pad = gst_element_request_pad_simple(muxer, "audio_%u");
+    gst_pad_link_full(peer_pad, sink_pad, GST_PAD_LINK_CHECK_NO_RECONFIGURE);
+    gst_object_unref(peer_pad);
+    gst_object_unref(sink_pad);
+    gst_bin_remove(pipeline, app_data.muxer);
+    app_data.muxer = muxer;
+#endif
+    app_data.appsink_connected_id = g_signal_connect(app_data.appsink, "new-sample", G_CALLBACK(on_new_sample_from_sink), &app_data);
+
+    gst_element_set_state(app_data.appsrc, GST_STATE_PLAYING);
+    gst_element_set_state(app_data.appsink, GST_STATE_PLAYING);
     gst_element_set_state(pipeline, GST_STATE_PLAYING);
-    gst_println("change record state to playing at: %s .\n", get_format_current_time());
+    // gst_println(" new muxer name: %s, new signal id: %d\n", gst_element_get_name(app_data.muxer), app_data.appsink_connected_id);
+    g_timeout_add_once(record_time * 1000, (GSourceOnceFunc)stop_appsrc, &app_data);
     return 0;
 }
 
@@ -758,8 +807,16 @@ int start_appsink() {
     GstBus *bus = NULL;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(aqueue, "queue");
-    // matroskamux have a lot of problem.
-    MAKE_ELEMENT_AND_ADD(muxer, "matroskamux");
+    /**
+     * @brief matroskamux have a lot of problem.
+     *
+     * It is normal for the first file to appear in the combination of
+     * appsink and appsrc when using matroskamux, but the following files
+     * are rawdata of matroska without ebml header, can not play and identify.
+     *
+     * But I use the mpegtsmux test is no problem.
+     */
+    MAKE_ELEMENT_AND_ADD(muxer, "mpegtsmux");
     MAKE_ELEMENT_AND_ADD(appsink, "appsink");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
 
@@ -770,8 +827,15 @@ int start_appsink() {
         g_error("Failed to link elements to video queue.\n");
         return -1;
     }
+    if (!gst_element_link(aqueue, muxer)) {
+        g_error("Failed to link elements audio to mpegtsmux.\n");
+        return -1;
+    }
 
-    // g_object_set(muxer, "streamable", TRUE, NULL);
+    // g_object_set(muxer,
+    //              //  "streamable", TRUE,
+    //              "fragment-duration", record_time * 1000,
+    //              "fragment-mode",1, NULL);
 
     /* Configure appsink */
     g_object_set(appsink, "sync", FALSE, "emit-signals", TRUE, NULL);
@@ -782,8 +846,6 @@ int start_appsink() {
 
     sink_vpad = gst_element_get_static_pad(h264parse, "sink");
     src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-    // g_print("mkv obtained request pad %s for from  h264 source.\n", gst_pad_get_name(src_vpad));
-    // gst_element_set_state(appsink, GST_STATE_PAUSED);
 
     if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
         g_error("Tee mkv file video sink could not be linked. ret: %d \n", lret);
@@ -793,16 +855,16 @@ int start_appsink() {
     gst_object_unref(sink_vpad);
     gst_object_unref(src_vpad);
 
-    // link second queue to matroskamux, element link not working.
-    src_apad = gst_element_get_static_pad(aqueue, "src");
-    sink_apad = gst_element_request_pad_simple(muxer, "audio_%u");
-    if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
-        g_error("Tee mkv file audio sink could not be linked. ret: %d \n", lret);
-        return -1;
-    }
+    // link second queue to matroskamux, element link not working because the queue default link to the video_%u.
+    // src_apad = gst_element_get_static_pad(aqueue, "src");
+    // sink_apad = gst_element_request_pad_simple(muxer, "audio_%u");
+    // if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
+    //     g_error("Tee mkv file audio sink could not be linked. ret: %d \n", lret);
+    //     return -1;
+    // }
 
-    gst_object_unref(sink_apad);
-    gst_object_unref(src_apad);
+    // gst_object_unref(sink_apad);
+    // gst_object_unref(src_apad);
 
     // add audio to muxer.
     src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
@@ -821,7 +883,7 @@ int start_appsink() {
 int splitfile_sink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *splitmuxsink, *h264parse, *queue;
+    GstElement *splitmuxsink, *h264parse;
     GstPad *src_pad, *queue_pad;
     GstPadLinkReturn lret;
 
@@ -931,101 +993,11 @@ int av_hlssink() {
     return 0;
 }
 
-static int stop_udp_sink() {
-
-    int ret;
-    GstPad *src_apad, *src_vpad, *sub_sink_vpad, *sub_sink_apad;
-    GstPadLinkReturn lret;
-    GstStateChangeReturn state_res;
-    GstBin *recpipe = gst_bin_get_by_name(GST_BIN(pipeline), "udp_bin");
-
-    // stop recording after timer timeout.
-    gst_println("stoping record at: %s .\n", get_format_current_time());
-    sub_sink_apad = gst_element_get_static_pad(recpipe, "audiosink");
-    src_apad = gst_pad_get_peer(sub_sink_apad);
-
-    sub_sink_vpad = gst_element_get_static_pad(recpipe, "videosink");
-    src_vpad = gst_pad_get_peer(sub_sink_vpad);
-
-    GstIterator *iter = NULL;
-    gboolean done;
-    iter = gst_bin_iterate_elements(GST_BIN(recpipe));
-    done = FALSE;
-    while (!done) {
-        GValue data = {
-            0,
-        };
-
-        switch (gst_iterator_next(iter, &data)) {
-        case GST_ITERATOR_OK: {
-            GstElement *child = g_value_get_object(&data);
-            gst_bin_remove(GST_BIN(recpipe), child);
-            gst_element_set_state(child, GST_STATE_NULL);
-            g_value_reset(&data);
-            break;
-        }
-        case GST_ITERATOR_RESYNC:
-            gst_iterator_resync(iter);
-            break;
-        case GST_ITERATOR_ERROR:
-            done = TRUE;
-            break;
-        case GST_ITERATOR_DONE:
-            done = TRUE;
-            break;
-        }
-    }
-    gst_iterator_free(iter);
-
-    gst_pad_send_event(sub_sink_apad, gst_event_new_eos());
-    gst_pad_send_event(sub_sink_vpad, gst_event_new_eos());
-
-    gst_println("before set motion bin state at: %s .\n", get_format_current_time());
-
-    gst_pad_unlink(src_vpad, sub_sink_vpad);
-    gst_pad_unlink(src_apad, sub_sink_apad);
-
-    gst_element_set_state(recpipe, GST_STATE_NULL);
-    gst_bin_remove(pipeline, recpipe);
-
-    /* prepare paused/playing */
-    state_res = gst_element_set_state(recpipe, GST_STATE_PAUSED);
-    /* wait for preroll */
-    state_res = gst_element_get_state(recpipe, NULL, NULL, GST_CLOCK_TIME_NONE);
-
-    gst_println("before send eos on motion bin at: %s .\n", get_format_current_time());
-    gst_element_send_event(recpipe, gst_event_new_eos());
-
-    // gst_element_set_state(pipeline, GST_STATE_PLAYING);
-
-    // unlink sink pad and release src pad for video.
-
-    gst_element_release_request_pad(h264_encoder, src_vpad);
-    gst_object_unref(sub_sink_vpad);
-    gst_object_unref(src_vpad);
-
-    // unlink audio pad.
-    g_print("mkv relase get peer %s for from audio source.\n", gst_pad_get_name(src_apad));
-    gst_element_release_request_pad(audio_source, src_apad);
-    gst_object_unref(sub_sink_apad);
-    gst_object_unref(src_apad);
-
-    ret = pthread_mutex_lock(&mtx);
-    if (ret) {
-        g_error("Failed to lock on mutex.\n");
-    }
-    threads_running = FALSE;
-    ret = pthread_mutex_unlock(&mtx);
-    if (ret) {
-        g_error("Failed to lock on mutex.\n");
-    }
-}
-
 int udp_multicastsink() {
     GstElement *udpsink, *rtpmp2tpay, *vqueue, *mpegtsmux, *bin;
-    GstPad *src_pad, *sub_sink_vpad, *ghost_vpad;
+    GstPad *src_pad, *sub_sink_vpad;
 
-    GstPad *tee_pad, *sub_sink_apad, *ghost_pad;
+    GstPad *tee_pad, *sub_sink_apad;
     GstElement *aqueue;
     GstPadLinkReturn lret;
     if (!_check_initial_status())
@@ -1087,8 +1059,6 @@ int udp_multicastsink() {
     }
     gst_object_unref(GST_OBJECT(sub_sink_apad));
 
-    // gst_element_set_state(bin, GST_STATE_PLAYING);
-    // gst_element_set_state(pipeline, GST_STATE_PLAYING);
     return 0;
 }
 
@@ -1396,17 +1366,14 @@ static void _initial_device() {
     is_initial = TRUE;
 }
 
-gboolean timeout_callback(gpointer d) {
+GThread* start_inotify_thread(void) {
     // _start_watch_motion_file();
     char abpath[PATH_MAX] = {
         0,
     };
-
+    g_print("Starting inotify watch thread....\n");
     realpath(g_strconcat(config_data.root_dir, "/hls/motion/motioncells-0.vamc", NULL), abpath);
-    g_thread_new("_inotify_thread", _inotify_thread, g_strdup(abpath));
-
-    // start_motion_record();
-    return 0;
+    return g_thread_new("_inotify_thread", _inotify_thread, g_strdup(abpath));
 }
 
 GstElement *create_instance() {
@@ -1431,11 +1398,13 @@ GstElement *create_instance() {
 
     if (config_data.hls_onoff.motion_hlssink) {
         motion_hlssink();
-        g_timeout_add_once(10 * 1000, timeout_callback, NULL);
     }
 
     if (config_data.app_sink)
+    {
         start_appsink();
+    }
+
 
     return pipeline;
 }
