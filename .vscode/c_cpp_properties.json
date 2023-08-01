@@ -7,12 +7,15 @@
                 "/usr/include/glib-2.0",
                 "/usr/lib/x86_64-linux-gnu/glib-2.0/include",
                 "/usr/local/include/gstreamer-1.0",
-                "/usr/include/json-glib-1.0"
+                "/usr/include/json-glib-1.0",
+                "/usr/include/libsoup-2.4"
             ],
             "browse": {
                 "path": [
                     "/usr/local/include",
-                    "/usr/local/include/gstreamer-1.0"
+                    "/usr/local/include/gstreamer-1.0",
+                    "/usr/include/json-glib-1.0",
+                    "/usr/include/libsoup-2.4"
                 ]
             },
             "defines": [],

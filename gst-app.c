@@ -1,4 +1,5 @@
 #include "gst-app.h"
+#include "soup.h"
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
 #include <limits.h>
@@ -207,7 +208,7 @@ static GstElement *audio_src() {
     GstCaps *srcCaps;
     GstElement *teesrc, *source, *srcvconvert, *capsfilter, *enc, *resample;
     teesrc = gst_element_factory_make("tee", NULL);
-    source = gst_element_factory_make("pipewiresrc", NULL);
+    source = gst_element_factory_make("audiotestsrc", NULL);
     srcvconvert = gst_element_factory_make("audioconvert", NULL);
     capsfilter = gst_element_factory_make("capsfilter", NULL);
     resample = gst_element_factory_make("audioresample", NULL);
@@ -221,14 +222,13 @@ static GstElement *audio_src() {
     //              //  "path", 37,
     //              "always-copy", TRUE,
     //              "resend-last", TRUE, NULL);
-    // g_object_set(source, "device", "hw:1", NULL);
+    g_object_set(source, "do-timestamp", TRUE, NULL);
 
     srcCaps = _getAudioCaps("audio/x-raw", "S16LE", 48000, 1);
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
-
     gst_caps_unref(srcCaps);
 
-    gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, teesrc, srcvconvert, enc, resample, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), source, teesrc, srcvconvert, enc, resample, capsfilter, NULL);
 
     if (!gst_element_link_many(source, capsfilter, srcvconvert, resample, enc, teesrc, NULL)) {
         g_error("Failed to link elements audio src.\n");
@@ -284,11 +284,13 @@ static GstElement *encoder_h264() {
     clock = gst_element_factory_make("clockoverlay", NULL);
     teeh264 = gst_element_factory_make("tee", NULL);
     queue = gst_element_factory_make("queue", NULL);
+    g_object_set(G_OBJECT(queue), "max-size-buffers", 1, NULL);
 
     if (gst_element_factory_find("vaapih264enc")) {
         encoder = gst_element_factory_make("vaapih264enc", NULL);
     } else {
         encoder = gst_element_factory_make("x264enc", NULL);
+        // g_object_set(G_OBJECT(encoder), "bitrate", 8000, "speed-preset", 1, "tune", 0x4, "key-int-max", 15, NULL);
     }
     if (!encoder || !clock || !teeh264 || !queue) {
         g_printerr("encoder_h264 all elements could not be created.\n");
@@ -489,38 +491,40 @@ on_new_sample_from_sink(GstElement *elt, CustomAppData *data) {
  * exit the mainloop and this testapp. */
 static gboolean
 on_sink_message(GstBus *bus, GstMessage *message, CustomAppData *data) {
-    /* nil */
+    gchar *name;
+    name = gst_object_get_path_string(message->src);
     switch (GST_MESSAGE_TYPE(message)) {
     case GST_MESSAGE_EOS:
-        g_print("Finished playback\n");
+        g_print("Finished playback, src: %s\n",name);
         break;
     case GST_MESSAGE_ERROR:
-        g_print("Received error\n");
+        g_print("Received error, src: %s\n",name);
         break;
     default:
         break;
     }
+    g_free(name);
     return TRUE;
 }
 
 static gboolean
 on_source_message(GstBus *bus, GstMessage *message, CustomAppData *data) {
+    gchar *name;
+    name = gst_object_get_path_string(message->src);
     GstElement *source;
     switch (GST_MESSAGE_TYPE(message)) {
     case GST_MESSAGE_EOS: {
-        g_print("Finished record!!!!\n");
-        source = gst_bin_get_by_name(GST_BIN(data->appsrc), "record");
-        gst_app_src_end_of_stream(GST_APP_SRC(source));
-        gst_object_unref(source);
+        g_print("Finished record, src: %s\n", name);
     }
 
     break;
     case GST_MESSAGE_ERROR:
-        g_print("Received error\n");
+        g_print("Received error, src: %s\n", name);
         break;
     default:
         break;
     }
+    g_free(name);
     return TRUE;
 }
 
@@ -795,6 +799,248 @@ static int start_appsrc_record() {
     gst_element_set_state(pipeline, GST_STATE_PLAYING);
     // gst_println(" new muxer name: %s, new signal id: %d\n", gst_element_get_name(app_data.muxer), app_data.appsink_connected_id);
     g_timeout_add_once(record_time * 1000, (GSourceOnceFunc)stop_appsrc, &app_data);
+    return 0;
+}
+
+// void start_mkv_record(WebrtcItem *item) {
+//     GstElement *video_sink, *audio_sink;
+//     gchar *cmdline = NULL;
+//     GstBus *bus = NULL;
+//     const gchar *mux_name = "filemux";
+//     gchar *audio_src = g_strdup_printf("appsrc name=mkv_audio ! ac3parse !  %s. ", mux_name);
+//     gchar *video_src = g_strdup_printf("appsrc name=mkv_video ! h264parse ! %s. ", mux_name);
+
+//     cmdline = g_strdup_printf(" matroskamux name=%s ! filesink location=%s ", mux_name, audio_src, video_src);
+//     g_print("webrtc cmdline: %s \n", cmdline);
+//     g_free(audio_src);
+//     g_free(video_src);
+
+//     item->pipeline = gst_parse_launch(cmdline, NULL);
+//     g_free(cmdline);
+
+//     item->webrtcbin = gst_bin_get_by_name(GST_BIN(item->pipeline), mux_name);
+
+//     video_sink = gst_bin_get_by_name(GST_BIN(pipeline), "video_sink");
+//     audio_sink = gst_bin_get_by_name(GST_BIN(pipeline), "audio_sink");
+
+//     item->audio_conn_id = g_signal_connect(audio_sink, "new-sample", G_CALLBACK(on_new_sample_from_audio), item);
+//     item->video_conn_id = g_signal_connect(video_sink, "new-sample", G_CALLBACK(on_new_sample_from_video), item);
+// }
+
+#define TURN_SERVER "turn://test:test123@192.168.1.100:3478"
+
+/* called when the appsink notifies us that there is a new buffer ready for
+ * processing */
+static GstFlowReturn
+on_new_sample_from_audio(GstElement *elt, WebrtcItem *item) {
+    GstSample *sample;
+    GstBuffer *app_buffer, *buffer;
+    GstElement *source;
+    gchar *audio_src = NULL;
+    GstFlowReturn ret = GST_FLOW_NOT_LINKED;
+
+    /* get the sample from appsink */
+    sample = gst_app_sink_pull_sample(GST_APP_SINK(elt));
+    buffer = gst_sample_get_buffer(sample);
+
+    /* make a copy */
+    app_buffer = gst_buffer_copy(buffer);
+
+    /* we don't need the appsink sample anymore */
+    gst_sample_unref(sample);
+    /* get source an push new buffer */
+    audio_src = g_strdup_printf("audio_%ld", item->hash_id);
+    source = gst_bin_get_by_name(GST_BIN(item->pipeline), audio_src);
+    g_free(audio_src);
+    if (source) {
+        ret = gst_app_src_push_buffer(GST_APP_SRC(source), app_buffer);
+        gst_object_unref(source);
+    }
+    return ret;
+}
+
+/* called when the appsink notifies us that there is a new buffer ready for
+ * processing */
+static GstFlowReturn
+on_new_sample_from_video(GstElement *elt, WebrtcItem *item) {
+    GstSample *sample;
+    GstBuffer *app_buffer, *buffer;
+    GstElement *source;
+    gchar *video_src = NULL;
+    GstFlowReturn ret = GST_FLOW_NOT_LINKED;
+
+    /* get the sample from appsink */
+    sample = gst_app_sink_pull_sample(GST_APP_SINK(elt));
+    buffer = gst_sample_get_buffer(sample);
+
+    /* make a copy */
+    app_buffer = gst_buffer_copy(buffer);
+
+    /* we don't need the appsink sample anymore */
+    gst_sample_unref(sample);
+    /* get source an push new buffer */
+    video_src = g_strdup_printf("video_%ld", item->hash_id);
+    source = gst_bin_get_by_name(GST_BIN(item->pipeline), video_src);
+    g_free(video_src);
+    if (source) {
+        ret = gst_app_src_push_buffer(GST_APP_SRC(source), app_buffer);
+        if (ret != GST_FLOW_OK) {
+            printf("push buffer returned %d for %d bytes \n", ret, app_buffer->duration);
+            return FALSE;
+        }
+        gst_object_unref(source);
+    }
+    return ret;
+}
+
+static void stop_webrtcbin(WebrtcItem *item) {
+}
+
+void remove_appsink_signal(gpointer user_data) {
+    GstElement *video_sink, *audio_sink;
+    WebrtcItem *item = (WebrtcItem *)user_data;
+    video_sink = gst_bin_get_by_name(GST_BIN(pipeline), "video_sink");
+    audio_sink = gst_bin_get_by_name(GST_BIN(pipeline), "audio_sink");
+    g_signal_handler_disconnect(video_sink, item->video_conn_id);
+    g_signal_handler_disconnect(audio_sink, item->audio_conn_id);
+}
+
+void add_appsink_signal(gpointer user_data)
+{
+    GstElement *video_sink, *audio_sink;
+    WebrtcItem *item = (WebrtcItem *)user_data;
+    video_sink = gst_bin_get_by_name(GST_BIN(pipeline), "video_sink");
+    audio_sink = gst_bin_get_by_name(GST_BIN(pipeline), "audio_sink");
+
+    item->audio_conn_id = g_signal_connect(audio_sink, "new-sample", G_CALLBACK(on_new_sample_from_audio), item);
+    item->video_conn_id = g_signal_connect(video_sink, "new-sample", G_CALLBACK(on_new_sample_from_video), item);
+    gst_element_set_state(video_sink, GST_STATE_PLAYING);
+    gst_element_set_state(audio_sink, GST_STATE_PLAYING);
+#if 1
+    gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "appsrc_webrtc");
+#endif
+}
+
+
+void start_webrtcbin(WebrtcItem *item) {
+    GstElement *video_sink, *audio_sink;
+    GError *error = NULL;
+    gchar *cmdline = NULL;
+    GstBus *bus = NULL;
+    const gchar *webrtc_name = g_strdup_printf("send_%ld",item->hash_id);
+    gchar *audio_src = g_strdup_printf("appsrc do-timestamp=true is-live=true name=audio_%ld ! queue ! ac3parse ! "
+                                       "rtpac3pay name=audiopay pt=97 ! queue ! "
+                                       "application/x-rtp,media=audio,payload=97,encoding-name=AC3 ! %s. ",
+                                       item->hash_id, webrtc_name);
+    gchar *video_src = g_strdup_printf("appsrc do-timestamp=true is-live=true name=video_%ld ! queue max-size-time=100000000 ! h264parse ! "
+                                       "rtph264pay config-interval=-1 name=payloader aggregate-mode=zero-latency ! queue !"
+                                       "application/x-rtp,media=video,encoding-name=H264,payload=96 ! %s. ",
+                                       item->hash_id, webrtc_name);
+
+    cmdline = g_strdup_printf("webrtcbin name=%s turn-server=" TURN_SERVER " %s %s ", webrtc_name , video_src, audio_src);
+
+
+    g_print("webrtc cmdline: %s \n", cmdline);
+    g_free(audio_src);
+    g_free(video_src);
+
+    item->pipeline = gst_parse_launch(cmdline, NULL);
+
+    // item->pipeline = gst_parse_launch("webrtcbin name=webrtcbin turn-server=" TURN_SERVER " videotestsrc  "
+    //                                   " ! videoconvert ! queue max-size-buffers=1 ! "
+    //                                   " x264enc bitrate=600 speed-preset=ultrafast tune=zerolatency key-int-max=15 ! video/x-h264,profile=constrained-baseline ! "
+    //                                   " queue max-size-time=100000000 ! h264parse ! "
+    //                                   "rtph264pay config-interval=-1 name=payloader aggregate-mode=zero-latency ! "
+    //                                   "application/x-rtp,media=video,encoding-name=H264,payload=96  ! webrtcbin. "
+    //                                   "audiotestsrc ! queue max-size-buffers=1 leaky=downstream"
+    //                                   " ! audioconvert ! audioresample ! opusenc  ! rtpopuspay pt=97  ! application/x-rtp, encoding-name=OPUS !"
+    //                                   " webrtcbin. ",
+    //                                   NULL);
+
+    g_free(cmdline);
+
+    // bus = gst_element_get_bus(item->pipeline);
+    // gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
+    // gst_object_unref(bus);
+
+    item->signal_remove = &remove_appsink_signal;
+    item->signal_add = &add_appsink_signal;
+    item->webrtcbin = gst_bin_get_by_name(GST_BIN(item->pipeline), webrtc_name);
+}
+
+int start_av_appsink() {
+    if (!_check_initial_status())
+        return -1;
+    GstElement *aqueue, *vqueue, *video_sink, *audio_sink;
+    GstPad *src_vpad, *src_apad, *sink_vpad, *sink_apad;
+    GstPadLinkReturn lret;
+    GstBus *abus , *vbus;
+    MAKE_ELEMENT_AND_ADD(vqueue, "queue");
+    MAKE_ELEMENT_AND_ADD(aqueue, "queue");
+    /**
+     * @brief matroskamux have a lot of problem.
+     *
+     * It is normal for the first file to appear in the combination of
+     * appsink and appsrc when using matroskamux, but the following files
+     * are rawdata of matroska without ebml header, can not play and identify.
+     *
+     * But I use the mpegtsmux test is no problem.
+     */
+    video_sink = gst_element_factory_make("appsink", "video_sink");
+    audio_sink = gst_element_factory_make("appsink", "audio_sink");
+
+    gst_bin_add_many(GST_BIN(pipeline), video_sink, audio_sink, NULL);
+
+    /* Configure appsink */
+    g_object_set(video_sink,"sync", FALSE, "emit-signals", TRUE, NULL);
+    g_object_set(audio_sink,"sync", FALSE, "emit-signals", TRUE, NULL);
+
+    if (!gst_element_link(aqueue, audio_sink)) {
+        g_error("Failed to link elements audio to mpegtsmux.\n");
+        return -1;
+    }
+
+    if (!gst_element_link(vqueue, video_sink)) {
+        g_error("Failed to link elements audio to mpegtsmux.\n");
+        return -1;
+    }
+
+    // vbus = gst_element_get_bus(video_sink);
+    // gst_bus_add_watch(vbus, (GstBusFunc)on_sink_message, video_sink);
+    // gst_object_unref(vbus);
+
+    // abus = gst_element_get_bus(audio_sink);
+    // gst_bus_add_watch(abus, (GstBusFunc)on_sink_message, audio_sink);
+    // gst_object_unref(abus);
+
+    sink_vpad = gst_element_get_static_pad(vqueue, "sink");
+    src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
+
+    if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
+        g_error("Tee mkv file video sink could not be linked. ret: %d \n", lret);
+        return -1;
+    }
+
+    gst_object_unref(sink_vpad);
+    gst_object_unref(src_vpad);
+
+
+    // add audio to muxer.
+    src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
+    g_print("mkv obtained request pad %s for from audio source.\n", gst_pad_get_name(src_apad));
+    sink_apad = gst_element_get_static_pad(aqueue, "sink");
+    if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
+        // May be the src and sink are not match the format. ex: aac could not link to matroskamux.
+        gst_printerrln("Tee mkv file audio sink could not be linked, link return :%d .\n", lret);
+        return -1;
+    }
+    gst_object_unref(GST_OBJECT(sink_apad));
+    gst_object_unref(GST_OBJECT(src_apad));
+    gst_element_sync_state_with_parent(aqueue);
+    gst_element_sync_state_with_parent(audio_sink);
+
+    gst_element_sync_state_with_parent(vqueue);
+    gst_element_sync_state_with_parent(video_sink);
     return 0;
 }
 
@@ -1366,7 +1612,7 @@ static void _initial_device() {
     is_initial = TRUE;
 }
 
-GThread* start_inotify_thread(void) {
+GThread *start_inotify_thread(void) {
     // _start_watch_motion_file();
     char abpath[PATH_MAX] = {
         0,
@@ -1400,9 +1646,9 @@ GstElement *create_instance() {
         motion_hlssink();
     }
 
-    if (config_data.app_sink)
-    {
-        start_appsink();
+    if (config_data.app_sink) {
+        // start_appsink();
+        start_av_appsink();
     }
 
 

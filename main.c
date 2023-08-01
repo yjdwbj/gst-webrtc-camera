@@ -1,4 +1,5 @@
 #include "gst-app.h"
+#include "soup.h"
 #include <json-glib/json-glib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -144,10 +145,10 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
                     gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
             GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
                                       GST_DEBUG_GRAPH_SHOW_ALL, gst_element_state_get_name(new_state));
-            if (new_state == GST_STATE_PLAYING) {
-                if (inotify_watch == NULL && config_data.app_sink && config_data.hls_onoff.motion_hlssink)
-                    start_inotify_thread();
-            }
+            // if (new_state == GST_STATE_PLAYING) {
+            //     if (inotify_watch == NULL && config_data.app_sink && config_data.hls_onoff.motion_hlssink)
+            //         inotify_watch = start_inotify_thread();
+            // }
             break;
         }
     default:
@@ -216,7 +217,9 @@ static void read_config_json(gchar *fullpath) {
 
     tmpstr = json_object_get_string_member(root_obj, "rootdir");
     memcpy(config_data.root_dir, tmpstr, strlen(tmpstr));
+
     config_data.showdot = json_object_get_boolean_member_with_default(root_obj, "showdot", FALSE);
+    config_data.webrtc = json_object_get_boolean_member_with_default(root_obj, "webrtc", FALSE);
 
     config_data.rec_len = json_object_get_int_member_with_default(root_obj, "rec_len", 60);
 
@@ -295,6 +298,7 @@ int main(int argc, char *argv[]) {
     }
 
     g_print("Starting loop.\n");
+    start_http(&start_webrtcbin, config_data.http_data.port);
     g_main_loop_run(loop);
     gst_element_set_state(pipeline, GST_STATE_NULL);
 

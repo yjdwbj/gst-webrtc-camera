@@ -5,7 +5,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <stdio.h>
-
+typedef struct _WebrtcItem WebrtcItem;
 
 struct _GstConfigData {
     struct _v4l2src_data {
@@ -20,7 +20,8 @@ struct _GstConfigData {
     gchar root_dir[255];   // streams output root path;
     gboolean showdot; // generate gstreamer pipeline graphs;
     gboolean splitfile_sink; // splitmuxsink save multipart file.
-    gboolean app_sink;       // appsink for webrtc.
+    gboolean app_sink;       // appsink for filesink save.
+    gboolean webrtc;
     struct _hls_onoff {
         gboolean av_hlssink;         // audio and video hls output.
         gboolean motion_hlssink;     // motioncells video hls output.
@@ -89,6 +90,7 @@ typedef struct {
 
 GstElement *
 create_instance();
+void start_webrtcbin(WebrtcItem *item);
 
 int splitfile_sink();
 int av_hlssink();

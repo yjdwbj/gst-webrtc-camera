@@ -1,6 +1,6 @@
 {
   "http":{
-    "port": 7788,
+    "port": 57778,
     "host": "127.0.0.1"
   },
   "v4l2src": {
@@ -26,9 +26,10 @@
   },
   "splitfile_sink": false,
   "app_sink": true,
+  "webrtc": true,
   "rec_len": 20,
   "hls_onoff": {
-    "av_hlssink": false,
+    "av_hlssink": true,
     "motion_hlssink": true,
     "edge_hlssink": true,
     "cvtracker_hlssink": true,

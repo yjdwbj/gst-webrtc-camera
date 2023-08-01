@@ -1,0 +1,120 @@
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" http-equiv="Content-Language" content="en" />
+  <title>GStreamer webrtc camera</title>
+  <script>
+    var websocketConnection;
+    var webrtcPC;
+    var reportError;
+
+    function onLocalDescription(desc) {
+      console.log("Local description: " + JSON.stringify(desc));
+      webrtcPC.setLocalDescription(desc).then(function () {
+        websocketConnection.send(JSON.stringify({ type: "sdp", "data": desc }));
+      }).catch(reportError);
+
+    }
+
+    function onIncomingSDP(sdp) {
+      console.log("Incoming SDP: " + JSON.stringify(sdp));
+      console.log("local desc: " +  JSON.stringify(webrtcPC.localDescription));
+      webrtcPC.setRemoteDescription(sdp).then(() => {
+        webrtcPC.createAnswer().then(desc => onLocalDescription(desc)).catch(reportError);
+      }).catch(reportError);
+    }
+
+
+    function onIncomingICE(ice) {
+      var candidate = new RTCIceCandidate(ice);
+      // console.log("Incoming ICE: " + JSON.stringify(ice));
+      webrtcPC.addIceCandidate(candidate).catch(reportError);
+    }
+
+
+    function onAddRemoteStream(event) {
+      var el = document.createElement(event.track.kind)
+      el.srcObject = event.streams[0]
+      el.autoplay = true
+      el.controls = true
+      document.getElementById('remoteVideos').appendChild(el)
+    }
+
+
+    function onIceCandidate(event) {
+      if (event.candidate === null) {
+        console.log(" on Ice Candidate: " + JSON.stringify(webrtcPC.localDescription));
+        return;
+      }
+
+
+      console.log("Sending ICE candidate out: " + JSON.stringify(event.candidate));
+      websocketConnection.send(JSON.stringify({ "type": "ice", "data": event.candidate }));
+    }
+
+
+    function onServerMessage(event) {
+      var msg;
+
+      try {
+        msg = JSON.parse(event.data);
+      } catch (e) {
+        return;
+      }
+
+
+
+      switch (msg.type) {
+        case "sdp": onIncomingSDP(msg.data); break;
+        case "ice": onIncomingICE(msg.data); break;
+        default: break;
+      }
+    }
+
+
+    function playStream(videoElement, hostname, port, path, configuration, reportErrorCB) {
+      var l = window.location;
+      var wsHost = (hostname != undefined) ? hostname : l.hostname;
+      var wsPort = (port != undefined) ? port : l.port;
+      var wsPath = (path != undefined) ? path : "ws";
+      if (wsPort)
+        wsPort = ":" + wsPort;
+      var wsUrl = "ws://" + wsHost + wsPort + "/" + wsPath;
+
+      html5VideoElement = videoElement;
+      webrtcConfiguration = configuration;
+      reportError = (reportErrorCB != undefined) ? reportErrorCB : function (text) { };
+
+      websocketConnection = new WebSocket(wsUrl);
+      websocketConnection.addEventListener("message", onServerMessage);
+    }
+
+    window.onload = function () {
+      var vidstream = document.getElementById("stream");
+      var config = {
+        'iceServers': [{
+          urls: 'turn:192.168.1.100:3478',
+          username: "lcy",
+          credential: "lcy123"
+        }]
+      };
+      webrtcPC = new RTCPeerConnection(config);
+      webrtcPC.ontrack = onAddRemoteStream;
+      webrtcPC.onicecandidate = onIceCandidate;
+      webrtcPC.addTransceiver('video', { 'direction': 'sendrecv' });
+      webrtcPC.addTransceiver('audio', { 'direction': 'sendrecv' });
+
+      playStream(vidstream, null, 57778, null, config, function (errmsg) { console.error(errmsg); });
+    };
+
+  </script>
+</head>
+
+<body>
+  <div>
+    <div>Video</div>
+    <div id="remoteVideos"></div>
+  </div>
+</body>
+
+</html>
