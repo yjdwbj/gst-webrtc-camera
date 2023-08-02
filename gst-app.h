@@ -90,7 +90,8 @@ typedef struct {
 
 GstElement *
 create_instance();
-void start_webrtcbin(WebrtcItem *item);
+void start_udpsrc_webrtcbin(WebrtcItem *item);
+
 
 int splitfile_sink();
 int av_hlssink();

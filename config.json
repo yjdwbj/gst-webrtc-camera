@@ -8,7 +8,7 @@
     "height": 720,
     "framerate": 30,
     "io_mode": 2,
-    "device": "/dev/video0",
+    "device": "/dev/video1",
     "type": "image/jpeg",
     "format": "NV12"
   },
@@ -19,7 +19,7 @@
   "rootdir": "/tmp/output",
   "showdot": true,
   "udp": {
-    "enable": true,
+    "enable": false,
     "port": 5000,
     "host": "127.0.0.1",
     "multicast": false
@@ -29,10 +29,10 @@
   "webrtc": true,
   "rec_len": 20,
   "hls_onoff": {
-    "av_hlssink": true,
-    "motion_hlssink": true,
-    "edge_hlssink": true,
-    "cvtracker_hlssink": true,
+    "av_hlssink": false,
+    "motion_hlssink": false,
+    "edge_hlssink": false,
+    "cvtracker_hlssink": false,
     "facedetect_hlssink": false
   },
   "hls": {

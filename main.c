@@ -298,7 +298,7 @@ int main(int argc, char *argv[]) {
     }
 
     g_print("Starting loop.\n");
-    start_http(&start_webrtcbin, config_data.http_data.port);
+    start_http(&start_udpsrc_webrtcbin, config_data.http_data.port);
     g_main_loop_run(loop);
     gst_element_set_state(pipeline, GST_STATE_NULL);
 

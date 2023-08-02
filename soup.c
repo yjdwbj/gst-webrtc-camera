@@ -421,7 +421,7 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
 
     gst_element_set_state(item_entry->pipeline, GST_STATE_PLAYING);
 
-    item_entry->signal_add((gpointer)item_entry);
+    // item_entry->signal_add((gpointer)item_entry);
 
     g_hash_table_insert(webrtc_connected_table, connection, item_entry);
     g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
