@@ -288,41 +288,6 @@ void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
     soup_message_set_status(message, SOUP_STATUS_OK);
 }
 
-static gboolean
-bus_watch_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
-    GstPipeline *pipeline = user_data;
-
-    switch (GST_MESSAGE_TYPE(message)) {
-    case GST_MESSAGE_ERROR: {
-        GError *error = NULL;
-        gchar *debug = NULL;
-
-        gst_message_parse_error(message, &error, &debug);
-        g_error("Error on bus: %s (debug: %s)", error->message, debug);
-        g_error_free(error);
-        g_free(debug);
-        break;
-    }
-    case GST_MESSAGE_WARNING: {
-        GError *error = NULL;
-        gchar *debug = NULL;
-
-        gst_message_parse_warning(message, &error, &debug);
-        g_warning("Warning on bus: %s (debug: %s)", error->message, debug);
-        g_error_free(error);
-        g_free(debug);
-        break;
-    }
-    case GST_MESSAGE_LATENCY:
-        gst_bin_recalculate_latency(GST_BIN(pipeline));
-        break;
-    default:
-        break;
-    }
-
-    return G_SOURCE_CONTINUE;
-}
-
 typedef struct{
     webrtc_callback fn;
     GHashTable *webrtc_connected_table;
@@ -354,7 +319,6 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     GArray *transceivers;
     GstWebRTCRTPTransceiver *trans;
     CustomSoupData *data = (CustomSoupData *)user_data;
-    GstBus *bus = NULL;
 
     GHashTable *webrtc_connected_table = data->webrtc_connected_table;
     gst_print("Processing new websocket connection %p \n", (gpointer)connection);
@@ -414,11 +378,6 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                      G_CALLBACK(on_ice_candidate_cb), (gpointer)item_entry);
 
 
-    // bus = gst_pipeline_get_bus(GST_PIPELINE(item_entry->pipeline));
-    // gst_bus_add_watch(bus, bus_watch_cb, item_entry->pipeline);
-    // gst_object_unref(bus);
-
-
     gst_element_set_state(item_entry->pipeline, GST_STATE_PLAYING);
 
     // item_entry->signal_add((gpointer)item_entry);
@@ -432,7 +391,6 @@ void destroy_webrtc_table(gpointer entry_ptr) {
     WebrtcItem *entry = (WebrtcItem *)entry_ptr;
 
     g_assert(entry != NULL);
-    g_print("destroy_webrtc_table name: %s\n", gst_object_get_name(entry->webrtcbin));
     entry->signal_remove((gpointer)entry);
     if (entry->pipeline != NULL) {
         GstBus *bus;
@@ -454,15 +412,15 @@ void destroy_webrtc_table(gpointer entry_ptr) {
     g_free(entry);
 }
 
-static GOptionEntry entries[] = {
-    {"video-priority", 0, 0, G_OPTION_ARG_STRING, &video_priority,
-     "Priority of the video stream (very-low, low, medium or high)",
-     "PRIORITY"},
-    {"audio-priority", 0, 0, G_OPTION_ARG_STRING, &audio_priority,
-     "Priority of the audio stream (very-low, low, medium or high)",
-     "PRIORITY"},
-    {NULL},
-};
+// static GOptionEntry entries[] = {
+//     {"video-priority", 0, 0, G_OPTION_ARG_STRING, &video_priority,
+//      "Priority of the video stream (very-low, low, medium or high)",
+//      "PRIORITY"},
+//     {"audio-priority", 0, 0, G_OPTION_ARG_STRING, &audio_priority,
+//      "Priority of the audio stream (very-low, low, medium or high)",
+//      "PRIORITY"},
+//     {NULL},
+// };
 
 void start_http(webrtc_callback fn, int port ) {
     SoupServer *soup_server;

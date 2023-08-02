@@ -30,8 +30,8 @@
   "rec_len": 20,
   "hls_onoff": {
     "av_hlssink": false,
-    "motion_hlssink": false,
-    "edge_hlssink": false,
+    "motion_hlssink": true,
+    "edge_hlssink": true,
     "cvtracker_hlssink": false,
     "facedetect_hlssink": false
   },
