@@ -1,7 +1,9 @@
 {
   "http": {
     "port": 57778,
-    "host": "127.0.0.1"
+    "host": "127.0.0.1",
+    "user": "llq",
+    "password": "testsoup"
   },
   "v4l2src": {
     "width": 1280,

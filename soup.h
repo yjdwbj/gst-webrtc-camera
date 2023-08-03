@@ -14,6 +14,7 @@
 
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
+
 typedef void (*appsink_signal_add)(gpointer user_data);
 typedef void (*appsink_signal_remove)(gpointer user_data);
 

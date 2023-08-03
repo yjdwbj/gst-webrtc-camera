@@ -1,4 +1,5 @@
 #include "gst-app.h"
+#include "data_struct.h"
 #include "soup.h"
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>

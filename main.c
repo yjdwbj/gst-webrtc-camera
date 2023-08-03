@@ -1,3 +1,4 @@
+#include "data_struct.h"
 #include "gst-app.h"
 #include "soup.h"
 #include <json-glib/json-glib.h>
@@ -227,9 +228,16 @@ static void read_config_json(gchar *fullpath) {
     config_data.audio.buf_time = json_object_get_int_member_with_default(root_obj, "buf_time", 5000000);
 
     object = json_object_get_object_member(root_obj, "http");
-    config_data.http_data.port = json_object_get_int_member_with_default(object, "port", 7788);
-    tmpstr = json_object_get_string_member(object, "host");
-    config_data.http_data.host = g_strdup(tmpstr);
+    if(object)
+    {
+        config_data.http.port = json_object_get_int_member_with_default(object, "port", 7788);
+        tmpstr = json_object_get_string_member(object, "host");
+        config_data.http.host = g_strdup(tmpstr);
+        tmpstr = json_object_get_string_member(object, "user");
+        config_data.http.user = g_strdup(tmpstr);
+        tmpstr = json_object_get_string_member(object, "password");
+        config_data.http.password = g_strdup(tmpstr);
+    }
 
     object = json_object_get_object_member(root_obj, "udp");
     config_data.udp.port = json_object_get_int_member_with_default(object, "port", 5000);
@@ -318,7 +326,7 @@ int main(int argc, char *argv[]) {
     g_print("Starting loop.\n");
     // start_http(&start_appsrc_webrtcbin, config_data.http_data.port);
 
-    start_http(&start_udpsrc_webrtcbin, config_data.http_data.port);
+    start_http(&start_udpsrc_webrtcbin, config_data.http.port);
     g_main_loop_run(loop);
     gst_element_set_state(pipeline, GST_STATE_NULL);
 

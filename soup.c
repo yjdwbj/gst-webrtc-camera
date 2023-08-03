@@ -1,8 +1,11 @@
 #include "soup.h"
+#include "data_struct.h"
 
 static gchar *index_source = NULL;
 gchar *video_priority = NULL;
 gchar *audio_priority = NULL;
+
+#define SOUP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
 
 static gchar *
 get_string_from_json_object(JsonObject *object) {
@@ -424,8 +427,60 @@ void destroy_webrtc_table(gpointer entry_ptr) {
 //     {NULL},
 // };
 
+static void
+got_headers_callback(SoupMessage *msg, gpointer data) {
+    const char *header;
+
+    header = soup_message_headers_get_one(msg->request_headers,
+                                          "Authorization");
+    if (header) {
+        if (strstr(header, "Basic "))
+            g_print("client send requested basic \n");
+        if (strstr(header, "Digest "))
+            g_print("client send requested digest \n");
+    }
+}
+
+static void
+wrote_headers_callback(SoupMessage *msg, gpointer data) {
+    const char *header;
+
+    header = soup_message_headers_get_list(msg->response_headers,
+                                           "WWW-Authenticate");
+    if (header) {
+        if (strstr(header, "Basic "))
+            g_print("server_requested basic \n");
+        if (strstr(header, "Digest "))
+            g_print("server_requested digest \n");
+    }
+}
+
+static void
+request_started_callback(SoupServer *server, SoupMessage *msg,
+                         SoupClientContext *client, gpointer data) {
+    g_signal_connect(msg, "got_headers",
+                     G_CALLBACK(got_headers_callback), NULL);
+    g_signal_connect(msg, "wrote_headers",
+                     G_CALLBACK(wrote_headers_callback), NULL);
+}
+
+extern GstConfigData config_data;
+
+digest_auth_callback(SoupAuthDomain *auth_domain,
+                     SoupMessage *msg,
+                     const char *username,
+                     gpointer data) {
+    if (strcmp(username, config_data.http.user) != 0)
+        return NULL;
+
+    return soup_auth_domain_digest_encode_password(username,
+                                                   SOUP_AUTH_DOMAIN_REALM,
+                                                   config_data.http.password);
+}
+
 void start_http(webrtc_callback fn, int port ) {
     SoupServer *soup_server;
+    SoupAuthDomain *auth_domain;
     CustomSoupData *data;
     data = g_new0(CustomSoupData, 1);
     GHashTable *webrtc_connected_table;
@@ -437,9 +492,25 @@ void start_http(webrtc_callback fn, int port ) {
     data->webrtc_connected_table = webrtc_connected_table;
     soup_server =
         soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server", NULL);
+
+    // g_signal_connect(soup_server, "request_started",
+    //                  G_CALLBACK(request_started_callback), NULL);
     soup_server_add_handler(soup_server, "/", soup_http_handler, NULL, NULL);
     soup_server_add_websocket_handler(soup_server, "/ws", NULL, NULL,
                                       soup_websocket_handler, (gpointer)data, NULL);
+
+    auth_domain = soup_auth_domain_digest_new(
+        "realm", SOUP_AUTH_DOMAIN_REALM,
+        SOUP_AUTH_DOMAIN_DIGEST_AUTH_CALLBACK,
+        digest_auth_callback,
+        NULL);
+    // soup_auth_domain_add_path(auth_domain, "/Digest");
+    // soup_auth_domain_add_path(auth_domain, "/Any");
+    soup_auth_domain_add_path(auth_domain, "/");
+    // soup_auth_domain_remove_path(auth_domain, "/Any/Not"); // not need to auth path
+    soup_server_add_auth_domain(soup_server, auth_domain);
+    g_object_unref(auth_domain);
+
     soup_server_listen_all(soup_server, port,
                            (SoupServerListenOptions)0, NULL);
 
