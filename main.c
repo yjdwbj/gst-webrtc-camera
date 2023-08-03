@@ -189,13 +189,13 @@ static void read_config_json(gchar *fullpath) {
     object = json_object_get_object_member(root_obj, "v4l2src");
 
     const gchar *tmpstr = json_object_get_string_member_with_default(object, "device", "/dev/video0");
-    memcpy(config_data.v4l2src_data.device, tmpstr, strlen(tmpstr));
+    config_data.v4l2src_data.device = g_strdup(tmpstr);
 
     tmpstr = json_object_get_string_member_with_default(object, "format", "NV12");
-    memcpy(config_data.v4l2src_data.format, tmpstr, strlen(tmpstr));
+    config_data.v4l2src_data.format = g_strdup(tmpstr);
 
     tmpstr = json_object_get_string_member_with_default(object, "type", "image/jpeg");
-    memcpy(config_data.v4l2src_data.type, tmpstr, strlen(tmpstr));
+    config_data.v4l2src_data.type = g_strdup(tmpstr);
 
     // g_print("json_string '%s'\n", config_data.v4l2src_data.device);
 
@@ -216,10 +216,9 @@ static void read_config_json(gchar *fullpath) {
     config_data.hls_onoff.cvtracker_hlssink = json_object_get_boolean_member_with_default(object, "cvtracker_hlssink", FALSE);
 
     tmpstr = json_object_get_string_member(root_obj, "rootdir");
-    memcpy(config_data.root_dir, tmpstr, strlen(tmpstr));
+    config_data.root_dir = g_strdup(tmpstr);
 
     config_data.showdot = json_object_get_boolean_member_with_default(root_obj, "showdot", FALSE);
-    config_data.webrtc = json_object_get_boolean_member_with_default(root_obj, "webrtc", FALSE);
 
     config_data.rec_len = json_object_get_int_member_with_default(root_obj, "rec_len", 60);
 
@@ -230,12 +229,12 @@ static void read_config_json(gchar *fullpath) {
     object = json_object_get_object_member(root_obj, "http");
     config_data.http_data.port = json_object_get_int_member_with_default(object, "port", 7788);
     tmpstr = json_object_get_string_member(object, "host");
-    memcpy(config_data.http_data.host, tmpstr, strlen(tmpstr));
+    config_data.http_data.host = g_strdup(tmpstr);
 
     object = json_object_get_object_member(root_obj, "udp");
     config_data.udp.port = json_object_get_int_member_with_default(object, "port", 5000);
     tmpstr = json_object_get_string_member(object, "host");
-    memcpy(config_data.udp.host, tmpstr, strlen(tmpstr));
+    config_data.udp.host = g_strdup(tmpstr);
     config_data.udp.multicast = json_object_get_boolean_member_with_default(object, "multicast", FALSE);
     config_data.udp.enable = json_object_get_boolean_member_with_default(object, "enable", FALSE);
 
@@ -244,6 +243,25 @@ static void read_config_json(gchar *fullpath) {
     config_data.hls.files = json_object_get_int_member_with_default(object, "files", 10);
     config_data.hls.showtext = json_object_get_int_member_with_default(object, "files", 10);
     config_data.hls.showtext = json_object_get_boolean_member_with_default(object, "showtext", FALSE);
+
+    object = json_object_get_object_member(root_obj, "webrtc");
+    if(object)
+    {
+        JsonObject *turn_obj = json_object_get_object_member(object, "turn");
+        tmpstr = json_object_get_string_member(turn_obj, "url");
+        config_data.webrtc.turn.url = g_strdup(tmpstr);
+        tmpstr = json_object_get_string_member(turn_obj, "user");
+        config_data.webrtc.turn.user = g_strdup(tmpstr);
+        tmpstr = json_object_get_string_member(turn_obj, "pwd");
+        config_data.webrtc.turn.pwd = g_strdup(tmpstr);
+
+        turn_obj = json_object_get_object_member(object, "udpsink");
+        config_data.webrtc.udpsink.port = json_object_get_int_member_with_default(turn_obj, "port", 6000);
+        tmpstr = json_object_get_string_member(turn_obj, "addr");
+        config_data.webrtc.udpsink.addr = g_strdup(tmpstr);
+        config_data.webrtc.udpsink.multicast = json_object_get_boolean_member_with_default(turn_obj, "multicast", TRUE);
+    }
+
 
     g_object_unref(parser);
 }
@@ -298,6 +316,8 @@ int main(int argc, char *argv[]) {
     }
 
     g_print("Starting loop.\n");
+    // start_http(&start_appsrc_webrtcbin, config_data.http_data.port);
+
     start_http(&start_udpsrc_webrtcbin, config_data.http_data.port);
     g_main_loop_run(loop);
     gst_element_set_state(pipeline, GST_STATE_NULL);

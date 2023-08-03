@@ -1,5 +1,5 @@
 {
-  "http":{
+  "http": {
     "port": 57778,
     "host": "127.0.0.1"
   },
@@ -24,9 +24,20 @@
     "host": "127.0.0.1",
     "multicast": false
   },
+  "webrtc": {
+    "turn": {
+      "url": "192.168.1.100:3478",
+      "user": "test",
+      "pwd": "test123"
+    },
+    "udpsink": {
+      "port": 6000,
+      "addr": "224.1.1.2",
+      "multicast": false
+    }
+  },
   "splitfile_sink": false,
   "app_sink": true,
-  "webrtc": true,
   "rec_len": 20,
   "hls_onoff": {
     "av_hlssink": false,

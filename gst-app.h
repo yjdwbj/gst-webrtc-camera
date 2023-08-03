@@ -7,21 +7,34 @@
 #include <stdio.h>
 typedef struct _WebrtcItem WebrtcItem;
 
+struct _webrtc {
+    gboolean enable;
+    struct _turnserver {
+        gchar *url;
+        gchar *user;
+        gchar *pwd;
+    } turn;
+    struct _udpsink {
+        gboolean multicast;
+        int port;
+        gchar *addr;
+    } udpsink;
+};
+
 struct _GstConfigData {
     struct _v4l2src_data {
-        gchar device[16];
+        gchar *device;
         int width;
         int height;
         int framerate;
         int io_mode;
-        gchar type[16];
-        gchar format[8];
+        gchar *type;
+        gchar *format;
     } v4l2src_data;
-    gchar root_dir[255];   // streams output root path;
+    gchar *root_dir;   // streams output root path;
     gboolean showdot; // generate gstreamer pipeline graphs;
     gboolean splitfile_sink; // splitmuxsink save multipart file.
     gboolean app_sink;       // appsink for filesink save.
-    gboolean webrtc;
     struct _hls_onoff {
         gboolean av_hlssink;         // audio and video hls output.
         gboolean motion_hlssink;     // motioncells video hls output.
@@ -31,13 +44,13 @@ struct _GstConfigData {
     } hls_onoff;
     struct _http_data {
         int port;
-        gchar host[128];
+        gchar *host;
     } http_data;
     struct _udp_data { // udp multicastsink hls output.
         gboolean enable;
         gboolean multicast;
         int port;
-        gchar host[128];
+        gchar *host;
     } udp;
     struct _hls_data {
         int files;
@@ -49,6 +62,7 @@ struct _GstConfigData {
         int buf_time;
     } audio;
     int rec_len; // motion detect record duration, seconds.
+    struct _webrtc webrtc;
 };
 
 // } config_data_init = {
@@ -91,7 +105,7 @@ typedef struct {
 GstElement *
 create_instance();
 void start_udpsrc_webrtcbin(WebrtcItem *item);
-
+void start_appsrc_webrtcbin(WebrtcItem *item);
 
 int splitfile_sink();
 int av_hlssink();

@@ -377,10 +377,10 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     g_signal_connect(item_entry->webrtcbin, "on-ice-candidate",
                      G_CALLBACK(on_ice_candidate_cb), (gpointer)item_entry);
 
-
+    if (item_entry->signal_add)
+        item_entry->signal_add((gpointer)item_entry);
     gst_element_set_state(item_entry->pipeline, GST_STATE_PLAYING);
 
-    // item_entry->signal_add((gpointer)item_entry);
 
     g_hash_table_insert(webrtc_connected_table, connection, item_entry);
     g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
@@ -391,7 +391,9 @@ void destroy_webrtc_table(gpointer entry_ptr) {
     WebrtcItem *entry = (WebrtcItem *)entry_ptr;
 
     g_assert(entry != NULL);
-    entry->signal_remove((gpointer)entry);
+    if (entry->signal_remove)
+        entry->signal_remove((gpointer)entry);
+
     if (entry->pipeline != NULL) {
         GstBus *bus;
 
