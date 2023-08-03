@@ -892,6 +892,9 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     // gst_object_unref(bus);
 
     item->webrtcbin = gst_bin_get_by_name(GST_BIN(item->pipeline), webrtc_name);
+#if 1
+    gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "udpsrc_webrtc");
+#endif
 }
 
 int start_av_udpsink() {
@@ -1533,13 +1536,18 @@ static void _initial_device() {
 }
 
 GThread *start_inotify_thread(void) {
-    // _start_watch_motion_file();
+    gchar *tmpath = NULL;
+    GThread *tid = NULL;
     char abpath[PATH_MAX] = {
         0,
     };
     g_print("Starting inotify watch thread....\n");
     realpath(g_strconcat(config_data.root_dir, "/hls/motion/motioncells-0.vamc", NULL), abpath);
-    return g_thread_new("_inotify_thread", _inotify_thread, g_strdup(abpath));
+    tmpath = g_strdup(abpath);
+    tid = g_thread_new("_inotify_thread", _inotify_thread, tmpath);
+    g_free(tmpath);
+
+    return tid;
 }
 
 GstElement *create_instance() {
@@ -1569,6 +1577,10 @@ GstElement *create_instance() {
     if (config_data.app_sink) {
         // start_appsink();
         start_av_appsink();
+    }
+
+    if(config_data.webrtc.enable)
+    {
         start_av_udpsink();
     }
 

@@ -255,6 +255,7 @@ static void read_config_json(gchar *fullpath) {
     object = json_object_get_object_member(root_obj, "webrtc");
     if(object)
     {
+        config_data.webrtc.enable = json_object_get_boolean_member_with_default(object, "enable", TRUE);
         JsonObject *turn_obj = json_object_get_object_member(object, "turn");
         tmpstr = json_object_get_string_member(turn_obj, "url");
         config_data.webrtc.turn.url = g_strdup(tmpstr);

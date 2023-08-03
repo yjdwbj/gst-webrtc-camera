@@ -1,7 +1,7 @@
 
 CC=gcc
 CFLAGS=-g
-EXE=v4l2-record
+EXE=gst-webrtc-camera
 
 # https://makefiletutorial.com/#makefile-cookbook
 # https://github.com/theicfire/makefiletutorial
@@ -14,5 +14,4 @@ all:
 
 clean:
 	rm ${EXE}
-# libtool --mode=link gcc -Wall helloworld.c -o helloworld $(pkg-config --cflags --libs gstreamer-1.0)
 

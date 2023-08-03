@@ -5,7 +5,7 @@ static gchar *index_source = NULL;
 gchar *video_priority = NULL;
 gchar *audio_priority = NULL;
 
-#define SOUP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
+#define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
 
 static gchar *
 get_string_from_json_object(JsonObject *object) {
@@ -466,6 +466,7 @@ request_started_callback(SoupServer *server, SoupMessage *msg,
 
 extern GstConfigData config_data;
 
+static char *
 digest_auth_callback(SoupAuthDomain *auth_domain,
                      SoupMessage *msg,
                      const char *username,
@@ -474,7 +475,7 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
         return NULL;
 
     return soup_auth_domain_digest_encode_password(username,
-                                                   SOUP_AUTH_DOMAIN_REALM,
+                                                   HTTP_AUTH_DOMAIN_REALM,
                                                    config_data.http.password);
 }
 
@@ -493,14 +494,14 @@ void start_http(webrtc_callback fn, int port ) {
     soup_server =
         soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server", NULL);
 
-    // g_signal_connect(soup_server, "request_started",
-    //                  G_CALLBACK(request_started_callback), NULL);
+    g_signal_connect(soup_server, "request_started",
+                     G_CALLBACK(request_started_callback), NULL);
     soup_server_add_handler(soup_server, "/", soup_http_handler, NULL, NULL);
     soup_server_add_websocket_handler(soup_server, "/ws", NULL, NULL,
                                       soup_websocket_handler, (gpointer)data, NULL);
 
     auth_domain = soup_auth_domain_digest_new(
-        "realm", SOUP_AUTH_DOMAIN_REALM,
+        "realm", HTTP_AUTH_DOMAIN_REALM,
         SOUP_AUTH_DOMAIN_DIGEST_AUTH_CALLBACK,
         digest_auth_callback,
         NULL);

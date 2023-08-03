@@ -2,7 +2,7 @@
   "http": {
     "port": 57778,
     "host": "127.0.0.1",
-    "user": "llq",
+    "user": "test",
     "password": "testsoup"
   },
   "v4l2src": {
@@ -27,6 +27,7 @@
     "multicast": false
   },
   "webrtc": {
+    "enable": true,
     "turn": {
       "url": "192.168.1.100:3478",
       "user": "test",
@@ -39,7 +40,7 @@
     }
   },
   "splitfile_sink": false,
-  "app_sink": true,
+  "app_sink": false,
   "rec_len": 20,
   "hls_onoff": {
     "av_hlssink": false,
