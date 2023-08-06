@@ -29,6 +29,10 @@ create_instance();
 void start_udpsrc_webrtcbin(WebrtcItem *item);
 void start_appsrc_webrtcbin(WebrtcItem *item);
 
+void udpsrc_cmd_rec_start(gpointer user_data);
+void udpsrc_cmd_rec_stop(gpointer user_data);
+int get_record_state(void);
+
 int splitfile_sink();
 int av_hlssink();
 int udp_multicastsink();

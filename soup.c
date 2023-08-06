@@ -25,8 +25,7 @@ get_string_from_json_object(JsonObject *object) {
     return text;
 }
 
-static
-void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
+static void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
     gchar *sdp_string;
     gchar *json_string;
     JsonObject *sdp_json;
@@ -68,8 +67,7 @@ void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
     gst_webrtc_session_description_free(offer);
 }
 
-static
-void on_negotiation_needed_cb(GstElement *webrtcbin, gpointer user_data) {
+static void on_negotiation_needed_cb(GstElement *webrtcbin, gpointer user_data) {
     GstPromise *promise;
     WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
 
@@ -80,10 +78,8 @@ void on_negotiation_needed_cb(GstElement *webrtcbin, gpointer user_data) {
     g_signal_emit_by_name(G_OBJECT(webrtc_entry->webrtcbin), "create-offer", NULL, promise);
 }
 
-
-static
-void on_ice_candidate_cb(G_GNUC_UNUSED GstElement *webrtcbin, guint mline_index,
-                         gchar *candidate, gpointer user_data) {
+static void on_ice_candidate_cb(G_GNUC_UNUSED GstElement *webrtcbin, guint mline_index,
+                                gchar *candidate, gpointer user_data) {
     JsonObject *ice_json;
     JsonObject *ice_data_json;
     gchar *json_string;
@@ -106,9 +102,8 @@ void on_ice_candidate_cb(G_GNUC_UNUSED GstElement *webrtcbin, guint mline_index,
 
 #include <gst/gst.h>
 #include <gst/gstbin.h>
-static
-void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection,
-                               SoupWebsocketDataType data_type, GBytes *message, gpointer user_data) {
+static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection,
+                                      SoupWebsocketDataType data_type, GBytes *message, gpointer user_data) {
     gsize size;
     const gchar *data;
     gchar *data_string;
@@ -150,7 +145,34 @@ void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection
     }
     type_string = json_object_get_string_member(root_json_object, "type");
 
-    if (!json_object_has_member(root_json_object, "data")) {
+    if (json_object_has_member(root_json_object, "cmd")) {
+        const gchar *cmd_type_string;
+        const gchar *cmd_data;
+        cmd_type_string = json_object_get_string_member(root_json_object, "cmd");
+        if (!g_strcmp0(cmd_type_string, "record")) {
+            cmd_data = json_object_get_string_member(root_json_object, "arg");
+            if (!g_strcmp0(cmd_data, "start")) {
+                if (webrtc_entry->record.get_rec_state()) {
+                    // have someone recording in process.
+                    JsonObject *res_json;
+                    gchar *json_string;
+                    res_json = json_object_new();
+                    json_object_set_string_member(res_json, "record", "started");
+                    json_string = get_string_from_json_object(res_json);
+                    json_object_unref(res_json);
+
+                    soup_websocket_connection_send_text(webrtc_entry->connection, json_string);
+                    g_free(json_string);
+                    g_print("Has recording in process!!!\n");
+                    goto cleanup;
+                }
+                webrtc_entry->record.start((gpointer)&webrtc_entry->record);
+            } else {
+                webrtc_entry->record.stop((gpointer)&webrtc_entry->record);
+            }
+            goto cleanup;
+        }
+    } else if (!json_object_has_member(root_json_object, "data")) {
         g_error("Received message without data field\n");
         goto cleanup;
     }
@@ -245,19 +267,17 @@ unknown_message:
     goto cleanup;
 }
 
-static
-void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
-                              gpointer user_data) {
+static void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
+                                     gpointer user_data) {
     GHashTable *webrtc_connected_table = (GHashTable *)user_data;
     g_hash_table_remove(webrtc_connected_table, connection);
     gst_print("Closed websocket connection %p, connected size: %d\n", (gpointer)connection, g_hash_table_size(webrtc_connected_table));
 }
 
-static
-void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
-                       SoupMessage *message, const char *path, G_GNUC_UNUSED GHashTable *query,
-                       G_GNUC_UNUSED SoupClientContext *client_context,
-                       G_GNUC_UNUSED gpointer user_data) {
+static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
+                              SoupMessage *message, const char *path, G_GNUC_UNUSED GHashTable *query,
+                              G_GNUC_UNUSED SoupClientContext *client_context,
+                              G_GNUC_UNUSED gpointer user_data) {
     SoupBuffer *soup_buffer;
 
     if ((g_strcmp0(path, "/") != 0) && (g_strcmp0(path, "/index.html") != 0)) {
@@ -291,7 +311,7 @@ void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
     soup_message_set_status(message, SOUP_STATUS_OK);
 }
 
-typedef struct{
+typedef struct {
     webrtc_callback fn;
     GHashTable *webrtc_connected_table;
 
@@ -314,10 +334,9 @@ _priority_from_string(const gchar *s) {
     return 0;
 }
 
-static
-void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
-                            SoupWebsocketConnection *connection, G_GNUC_UNUSED const char *path,
-                            G_GNUC_UNUSED SoupClientContext *client_context, gpointer user_data) {
+static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
+                                   SoupWebsocketConnection *connection, G_GNUC_UNUSED const char *path,
+                                   G_GNUC_UNUSED SoupClientContext *client_context, gpointer user_data) {
     WebrtcItem *item_entry;
     GArray *transceivers;
     GstWebRTCRTPTransceiver *trans;
@@ -384,13 +403,11 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
         item_entry->signal_add((gpointer)item_entry);
     gst_element_set_state(item_entry->pipeline, GST_STATE_PLAYING);
 
-
     g_hash_table_insert(webrtc_connected_table, connection, item_entry);
     g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
 }
 
-static
-void destroy_webrtc_table(gpointer entry_ptr) {
+static void destroy_webrtc_table(gpointer entry_ptr) {
     WebrtcItem *entry = (WebrtcItem *)entry_ptr;
 
     g_assert(entry != NULL);
@@ -404,11 +421,24 @@ void destroy_webrtc_table(gpointer entry_ptr) {
                               GST_STATE_NULL);
 
         bus = gst_pipeline_get_bus(GST_PIPELINE(entry->pipeline));
-        gst_bus_remove_watch(bus);
-        gst_object_unref(bus);
+        if (bus != NULL) {
+            gst_bus_remove_watch(bus);
+            gst_object_unref(bus);
+        }
 
         gst_object_unref(GST_OBJECT(entry->webrtcbin));
         gst_object_unref(GST_OBJECT(entry->pipeline));
+
+        if (entry->record.pipeline != NULL) {
+            entry->record.stop((gpointer)&entry->record);
+
+            bus = gst_pipeline_get_bus(GST_PIPELINE(entry->record.pipeline));
+            if (bus != NULL) {
+                gst_bus_remove_watch(bus);
+                gst_object_unref(bus);
+            }
+            gst_object_unref(GST_OBJECT(entry->record.pipeline));
+        }
     }
 
     if (entry->connection != NULL)
@@ -479,7 +509,7 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
                                                    config_data.http.password);
 }
 
-void start_http(webrtc_callback fn, int port ) {
+void start_http(webrtc_callback fn, int port) {
     SoupServer *soup_server;
     SoupAuthDomain *auth_domain;
     CustomSoupData *data;

@@ -15,8 +15,16 @@
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
 
+typedef void (*user_cb)(gpointer user_data);
 typedef void (*appsink_signal_add)(gpointer user_data);
 typedef void (*appsink_signal_remove)(gpointer user_data);
+typedef int (*get_state)(void);
+struct _RecordItem {
+    GstElement *pipeline;
+    user_cb start;
+    user_cb stop;
+    get_state get_rec_state;
+};
 
 struct _WebrtcItem {
     SoupWebsocketConnection *connection;
@@ -27,10 +35,16 @@ struct _WebrtcItem {
     guint64 hash_id; // hash value for connection;
     appsink_signal_remove signal_remove;
     appsink_signal_add signal_add;
+    struct _RecordItem record;
 };
 typedef struct _WebrtcItem WebrtcItem;
 
 typedef void (*webrtc_callback)(WebrtcItem *item);
+
+
+
+
+typedef struct _RecordItem RecordItem;
 
 void start_http(webrtc_callback fn, int port);
 

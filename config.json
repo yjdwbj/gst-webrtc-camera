@@ -10,7 +10,7 @@
     "height": 720,
     "framerate": 30,
     "io_mode": 2,
-    "device": "/dev/video1",
+    "device": "/dev/video0",
     "type": "image/jpeg",
     "format": "NV12"
   },

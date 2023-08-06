@@ -12,10 +12,12 @@ static GstElement *video_source, *audio_source, *h264_encoder, *va_pp;
 static gboolean is_initial = FALSE;
 
 static volatile int threads_running = 0;
+static volatile int cmd_recording = 0;
 static int record_time = 7;
 static volatile gboolean reading_inotify = TRUE;
 
 static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t cmd_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 GstConfigData config_data;
 
@@ -490,8 +492,79 @@ on_source_message(GstBus *bus, GstMessage *message, CustomAppData *data) {
     return TRUE;
 }
 
-static gboolean stop_udpsrc_rec(GstElement *rec_pipeline) {
+void udpsrc_cmd_rec_stop(gpointer user_data) {
+    RecordItem *item = (RecordItem *)user_data;
+    // GstBus *bus;
+    gst_element_set_state(GST_ELEMENT(item->pipeline),
+                          GST_STATE_NULL);
+    g_print("stop udpsrc record.\n");
 
+    // bus = gst_pipeline_get_bus(GST_PIPELINE(rec_pipeline));
+    // gst_bus_remove_watch(bus);
+    // gst_object_unref(bus);
+
+    gst_object_unref(GST_OBJECT(item->pipeline));
+    if (pthread_mutex_lock(&cmd_mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+    cmd_recording = FALSE;
+    if (pthread_mutex_unlock(&cmd_mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+    item->pipeline = NULL;
+}
+
+int get_record_state() { return cmd_recording ? 1 : 0; }
+
+void udpsrc_cmd_rec_start(gpointer user_data) {
+    /**
+     * @brief I want to create a module for recording, but it cannot be dynamically added and deleted while the pipeline is running。
+     * Maybe it's because I'm not familiar with its mechanics.
+     *
+     */
+    if (pthread_mutex_lock(&cmd_mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+    cmd_recording = TRUE;
+    if (pthread_mutex_unlock(&cmd_mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+
+    RecordItem *item = (RecordItem *)user_data;
+    gchar *timestr = NULL;
+    gchar *cmdline = NULL;
+    gchar *today = get_today_str();
+
+    const gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
+    g_free(today);
+
+    timestr = get_format_current_time();
+    gst_println("starting record at: %s .\n", timestr);
+    g_free(timestr);
+
+    _mkdir(outdir, 0755);
+    timestr = get_current_time_str();
+    gchar *filename = g_strdup_printf("/webrtc_record-%s.mkv", timestr);
+    g_free(timestr);
+
+    gchar *audio_src = g_strdup_printf("udpsrc port=6001 name=audio_save  ! "
+                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                       " rtpopusdepay ! opusparse ! queue ! mux.");
+    gchar *video_src = g_strdup_printf("udpsrc port=6000  name=video_save ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " rtph264depay ! h264parse ! queue ! mux. ");
+    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", g_strconcat(outdir, filename, NULL), audio_src, video_src);
+    g_free(filename);
+    g_print("record cmdline: %s \n", cmdline);
+    g_free(audio_src);
+    g_free(video_src);
+
+    item->pipeline = gst_parse_launch(cmdline, NULL);
+    g_free(cmdline);
+    gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
+}
+
+gboolean stop_udpsrc_rec(GstElement *rec_pipeline) {
     // GstBus *bus;
     gst_element_set_state(GST_ELEMENT(rec_pipeline),
                           GST_STATE_NULL);
@@ -513,7 +586,7 @@ static gboolean stop_udpsrc_rec(GstElement *rec_pipeline) {
     return TRUE;
 }
 
-static int start_udpsrc_rec() {
+int start_udpsrc_rec(gpointer user_data) {
     /**
      * @brief I want to create a module for recording, but it cannot be dynamically added and deleted while the pipeline is running。
      * Maybe it's because I'm not familiar with its mechanics.
@@ -796,6 +869,8 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
 
     item->signal_remove = &remove_appsink_signal;
     item->signal_add = &add_appsink_signal;
+    item->record.start = &udpsrc_cmd_rec_start;
+    item->record.stop = &udpsrc_cmd_rec_stop;
     item->webrtcbin = gst_bin_get_by_name(GST_BIN(item->pipeline), webrtc_name);
 }
 
@@ -892,6 +967,9 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     // gst_object_unref(bus);
 
     item->webrtcbin = gst_bin_get_by_name(GST_BIN(item->pipeline), webrtc_name);
+    item->record.get_rec_state = &get_record_state;
+    item->record.start = &udpsrc_cmd_rec_start;
+    item->record.stop = &udpsrc_cmd_rec_stop;
 #if 1
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "udpsrc_webrtc");
 #endif
