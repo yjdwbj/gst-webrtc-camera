@@ -989,7 +989,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
     g_free(turn_srv);
 
-    g_print("webrtc cmdline: %s \n", cmdline);
+    GST_DEBUG("webrtc cmdline: %s \n", cmdline);
     g_free(audio_src);
     g_free(video_src);
 
@@ -1146,7 +1146,7 @@ int start_appsink() {
 
     // add audio to muxer.
     src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
-    g_print("mkv obtained request pad %s for from audio source.\n", gst_pad_get_name(src_apad));
+    GST_DEBUG("mkv obtained request pad %s for from audio source.\n", gst_pad_get_name(src_apad));
     sink_apad = gst_element_get_static_pad(aqueue, "sink");
     if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
         // May be the src and sink are not match the format. ex: aac could not link to matroskamux.
@@ -1260,7 +1260,7 @@ int av_hlssink() {
         }
 
         tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
-        g_print("av hlssink audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
+        GST_DEBUG("av hlssink audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
         queue_pad = gst_element_get_static_pad(aqueue, "sink");
         if ((lret = gst_pad_link(tee_pad, queue_pad)) != GST_PAD_LINK_OK) {
             g_error("Av hls audio sink could not be linked. return: %d \n", lret);
@@ -1310,7 +1310,7 @@ int udp_multicastsink() {
     // gst_element_set_locked_state(udpsink, TRUE);
 
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-    g_print("udp obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
+    GST_DEBUG("udp obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     sub_sink_vpad = gst_element_get_static_pad(bin, "videosink");
 
     if (!gst_element_link(aqueue, mpegtsmux)) {
@@ -1320,7 +1320,7 @@ int udp_multicastsink() {
 
     tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
 
-    g_print("udp sink audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
+    GST_DEBUG("udp sink audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
 
     sub_sink_apad = gst_element_get_static_pad(aqueue, "sink");
     gst_element_add_pad(bin, gst_ghost_pad_new("audiosink", sub_sink_apad));

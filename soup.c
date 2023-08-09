@@ -49,7 +49,7 @@ static void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
     gst_promise_unref(local_desc_promise);
 
     sdp_string = gst_sdp_message_as_text(offer->sdp);
-    gst_print("Negotiation offer created:\n%s\n", sdp_string);
+    GST_DEBUG("Negotiation offer created:\n%s\n", sdp_string);
 
     sdp_json = json_object_new();
     json_object_set_string_member(sdp_json, "type", "sdp");
@@ -72,7 +72,7 @@ static void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
 static void on_negotiation_needed_cb(GstElement *webrtcbin, gpointer user_data) {
     GstPromise *promise;
     WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
-    gst_print("Creating negotiation offer\n");
+    GST_DEBUG("Creating negotiation offer\n");
 
     promise = gst_promise_new_with_change_func(on_offer_created_cb,
                                                (gpointer)webrtc_entry, NULL);
@@ -152,7 +152,7 @@ handle_sdp_offer(WebrtcItem *webrtc_entry, const gchar *text) {
     GstSDPMessage *sdp;
     GstWebRTCSessionDescription *offer;
 
-    // gst_print("Received offer:\n%s\n", text);
+    GST_DEBUG("Received offer:\n%s\n", text);
 
     ret = gst_sdp_message_new(&sdp);
     g_assert_cmpint(ret, ==, GST_SDP_OK);
@@ -175,106 +175,104 @@ handle_sdp_offer(WebrtcItem *webrtc_entry, const gchar *text) {
     gst_webrtc_session_description_free(offer);
 }
 
-static void
-handle_media_stream(GstPad *pad, GstElement *pipe, const char *convert_name,
-                    const char *sink_name) {
-    GstPad *qpad;
-    GstElement *q, *conv, *resample, *sink;
-    GstPadLinkReturn ret;
+static gboolean
+has_running_xwindow() {
+    const gchar *xdg_stype = g_getenv("XDG_SESSION_TYPE");
+    // const gchar *gdm = g_getenv("GDMSESSION");
 
-    gst_print("Trying to handle stream with %s ! %s", convert_name, sink_name);
-
-    q = gst_element_factory_make("queue", NULL);
-    g_assert_nonnull(q);
-    conv = gst_element_factory_make(convert_name, NULL);
-    g_assert_nonnull(conv);
-    sink = gst_element_factory_make(sink_name, NULL);
-    g_assert_nonnull(sink);
-
-    if (g_strcmp0(convert_name, "audioconvert") == 0) {
-        /* Might also need to resample, so add it just in case.
-         * Will be a no-op if it's not required. */
-        resample = gst_element_factory_make("audioresample", NULL);
-        g_assert_nonnull(resample);
-        gst_bin_add_many(GST_BIN(pipe), q, conv, resample, sink, NULL);
-        gst_element_sync_state_with_parent(q);
-        gst_element_sync_state_with_parent(conv);
-        gst_element_sync_state_with_parent(resample);
-        gst_element_sync_state_with_parent(sink);
-        gst_element_link_many(q, conv, resample, sink, NULL);
-    } else {
-        gst_bin_add_many(GST_BIN(pipe), q, conv, sink, NULL);
-        gst_element_sync_state_with_parent(q);
-        gst_element_sync_state_with_parent(conv);
-        gst_element_sync_state_with_parent(sink);
-        gst_element_link_many(q, conv, sink, NULL);
-    }
-
-    qpad = gst_element_get_static_pad(q, "sink");
-
-    ret = gst_pad_link(pad, qpad);
-    g_assert_cmphex(ret, ==, GST_PAD_LINK_OK);
+    return g_strcmp0(xdg_stype, "tty");
 }
 
 static void
 on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
                              GstElement *pipe) {
+    GstStructure *structure;
     GstCaps *caps;
     const gchar *name;
+    const gchar *encode_name;
+    GstPad *qpad;
+    GstPadLinkReturn ret;
+    GstElement *playbin;
+    gchar *desc;
+
+    if (GST_PAD_DIRECTION(pad) != GST_PAD_SRC)
+        return;
+
     if (!gst_pad_has_current_caps(pad)) {
         gst_printerr("Pad '%s' has no caps, can't do anything, ignoring\n",
                      GST_PAD_NAME(pad));
         return;
     }
     caps = gst_pad_get_current_caps(pad);
-    name = gst_structure_get_name(gst_caps_get_structure(caps, 0));
-#if 0
-    gchar *caps_str;
-    caps_str = gst_caps_to_string(caps);
-    g_print("caps : %s \n", caps_str);
+    structure = gst_caps_get_structure(caps, 0);
+    // name = gst_structure_get_name(gst_caps_get_structure(caps, 0));
+    //
+    /**
+     * @NOTE webrtcbin pad-added caps is below:
+     *  application/x-rtp, media=(string)audio, payload=(int)111, clock-rate=(int)48000, encoding-name=(string)OPUS,
+     *  encoding-params=(string)2, minptime=(string)10, useinbandfec=(string)1, rtcp-fb-transport-cc=(boolean)true,
+     *  ssrc=(uint)1413127686
+     */
+    name = gst_structure_get_string(structure, "media");
+    encode_name = gst_structure_get_string(structure, "encoding-name");
+
+#if 1
+    gchar *caps_str = gst_caps_to_string(caps);
+    GST_DEBUG("name: %s, caps size: %d, caps : %s \n", name, gst_caps_get_size(caps), caps_str);
     g_free(caps_str);
 #endif
-    if (g_str_has_prefix(name, "video")) {
-        handle_media_stream(pad, pipe, "videoconvert", "autovideosink");
-    } else if (g_str_has_prefix(name, "audio")) {
-        handle_media_stream(pad, pipe, "audioconvert", "autoaudiosink");
+    gst_caps_unref(caps);
+    if (g_strcmp0(name, "audio") == 0) {
+        if (g_strcmp0(encode_name, "OPUS") == 0) {
+            desc = g_strdup_printf(" rtpopusdepay ! opusdec ! queue ! audioconvert ! audioresample ! autoaudiosink");
+        } else {
+            desc = g_strdup_printf(" decodebin ! queue ! audioconvert ! audioresample ! autoaudiosink");
+        }
+
+        playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
+        g_free(desc);
+        gst_bin_add(GST_BIN(pipe), playbin);
+    } else if (g_strcmp0(name, "video") == 0) {
+        if (!has_running_xwindow())
+        {
+            gst_printerr("Current system not running on Xwindow. \n");
+            return;
+        }
+
+        if (g_strcmp0(encode_name, "VP8") == 0) {
+            desc = g_strdup_printf(" rtpvp8depay ! vp8dec ! queue ! videoconvert ! autovideosink");
+        } else if (g_strcmp0(encode_name, "H264") == 0) {
+            const gchar *vah264 = "vaapih264dec";
+            const gchar *nvh264 = "nvh264dec";
+            desc = g_strdup_printf(" rtph264depay ! h264parse ! %s ! queue ! videoconvert ! autovideosink",
+                                   gst_element_factory_find(vah264) ? vah264 : gst_element_factory_find(nvh264) ? nvh264
+                                                                                                                : "avdec_h264");
+        } else {
+            desc = g_strdup_printf(" decodebin ! queue ! videoconvert ! autovideosink");
+        }
+
+        playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
+        g_free(desc);
+        gst_bin_add(GST_BIN(pipe), playbin);
     } else {
         gst_printerr("Unknown pad %s, ignoring", GST_PAD_NAME(pad));
+        return;
     }
+    gst_element_sync_state_with_parent(playbin);
+    qpad = gst_element_get_static_pad(playbin, "sink");
+
+    ret = gst_pad_link(pad, qpad);
+    g_assert_cmphex(ret, ==, GST_PAD_LINK_OK);
 }
 
 static void
 on_remove_decodebin_stream(GstElement *srcbin, GstPad *pad,
                            GstElement *pipe) {
     gchar *name = gst_pad_get_name(pad);
-    g_print("pad removed %s !!! \n", name);
+    GST_DEBUG("pad removed %s !!! \n", name);
     gst_bin_remove(GST_BIN_CAST(pipe), srcbin);
     gst_element_set_state(srcbin, GST_STATE_NULL);
     g_free(name);
-}
-
-static void
-on_incoming_stream(GstElement *webrtc, GstPad *pad,
-                   GstElement *pipe1) {
-    GstElement *decodebin;
-    GstPad *sinkpad;
-
-    if (GST_PAD_DIRECTION(pad) != GST_PAD_SRC)
-        return;
-
-    decodebin = gst_element_factory_make("decodebin", NULL);
-
-    g_signal_connect(decodebin, "pad-added",
-                     G_CALLBACK(on_incoming_decodebin_stream), pipe1);
-
-    g_signal_connect(decodebin, "pad-removed",
-                     G_CALLBACK(on_remove_decodebin_stream), pipe1);
-    gst_bin_add(GST_BIN(pipe1), decodebin);
-    gst_element_sync_state_with_parent(decodebin);
-
-    sinkpad = gst_element_get_static_pad(decodebin, "sink");
-    gst_pad_link(pad, sinkpad);
-    gst_object_unref(sinkpad);
 }
 
 static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection,
@@ -368,8 +366,8 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         sdp_type_string = json_object_get_string_member(data_json_object, "type");
 
         if (g_strcmp0(sdp_type_string, "answer") != 0) {
-            g_print("Expected SDP message type \"answer\", got \"%s\"\n",
-                    sdp_type_string);
+            GST_DEBUG("Expected SDP message type \"answer\", got \"%s\"\n",
+                      sdp_type_string);
 
             webrtc_entry->addremote(webrtc_entry);
             gst_element_set_state(webrtc_entry->recvpipe, GST_STATE_PLAYING);
@@ -378,7 +376,10 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
                              G_CALLBACK(on_ice_candidate_cb), (gpointer)webrtc_entry);
 
             g_signal_connect(webrtc_entry->recvbin, "pad-added",
-                             G_CALLBACK(on_incoming_stream), webrtc_entry->recvpipe);
+                             G_CALLBACK(on_incoming_decodebin_stream), webrtc_entry->recvpipe);
+
+            g_signal_connect(webrtc_entry->recvbin, "pad-removed",
+                             G_CALLBACK(on_remove_decodebin_stream), webrtc_entry->recvpipe);
 
             sdp_string = json_object_get_string_member(data_json_object, "sdp");
             // g_print("sdp:  %s", sdp_string);
@@ -436,7 +437,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         candidate_string = json_object_get_string_member(data_json_object,
                                                          "candidate");
 
-        gst_print("Received ICE candidate with mline index %u; candidate: %s\n",
+        GST_DEBUG("Received ICE candidate with mline index %u; candidate: %s\n",
                   mline_index, candidate_string);
 
         if (webrtc_entry->recvbin) {
@@ -465,7 +466,7 @@ static void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
                                      gpointer user_data) {
     GHashTable *webrtc_connected_table = (GHashTable *)user_data;
     g_hash_table_remove(webrtc_connected_table, connection);
-    gst_print("Closed websocket connection %p, connected size: %d\n", (gpointer)connection, g_hash_table_size(webrtc_connected_table));
+    GST_DEBUG("Closed websocket connection %p, connected size: %d\n", (gpointer)connection, g_hash_table_size(webrtc_connected_table));
 }
 
 static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
@@ -518,7 +519,7 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     CustomSoupData *data = (CustomSoupData *)user_data;
 
     GHashTable *webrtc_connected_table = data->webrtc_connected_table;
-    gst_print("Processing new websocket connection %p \n", (gpointer)connection);
+    GST_DEBUG("Processing new websocket connection %p \n", (gpointer)connection);
 
     g_signal_connect(G_OBJECT(connection), "closed",
                      G_CALLBACK(soup_websocket_closed_cb), (gpointer)webrtc_connected_table);
@@ -545,7 +546,7 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     gst_element_set_state(webrtc_entry->sendpipe, GST_STATE_PLAYING);
 
     g_hash_table_insert(webrtc_connected_table, connection, webrtc_entry);
-    g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
+    GST_DEBUG("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
 }
 
 static void destroy_webrtc_table(gpointer entry_ptr) {
