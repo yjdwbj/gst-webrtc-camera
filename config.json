@@ -34,8 +34,8 @@
       "pwd": "test123"
     },
     "udpsink": {
-      "port": 6000,
-      "addr": "224.1.1.2",
+      "port": 7000,
+      "addr": "224.1.1.4",
       "multicast": false
     }
   },

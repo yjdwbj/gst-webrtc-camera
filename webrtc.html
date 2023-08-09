@@ -22,7 +22,7 @@
     'use strict';
     var websocketConnection;
     var webrtcPeerConnection;
-    var webrtcConfiguration;
+    var localpc;
     var reportError;
     var startWatch;
     var startRecord;
@@ -98,7 +98,7 @@
               height: { min: 600, ideal: 720, max: 1080 },
             }
           }).then((stream) => {
-            let localpc = new RTCPeerConnection(turn_config);
+            localpc = new RTCPeerConnection(turn_config);
             stream.getTracks().forEach(function (track) {
               localpc.addTrack(track);
             });
@@ -107,7 +107,7 @@
               console.log("Send offer to remote: " + d);
               websocketConnection.send(JSON.stringify({ type: "sdp", "data": d }));
             }).catch(console.log);
-            localpc.oniceconnectionstatechange = e => console.log(pc.iceConnectionState)
+            localpc.oniceconnectionstatechange = e => console.log(localpc.iceConnectionState)
             localpc.onicecandidate = onIceCandidate;
           }).catch((err) => {
             console.log("Capture media error: " + err);
@@ -131,17 +131,29 @@
 
 
     function onIncomingSDP(sdp) {
-      // console.log("Incoming SDP: " + JSON.stringify(sdp));
-      webrtcPeerConnection.setRemoteDescription(sdp).catch(reportError);
-      webrtcPeerConnection.createAnswer().then(onLocalDescription).catch(reportError);
+      console.log("Incoming SDP: " + JSON.stringify(sdp));
+
+      if (sdp.type === "offer") {
+        webrtcPeerConnection.setRemoteDescription(sdp).catch(reportError);
+        webrtcPeerConnection.createAnswer().then(onLocalDescription).catch(reportError);
+      } else {
+        console.log("answser Sdp: " + sdp.sdp);
+        localpc.setRemoteDescription(sdp).catch(reportError);
+      }
     }
 
 
     function onIncomingICE(ice) {
       var candidate = new RTCIceCandidate(ice);
-      // console.log("Incoming ICE: " + JSON.stringify(ice));
-      webrtcPeerConnection.addIceCandidate(candidate).catch(reportError);
-      startRecord.disabled = false;
+
+
+      if(startRecord.disabled == false && localpc)
+      {
+        console.log("answer Incoming ICE: " + JSON.stringify(ice));
+        localpc.addIceCandidate(candidate).catch(reportError);
+      } else {
+        webrtcPeerConnection.addIceCandidate(candidate).catch(reportError);
+      }
     }
 
     function recordCallBack(data) {
@@ -211,8 +223,8 @@
 <body>
   <div>
     <h1 class="text-center">Gstreamer Webrtc Camera</h1>
-    <div class="text-center" id="container">
-      <video id="video0" playsinline autoplay></video>
+    <div class="text-center " id="container">
+      <video class="w-75" id="video0" playsinline autoplay></video>
       <div class="text-center mb-5" id="loading" style="display:none">
         <div class="spinner-border" role="status">
           <span class="visually-hidden">Loading...</span>

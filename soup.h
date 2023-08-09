@@ -26,23 +26,29 @@ struct _RecordItem {
     get_state get_rec_state;
 };
 
-struct _WebrtcItem {
-    SoupWebsocketConnection *connection;
+struct _RecvItem {
     GstElement *pipeline;
     GstElement *webrtcbin;
+    user_cb addpeer;
+};
+
+struct _WebrtcItem {
+    SoupWebsocketConnection *connection;
+    GstElement *sendpipe;
+    GstElement *sendbin;
+    GstElement *recvpipe; // recv remote streams pipeline.
+    GstElement *recvbin;
     gulong audio_conn_id;
     gulong video_conn_id;
     guint64 hash_id; // hash value for connection;
     appsink_signal_remove signal_remove;
     appsink_signal_add signal_add;
     struct _RecordItem record;
+    user_cb addremote;
 };
 typedef struct _WebrtcItem WebrtcItem;
 
 typedef void (*webrtc_callback)(WebrtcItem *item);
-
-
-
 
 typedef struct _RecordItem RecordItem;
 

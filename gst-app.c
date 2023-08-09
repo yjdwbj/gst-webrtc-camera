@@ -767,7 +767,7 @@ on_new_sample_from_audio(GstElement *elt, WebrtcItem *item) {
     gst_sample_unref(sample);
     /* get source an push new buffer */
     audio_src = g_strdup_printf("audio_%ld", item->hash_id);
-    source = gst_bin_get_by_name(GST_BIN(item->pipeline), audio_src);
+    source = gst_bin_get_by_name(GST_BIN(item->sendpipe), audio_src);
     g_free(audio_src);
     if (source) {
         ret = gst_app_src_push_buffer(GST_APP_SRC(source), app_buffer);
@@ -797,7 +797,7 @@ on_new_sample_from_video(GstElement *elt, WebrtcItem *item) {
     gst_sample_unref(sample);
     /* get source an push new buffer */
     video_src = g_strdup_printf("video_%ld", item->hash_id);
-    source = gst_bin_get_by_name(GST_BIN(item->pipeline), video_src);
+    source = gst_bin_get_by_name(GST_BIN(item->sendpipe), video_src);
     g_free(video_src);
     if (source) {
         ret = gst_app_src_push_buffer(GST_APP_SRC(source), app_buffer);
@@ -860,7 +860,7 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     g_free(audio_src);
     g_free(video_src);
 
-    item->pipeline = gst_parse_launch(cmdline, &error);
+    item->sendpipe = gst_parse_launch(cmdline, &error);
 
     g_free(cmdline);
     // bus = gst_element_get_bus(item->pipeline);
@@ -871,7 +871,7 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     item->signal_add = &add_appsink_signal;
     item->record.start = &udpsrc_cmd_rec_start;
     item->record.stop = &udpsrc_cmd_rec_stop;
-    item->webrtcbin = gst_bin_get_by_name(GST_BIN(item->pipeline), webrtc_name);
+    item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
 }
 
 int start_av_appsink() {
@@ -932,6 +932,40 @@ int start_av_appsink() {
     return 0;
 }
 
+static
+void start_recv_webrtcbin(gpointer user_data)
+{
+    WebrtcItem *item = (WebrtcItem *)user_data;
+    gchar *turn_srv;
+    GstBus *bus;
+    gchar *pipe_name = g_strdup_printf("recv_%ld", item->hash_id);
+    gchar *bin_name = g_strdup_printf("webrtcbin_%ld", item->hash_id);
+
+    turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
+    item->recvpipe = gst_pipeline_new(pipe_name);
+    item->recvbin = gst_element_factory_make_full("webrtcbin", "name", bin_name,
+                                                  "turn-server", turn_srv, NULL);
+    g_free(turn_srv);
+    g_free(pipe_name);
+    g_free(bin_name);
+
+    g_assert_nonnull(item->recvbin);
+    gst_util_set_object_arg(G_OBJECT(item->recvbin), "bundle-policy", "max-bundle");
+
+    bus = gst_element_get_bus(item->recvpipe);
+    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
+    gst_object_unref(bus);
+
+    /* Takes ownership of each: */
+    gst_bin_add(GST_BIN(item->recvpipe), item->recvbin);
+
+    // item->recv.webrtcbin = gst_bin_get_by_name(GST_BIN(item->recv.pipeline), "recv");
+#if 1
+    gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->recvpipe), GST_DEBUG_GRAPH_SHOW_ALL, "webrtc_recv");
+#endif
+
+}
+
 void start_udpsrc_webrtcbin(WebrtcItem *item) {
     GError *error = NULL;
     gchar *cmdline = NULL;
@@ -959,19 +993,20 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     g_free(audio_src);
     g_free(video_src);
 
-    item->pipeline = gst_parse_launch(cmdline, &error);
+    item->sendpipe = gst_parse_launch(cmdline, &error);
 
     g_free(cmdline);
     // bus = gst_element_get_bus(item->pipeline);
     // gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
     // gst_object_unref(bus);
 
-    item->webrtcbin = gst_bin_get_by_name(GST_BIN(item->pipeline), webrtc_name);
+    item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     item->record.get_rec_state = &get_record_state;
     item->record.start = &udpsrc_cmd_rec_start;
     item->record.stop = &udpsrc_cmd_rec_stop;
+    item->addremote = &start_recv_webrtcbin;
 #if 1
-    gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "udpsrc_webrtc");
+    gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->sendpipe), GST_DEBUG_GRAPH_SHOW_ALL, "udpsrc_webrtc");
 #endif
 }
 
