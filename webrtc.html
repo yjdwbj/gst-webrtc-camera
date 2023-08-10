@@ -17,7 +17,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"
     crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
+  <!-- <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script> -->
   <script>
     'use strict';
     var websocketConnection;
@@ -31,7 +31,7 @@
 
     var isRecord = false;
     var isTalk = false;
-    var vConsole = new window.VConsole();
+    // var vConsole = new window.VConsole();
     const turn_config = {
       'iceServers': [{
         urls: 'turn:192.168.1.100:3478',
@@ -176,7 +176,7 @@
 
     // recvonly webrtc
     function onLocalDescription(desc) {
-      // console.log("Local description: " + JSON.stringify(desc));
+      console.log("Local description: " + JSON.stringify(desc));
       webrtcPeerConnection.setLocalDescription(desc).then(function () {
         websocketConnection.send(JSON.stringify({ type: "sdp", "data": webrtcPeerConnection.localDescription }));
       }).catch(reportError);
@@ -184,7 +184,7 @@
 
 
     function onIncomingSDP(sdp) {
-      // console.log("Incoming SDP: " + JSON.stringify(sdp));
+      console.log("Incoming SDP: " + JSON.stringify(sdp));
       if (sdp.type === "offer") {
         webrtcPeerConnection.setRemoteDescription(sdp).catch(reportError);
         webrtcPeerConnection.createAnswer().then(onLocalDescription).catch(reportError);
@@ -198,7 +198,7 @@
     function onIncomingICE(ice) {
       var candidate = new RTCIceCandidate(ice);
       if (startRecord.disabled == false && localpc) {
-        // console.log("answer Incoming ICE: " + JSON.stringify(ice));
+        console.log("answer Incoming ICE: " + JSON.stringify(ice));
         localpc.addIceCandidate(candidate).catch(reportError);
       } else {
         webrtcPeerConnection.addIceCandidate(candidate).catch(reportError);

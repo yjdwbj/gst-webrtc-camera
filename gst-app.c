@@ -157,7 +157,7 @@ static gchar *get_today_str() {
 
 static GstElement *video_src() {
     GstCaps *srcCaps;
-    gchar capBuf[256] = {0};
+    gchar *capBuf;
     GstElement *teesrc, *source, *srcvconvert, *capsfilter, *queue;
     source = gst_element_factory_make("v4l2src", NULL);
 
@@ -174,12 +174,14 @@ static GstElement *video_src() {
     // srcCaps = _getVideoCaps("image/jpeg", "NV12", 30, 1280, 720);
     g_print("device: %s, Type: %s, format: %s\n", config_data.v4l2src_data.device, config_data.v4l2src_data.type, config_data.v4l2src_data.format);
 
-    sprintf(capBuf, "%s, width=%d, height=%d, framerate=(fraction)%d/1",
+    capBuf = g_strdup_printf("%s, width=%d, height=%d, framerate=(fraction)%d/1",
             config_data.v4l2src_data.type,
             config_data.v4l2src_data.width,
             config_data.v4l2src_data.height,
             config_data.v4l2src_data.framerate);
     srcCaps = gst_caps_from_string(capBuf);
+    g_free(capBuf);
+
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
     gst_caps_unref(srcCaps);
 
@@ -753,194 +755,6 @@ static int start_appsrc_record() {
     return 0;
 }
 
-// #define TURN_SERVER "turn://lcy:lcy123@192.168.1.100:3478"
-
-/* called when the appsink notifies us that there is a new buffer ready for
- * processing */
-static GstFlowReturn
-on_new_sample_from_audio(GstElement *elt, WebrtcItem *item) {
-    GstSample *sample;
-    GstBuffer *app_buffer, *buffer;
-    GstElement *source;
-    gchar *audio_src = NULL;
-    GstFlowReturn ret = GST_FLOW_NOT_LINKED;
-
-    /* get the sample from appsink */
-    sample = gst_app_sink_pull_sample(GST_APP_SINK(elt));
-    buffer = gst_sample_get_buffer(sample);
-
-    /* make a copy */
-    app_buffer = gst_buffer_copy(buffer);
-
-    /* we don't need the appsink sample anymore */
-    gst_sample_unref(sample);
-    /* get source an push new buffer */
-    audio_src = g_strdup_printf("audio_%ld", item->hash_id);
-    source = gst_bin_get_by_name(GST_BIN(item->sendpipe), audio_src);
-    g_free(audio_src);
-    if (source) {
-        ret = gst_app_src_push_buffer(GST_APP_SRC(source), app_buffer);
-        gst_object_unref(source);
-    }
-    return ret;
-}
-
-/* called when the appsink notifies us that there is a new buffer ready for
- * processing */
-static GstFlowReturn
-on_new_sample_from_video(GstElement *elt, WebrtcItem *item) {
-    GstSample *sample;
-    GstBuffer *app_buffer, *buffer;
-    GstElement *source;
-    gchar *video_src = NULL;
-    GstFlowReturn ret = GST_FLOW_NOT_LINKED;
-
-    /* get the sample from appsink */
-    sample = gst_app_sink_pull_sample(GST_APP_SINK(elt));
-    buffer = gst_sample_get_buffer(sample);
-
-    /* make a copy */
-    app_buffer = gst_buffer_copy(buffer);
-
-    /* we don't need the appsink sample anymore */
-    gst_sample_unref(sample);
-    /* get source an push new buffer */
-    video_src = g_strdup_printf("video_%ld", item->hash_id);
-    source = gst_bin_get_by_name(GST_BIN(item->sendpipe), video_src);
-    g_free(video_src);
-    if (source) {
-        ret = gst_app_src_push_buffer(GST_APP_SRC(source), app_buffer);
-        if (ret != GST_FLOW_OK) {
-            printf("push buffer returned %d for %ld bytes \n", ret, app_buffer->duration);
-            return FALSE;
-        }
-        gst_object_unref(source);
-    }
-    return ret;
-}
-
-void remove_appsink_signal(gpointer user_data) {
-    GstElement *video_sink, *audio_sink;
-    WebrtcItem *item = (WebrtcItem *)user_data;
-    video_sink = gst_bin_get_by_name(GST_BIN(pipeline), "video_sink");
-    audio_sink = gst_bin_get_by_name(GST_BIN(pipeline), "audio_sink");
-    g_signal_handler_disconnect(video_sink, item->video_conn_id);
-    g_signal_handler_disconnect(audio_sink, item->audio_conn_id);
-}
-
-void add_appsink_signal(gpointer user_data) {
-    GstElement *video_sink, *audio_sink;
-    WebrtcItem *item = (WebrtcItem *)user_data;
-    video_sink = gst_bin_get_by_name(GST_BIN(pipeline), "video_sink");
-    audio_sink = gst_bin_get_by_name(GST_BIN(pipeline), "audio_sink");
-
-    item->audio_conn_id = g_signal_connect(audio_sink, "new-sample", G_CALLBACK(on_new_sample_from_audio), item);
-    item->video_conn_id = g_signal_connect(video_sink, "new-sample", G_CALLBACK(on_new_sample_from_video), item);
-    gst_element_set_state(video_sink, GST_STATE_PLAYING);
-    gst_element_set_state(audio_sink, GST_STATE_PLAYING);
-#if 0
-    gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "appsrc_webrtc");
-#endif
-}
-
-void start_appsrc_webrtcbin(WebrtcItem *item) {
-    GError *error = NULL;
-    gchar *cmdline = NULL;
-    // GstBus *bus = NULL;
-    gchar *turn_srv = NULL;
-    const gchar *webrtc_name = g_strdup_printf("webrtc_appsrc_%ld", item->hash_id);
-    gchar *audio_src = g_strdup_printf("appsrc name=audio_%ld do-timestamp=true is-live=true ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay ! rtpopuspay ! queue ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " queue ! %s.",
-                                       item->hash_id, webrtc_name);
-    gchar *video_src = g_strdup_printf("appsrc  name=video_%ld do-timestamp=true is-live=true ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " queue ! %s. ",
-                                       item->hash_id, webrtc_name);
-    turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
-    cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
-    g_free(turn_srv);
-
-    g_print("webrtc cmdline: %s \n", cmdline);
-    g_free(audio_src);
-    g_free(video_src);
-
-    item->sendpipe = gst_parse_launch(cmdline, &error);
-
-    g_free(cmdline);
-    // bus = gst_element_get_bus(item->pipeline);
-    // gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
-    // gst_object_unref(bus);
-
-    item->signal_remove = &remove_appsink_signal;
-    item->signal_add = &add_appsink_signal;
-    item->record.start = &udpsrc_cmd_rec_start;
-    item->record.stop = &udpsrc_cmd_rec_stop;
-    item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
-}
-
-int start_av_appsink() {
-    if (!_check_initial_status())
-        return -1;
-    GstElement *aqueue, *vqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *h264parse;
-    GstPad *src_vpad, *src_apad, *sink_vpad, *sink_apad;
-    GstPadLinkReturn lret;
-    MAKE_ELEMENT_AND_ADD(vqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(aqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(video_pay, "rtph264pay");
-    MAKE_ELEMENT_AND_ADD(audio_pay, "rtpopuspay");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
-    video_sink = gst_element_factory_make("appsink", "video_sink");
-    audio_sink = gst_element_factory_make("appsink", "audio_sink");
-
-    gst_bin_add_many(GST_BIN(pipeline), video_sink, audio_sink, NULL);
-
-    /* Configure udpsink */
-    g_object_set(video_sink, "sync", FALSE, "async", FALSE, NULL);
-    g_object_set(audio_sink, "sync", FALSE, "async", FALSE, NULL);
-    g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
-    g_object_set(audio_pay, "pt", 97, NULL);
-    g_object_set(vqueue, "max-size-time", 100000000, NULL);
-
-    /* link to upstream. */
-    if (!gst_element_link_many(aqueue, audio_pay, audio_sink, NULL)) {
-        g_error("Failed to link elements audio to mpegtsmux.\n");
-        return -1;
-    }
-
-    if (!gst_element_link_many(vqueue, h264parse, video_pay, video_sink, NULL)) {
-        g_error("Failed to link elements audio to mpegtsmux.\n");
-        return -1;
-    }
-
-    sink_vpad = gst_element_get_static_pad(vqueue, "sink");
-    src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-
-    if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
-        g_error("Tee udp video sink could not be linked. ret: %d \n", lret);
-        return -1;
-    }
-
-    gst_object_unref(sink_vpad);
-    gst_object_unref(src_vpad);
-
-    // add audio to muxer.
-    src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
-    sink_apad = gst_element_get_static_pad(aqueue, "sink");
-    if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
-        gst_printerrln("Tee udp audio sink could not be linked, link return :%d .\n", lret);
-        return -1;
-    }
-    gst_object_unref(GST_OBJECT(sink_apad));
-    gst_object_unref(GST_OBJECT(src_apad));
-
-    return 0;
-}
-
 static gboolean
 has_running_xwindow() {
     const gchar *xdg_stype = g_getenv("XDG_SESSION_TYPE");
@@ -1067,7 +881,7 @@ static void stop_recv_webrtc(gpointer user_data) {
     RecvItem *recv_entry = (RecvItem *)user_data;
 
     iter = gst_bin_iterate_elements(GST_BIN(recv_entry->recvpipe));
-    if(iter == NULL)
+    if (iter == NULL)
         return;
     done = FALSE;
     while (!done) {
@@ -1168,7 +982,7 @@ unknown_message:
 }
 
 static void
-connect_data_channel_signals(GObject *data_channel,gpointer user_data) {
+connect_data_channel_signals(GObject *data_channel, gpointer user_data) {
     g_signal_connect(data_channel, "on-error",
                      G_CALLBACK(data_channel_on_error), NULL);
     g_signal_connect(data_channel, "on-open", G_CALLBACK(data_channel_on_open),
@@ -1196,7 +1010,7 @@ static void start_recv_webrtcbin(gpointer user_data) {
     turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
     item->recv.recvpipe = gst_pipeline_new(pipe_name);
     item->recv.recvbin = gst_element_factory_make_full("webrtcbin", "name", bin_name,
-                                                  "turn-server", turn_srv, NULL);
+                                                       "turn-server", turn_srv, NULL);
     g_free(turn_srv);
     g_free(pipe_name);
     g_free(bin_name);
@@ -1218,7 +1032,7 @@ static void start_recv_webrtcbin(gpointer user_data) {
                           &send_channel);
     if (send_channel) {
         gst_print("Created data channel\n");
-        connect_data_channel_signals(send_channel,item);
+        connect_data_channel_signals(send_channel, item);
     } else {
         gst_print("Could not create data channel, is usrsctp available?\n");
     }
@@ -1344,6 +1158,159 @@ int start_av_udpsink() {
     gst_object_unref(GST_OBJECT(sink_apad));
     gst_object_unref(GST_OBJECT(src_apad));
 
+    return 0;
+}
+
+static void
+need_data(GstElement *appsrc, guint unused,  GstElement *appsink) {
+    GstSample *sample;
+    GstFlowReturn ret;
+    sample = gst_app_sink_pull_sample(GST_APP_SINK(appsink));
+
+    if (sample) {
+        GstBuffer *buffer = gst_sample_get_buffer(sample);
+        GstSegment *seg = gst_sample_get_segment(sample);
+        GstClockTime pts, dts;
+
+        /* Convert the PTS/DTS to running time so they start from 0 */
+        pts = GST_BUFFER_PTS(buffer);
+        if (GST_CLOCK_TIME_IS_VALID(pts))
+            pts = gst_segment_to_running_time(seg, GST_FORMAT_TIME, pts);
+
+        dts = GST_BUFFER_DTS(buffer);
+        if (GST_CLOCK_TIME_IS_VALID(dts))
+            dts = gst_segment_to_running_time(seg, GST_FORMAT_TIME, dts);
+
+        if (buffer) {
+            /* Make writable so we can adjust the timestamps */
+            buffer = gst_buffer_copy(buffer);
+            GST_BUFFER_PTS(buffer) = pts;
+            GST_BUFFER_DTS(buffer) = dts;
+            g_signal_emit_by_name(appsrc, "push-buffer", buffer, &ret);
+            gst_buffer_unref(buffer);
+        }
+
+        /* we don't need the appsink sample anymore */
+        gst_sample_unref(sample);
+    }
+}
+
+void start_appsrc_webrtcbin(WebrtcItem *item) {
+    GError *error = NULL;
+    gchar *cmdline = NULL;
+    GstBus *bus = NULL;
+    gchar *turn_srv = NULL;
+    GstElement *appsrc_vid, *appsrc_aid;
+    GstElement *video_sink, *audio_sink;
+
+    video_sink = gst_bin_get_by_name(GST_BIN(pipeline), "video_sink");
+    audio_sink = gst_bin_get_by_name(GST_BIN(pipeline), "audio_sink");
+    gchar *webrtc_name = g_strdup_printf("webrtc_appsrc_%ld", item->hash_id);
+    // vcaps = gst_caps_from_string("video/x-h264,stream-format=(string)avc,alignment=(string)au,width=(int)1280,height=(int)720,framerate=(fraction)30/1,profile=(string)main");
+    // acaps = gst_caps_from_string("audio/x-opus, channels=(int)1,channel-mapping-family=(int)1");
+    gchar *audio_src = g_strdup_printf("appsrc name=audio_%ld  format=3 ! "
+                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                       " rtpopusdepay ! rtpopuspay ! queue ! "
+                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                       " queue ! %s.",
+                                       item->hash_id, webrtc_name);
+    gchar *video_src = g_strdup_printf("appsrc  name=video_%ld format=3 ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " queue ! %s. ",
+                                       item->hash_id, webrtc_name);
+    turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
+    cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
+    g_free(turn_srv);
+
+    g_print("webrtc cmdline: %s \n", cmdline);
+    g_free(audio_src);
+    g_free(video_src);
+
+    item->sendpipe = gst_parse_launch(cmdline, &error);
+    g_free(cmdline);
+
+    item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
+    g_free(webrtc_name);
+
+    webrtc_name = g_strdup_printf("video_%ld", item->hash_id);
+    appsrc_vid = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
+    g_free(webrtc_name);
+
+    g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
+
+    webrtc_name = g_strdup_printf("audio_%ld", item->hash_id);
+    appsrc_aid = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
+    g_free(webrtc_name);
+
+    g_signal_connect(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
+
+    bus = gst_pipeline_get_bus(GST_PIPELINE(item->sendpipe));
+    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
+    gst_object_unref(bus);
+
+    item->record.get_rec_state = &get_record_state;
+    item->record.start = &udpsrc_cmd_rec_start;
+    item->record.stop = &udpsrc_cmd_rec_stop;
+    item->recv.addremote = &start_recv_webrtcbin;
+
+}
+
+int start_av_appsink() {
+    if (!_check_initial_status())
+        return -1;
+    GstElement *aqueue, *vqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *h264parse;
+    GstPad *src_vpad, *src_apad, *sink_vpad, *sink_apad;
+    GstPadLinkReturn lret;
+    MAKE_ELEMENT_AND_ADD(vqueue, "queue");
+    MAKE_ELEMENT_AND_ADD(aqueue, "queue");
+    MAKE_ELEMENT_AND_ADD(video_pay, "rtph264pay");
+    MAKE_ELEMENT_AND_ADD(audio_pay, "rtpopuspay");
+    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    video_sink = gst_element_factory_make("appsink", "video_sink");
+    audio_sink = gst_element_factory_make("appsink", "audio_sink");
+
+    /* Configure udpsink */
+    g_object_set(video_sink, "sync", FALSE, "async", FALSE, "emit-signals", TRUE, NULL);
+    g_object_set(audio_sink, "sync", FALSE, "async", FALSE, "emit-signals", TRUE,NULL);
+    g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
+    g_object_set(audio_pay, "pt", 97, NULL);
+    g_object_set(vqueue, "max-size-time", 100000000, NULL);
+
+    gst_bin_add_many(GST_BIN(pipeline), video_sink, audio_sink, NULL);
+
+    /* link to upstream. */
+    if (!gst_element_link_many(aqueue, audio_pay, audio_sink, NULL)) {
+        g_error("Failed to link elements audio to mpegtsmux.\n");
+        return -1;
+    }
+
+    if (!gst_element_link_many(vqueue, h264parse, video_pay, video_sink, NULL)) {
+        g_error("Failed to link elements audio to mpegtsmux.\n");
+        return -1;
+    }
+
+    sink_vpad = gst_element_get_static_pad(vqueue, "sink");
+    src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
+
+    if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
+        g_error("Tee appsink video sink could not be linked. ret: %d \n", lret);
+        return -1;
+    }
+
+    gst_object_unref(sink_vpad);
+    gst_object_unref(src_vpad);
+
+    sink_apad = gst_element_get_static_pad(aqueue, "sink");
+    src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
+
+    if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
+        gst_printerrln("Tee appsink audio sink could not be linked, link return :%d .\n", lret);
+        return -1;
+    }
+    gst_object_unref(GST_OBJECT(sink_apad));
+    gst_object_unref(GST_OBJECT(src_apad));
     return 0;
 }
 

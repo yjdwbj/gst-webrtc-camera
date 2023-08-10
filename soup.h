@@ -38,11 +38,7 @@ struct _WebrtcItem {
     SoupWebsocketConnection *connection;
     GstElement *sendpipe;
     GstElement *sendbin;
-    gulong audio_conn_id;
-    gulong video_conn_id;
     guint64 hash_id; // hash value for connection;
-    appsink_signal_remove signal_remove;
-    appsink_signal_add signal_add;
     struct _RecordItem record;
     struct _RecvItem recv;
 };

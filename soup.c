@@ -49,7 +49,7 @@ static void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
     gst_promise_unref(local_desc_promise);
 
     sdp_string = gst_sdp_message_as_text(offer->sdp);
-    GST_DEBUG("Negotiation offer created:\n%s\n", sdp_string);
+    g_print("Negotiation offer created:\n%s\n", sdp_string);
 
     sdp_json = json_object_new();
     json_object_set_string_member(sdp_json, "type", "sdp");
@@ -72,7 +72,7 @@ static void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
 static void on_negotiation_needed_cb(GstElement *webrtcbin, gpointer user_data) {
     GstPromise *promise;
     WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
-    GST_DEBUG("Creating negotiation offer\n");
+    g_print("Creating negotiation offer\n");
 
     promise = gst_promise_new_with_change_func(on_offer_created_cb,
                                                (gpointer)webrtc_entry, NULL);
@@ -290,7 +290,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         }
         sdp_string = json_object_get_string_member(data_json_object, "sdp");
 
-        // gst_print("Received SDP:\n%s\n", sdp_string);
+        gst_print("Received SDP:\n%s\n", sdp_string);
 
         ret = gst_sdp_message_new(&sdp);
         g_assert_cmphex(ret, ==, GST_SDP_OK);
@@ -334,7 +334,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         candidate_string = json_object_get_string_member(data_json_object,
                                                          "candidate");
 
-        GST_DEBUG("Received ICE candidate with mline index %u; candidate: %s\n",
+        g_print("Received ICE candidate with mline index %u; candidate: %s\n",
                   mline_index, candidate_string);
 
         if (webrtc_entry->recv.recvbin) {
@@ -439,8 +439,6 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     g_signal_connect(webrtc_entry->sendbin, "on-ice-candidate",
                      G_CALLBACK(on_ice_candidate_cb), (gpointer)webrtc_entry);
 
-    if (webrtc_entry->signal_add)
-        webrtc_entry->signal_add((gpointer)webrtc_entry);
     gst_element_set_state(webrtc_entry->sendpipe, GST_STATE_PLAYING);
 
     g_hash_table_insert(webrtc_connected_table, connection, webrtc_entry);
@@ -451,8 +449,6 @@ static void destroy_webrtc_table(gpointer entry_ptr) {
     WebrtcItem *webrtc_entry = (WebrtcItem *)entry_ptr;
     GstBus *bus;
     g_assert(webrtc_entry != NULL);
-    if (webrtc_entry->signal_remove)
-        webrtc_entry->signal_remove((gpointer)webrtc_entry);
 
     if (webrtc_entry->sendpipe != NULL) {
         gst_element_set_state(GST_ELEMENT(webrtc_entry->sendpipe),

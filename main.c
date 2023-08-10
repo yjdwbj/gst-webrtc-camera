@@ -146,10 +146,10 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
                     gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
             GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
                                       GST_DEBUG_GRAPH_SHOW_ALL, gst_element_state_get_name(new_state));
-            if (new_state == GST_STATE_PLAYING) {
-                if (inotify_watch == NULL && config_data.app_sink && config_data.hls_onoff.motion_hlssink)
-                    inotify_watch = start_inotify_thread();
-            }
+            // if (new_state == GST_STATE_PLAYING) {
+            //     if (inotify_watch == NULL && config_data.app_sink && config_data.hls_onoff.motion_hlssink)
+            //         inotify_watch = start_inotify_thread();
+            // }
             break;
         }
     default:
@@ -323,9 +323,9 @@ int main(int argc, char *argv[]) {
     }
 
     g_print("Starting loop.\n");
-    // start_http(&start_appsrc_webrtcbin, config_data.http_data.port);
+    start_http(&start_appsrc_webrtcbin, config_data.http.port);
 
-    start_http(&start_udpsrc_webrtcbin, config_data.http.port);
+    // start_http(&start_udpsrc_webrtcbin, config_data.http.port);
     g_main_loop_run(loop);
     gst_element_set_state(pipeline, GST_STATE_NULL);
 
