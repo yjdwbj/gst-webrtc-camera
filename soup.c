@@ -136,7 +136,7 @@ on_answer_created(GstPromise *promise, gpointer user_data) {
     gst_promise_unref(promise);
 
     promise = gst_promise_new();
-    g_signal_emit_by_name(webrtc_entry->recvbin, "set-local-description", answer, promise);
+    g_signal_emit_by_name(webrtc_entry->recv.recvbin, "set-local-description", answer, promise);
     gst_promise_interrupt(promise);
     gst_promise_unref(promise);
 
@@ -165,114 +165,14 @@ handle_sdp_offer(WebrtcItem *webrtc_entry, const gchar *text) {
 
     /* Set remote description on our pipeline */
     promise = gst_promise_new();
-    g_signal_emit_by_name(webrtc_entry->recvbin, "set-remote-description", offer, promise);
+    g_signal_emit_by_name(webrtc_entry->recv.recvbin, "set-remote-description", offer, promise);
     gst_promise_interrupt(promise);
     gst_promise_unref(promise);
 
     promise = gst_promise_new_with_change_func(on_answer_created, webrtc_entry, NULL);
-    g_signal_emit_by_name(webrtc_entry->recvbin, "create-answer", NULL, promise);
+    g_signal_emit_by_name(webrtc_entry->recv.recvbin, "create-answer", NULL, promise);
 
     gst_webrtc_session_description_free(offer);
-}
-
-static gboolean
-has_running_xwindow() {
-    const gchar *xdg_stype = g_getenv("XDG_SESSION_TYPE");
-    // const gchar *gdm = g_getenv("GDMSESSION");
-
-    return g_strcmp0(xdg_stype, "tty");
-}
-
-static void
-on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
-                             GstElement *pipe) {
-    GstStructure *structure;
-    GstCaps *caps;
-    const gchar *name;
-    const gchar *encode_name;
-    GstPad *qpad;
-    GstPadLinkReturn ret;
-    GstElement *playbin;
-    gchar *desc;
-
-    if (GST_PAD_DIRECTION(pad) != GST_PAD_SRC)
-        return;
-
-    if (!gst_pad_has_current_caps(pad)) {
-        gst_printerr("Pad '%s' has no caps, can't do anything, ignoring\n",
-                     GST_PAD_NAME(pad));
-        return;
-    }
-    caps = gst_pad_get_current_caps(pad);
-    structure = gst_caps_get_structure(caps, 0);
-    // name = gst_structure_get_name(gst_caps_get_structure(caps, 0));
-    //
-    /**
-     * @NOTE webrtcbin pad-added caps is below:
-     *  application/x-rtp, media=(string)audio, payload=(int)111, clock-rate=(int)48000, encoding-name=(string)OPUS,
-     *  encoding-params=(string)2, minptime=(string)10, useinbandfec=(string)1, rtcp-fb-transport-cc=(boolean)true,
-     *  ssrc=(uint)1413127686
-     */
-    name = gst_structure_get_string(structure, "media");
-    encode_name = gst_structure_get_string(structure, "encoding-name");
-
-#if 1
-    gchar *caps_str = gst_caps_to_string(caps);
-    GST_DEBUG("name: %s, caps size: %d, caps : %s \n", name, gst_caps_get_size(caps), caps_str);
-    g_free(caps_str);
-#endif
-    gst_caps_unref(caps);
-    if (g_strcmp0(name, "audio") == 0) {
-        if (g_strcmp0(encode_name, "OPUS") == 0) {
-            desc = g_strdup_printf(" rtpopusdepay ! opusdec ! queue ! audioconvert ! audioresample ! autoaudiosink");
-        } else {
-            desc = g_strdup_printf(" decodebin ! queue ! audioconvert ! audioresample ! autoaudiosink");
-        }
-
-        playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
-        g_free(desc);
-        gst_bin_add(GST_BIN(pipe), playbin);
-    } else if (g_strcmp0(name, "video") == 0) {
-        if (!has_running_xwindow())
-        {
-            gst_printerr("Current system not running on Xwindow. \n");
-            return;
-        }
-
-        if (g_strcmp0(encode_name, "VP8") == 0) {
-            desc = g_strdup_printf(" rtpvp8depay ! vp8dec ! queue ! videoconvert ! autovideosink");
-        } else if (g_strcmp0(encode_name, "H264") == 0) {
-            const gchar *vah264 = "vaapih264dec";
-            const gchar *nvh264 = "nvh264dec";
-            desc = g_strdup_printf(" rtph264depay ! h264parse ! %s ! queue ! videoconvert ! autovideosink",
-                                   gst_element_factory_find(vah264) ? vah264 : gst_element_factory_find(nvh264) ? nvh264
-                                                                                                                : "avdec_h264");
-        } else {
-            desc = g_strdup_printf(" decodebin ! queue ! videoconvert ! autovideosink");
-        }
-
-        playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
-        g_free(desc);
-        gst_bin_add(GST_BIN(pipe), playbin);
-    } else {
-        gst_printerr("Unknown pad %s, ignoring", GST_PAD_NAME(pad));
-        return;
-    }
-    gst_element_sync_state_with_parent(playbin);
-    qpad = gst_element_get_static_pad(playbin, "sink");
-
-    ret = gst_pad_link(pad, qpad);
-    g_assert_cmphex(ret, ==, GST_PAD_LINK_OK);
-}
-
-static void
-on_remove_decodebin_stream(GstElement *srcbin, GstPad *pad,
-                           GstElement *pipe) {
-    gchar *name = gst_pad_get_name(pad);
-    GST_DEBUG("pad removed %s !!! \n", name);
-    gst_bin_remove(GST_BIN_CAST(pipe), srcbin);
-    gst_element_set_state(srcbin, GST_STATE_NULL);
-    g_free(name);
 }
 
 static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection,
@@ -369,17 +269,14 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
             GST_DEBUG("Expected SDP message type \"answer\", got \"%s\"\n",
                       sdp_type_string);
 
-            webrtc_entry->addremote(webrtc_entry);
-            gst_element_set_state(webrtc_entry->recvpipe, GST_STATE_PLAYING);
+            webrtc_entry->recv.addremote(webrtc_entry);
 
-            g_signal_connect(webrtc_entry->recvbin, "on-ice-candidate",
+
+            gst_element_set_state(webrtc_entry->recv.recvpipe, GST_STATE_PLAYING);
+
+            g_signal_connect(webrtc_entry->recv.recvbin, "on-ice-candidate",
                              G_CALLBACK(on_ice_candidate_cb), (gpointer)webrtc_entry);
 
-            g_signal_connect(webrtc_entry->recvbin, "pad-added",
-                             G_CALLBACK(on_incoming_decodebin_stream), webrtc_entry->recvpipe);
-
-            g_signal_connect(webrtc_entry->recvbin, "pad-removed",
-                             G_CALLBACK(on_remove_decodebin_stream), webrtc_entry->recvpipe);
 
             sdp_string = json_object_get_string_member(data_json_object, "sdp");
             // g_print("sdp:  %s", sdp_string);
@@ -440,8 +337,8 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         GST_DEBUG("Received ICE candidate with mline index %u; candidate: %s\n",
                   mline_index, candidate_string);
 
-        if (webrtc_entry->recvbin) {
-            g_signal_emit_by_name(webrtc_entry->recvbin, "add-ice-candidate",
+        if (webrtc_entry->recv.recvbin) {
+            g_signal_emit_by_name(webrtc_entry->recv.recvbin, "add-ice-candidate",
                                   mline_index, candidate_string);
         } else {
             g_signal_emit_by_name(webrtc_entry->sendbin, "add-ice-candidate",
@@ -486,13 +383,14 @@ static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
         int fd = open(index_file, O_RDONLY);
         status = stat(index_file, &buffer);
         if (fd && status == 0) {
-            index_source = (char *)malloc(sizeof(char) * buffer.st_size + 1);
+            index_source = (char *)g_malloc(sizeof(char) * buffer.st_size + 1);
             memset(index_source, 0, buffer.st_size);
             read(fd, index_source, buffer.st_size);
             close(fd);
         }
     }
     gchar *tmp_str = g_strdup(index_source);
+    // g_free(index_source);
 
     soup_buffer =
         soup_buffer_new(SOUP_MEMORY_COPY, tmp_str, strlen(tmp_str));
@@ -581,19 +479,8 @@ static void destroy_webrtc_table(gpointer entry_ptr) {
         gst_object_unref(GST_OBJECT(webrtc_entry->record.pipeline));
     }
 
-    if (webrtc_entry->recvpipe != NULL) {
-        gst_element_set_state(GST_ELEMENT(webrtc_entry->recvpipe),
-                              GST_STATE_NULL);
-        // GstElement *decodebin = gst_bin_get_by_name(GST_BIN(webrtc_entry->recvpipe), "decodebin");
-        // gst_bin_remove(GST_BIN(webrtc_entry->recvpipe), decodebin);
-        bus = gst_pipeline_get_bus(GST_PIPELINE(webrtc_entry->recvpipe));
-        if (bus != NULL) {
-            gst_bus_remove_watch(bus);
-            gst_object_unref(bus);
-        }
-
-        gst_object_unref(GST_OBJECT(webrtc_entry->recvbin));
-        gst_object_unref(GST_OBJECT(webrtc_entry->recvpipe));
+    if (webrtc_entry->recv.recvpipe != NULL ) {
+        webrtc_entry->recv.stop_recv(&webrtc_entry->recv);
     }
 
     if (webrtc_entry->connection != NULL)

@@ -14,15 +14,6 @@ typedef struct {
     gulong appsink_connected_id;
 } CustomAppData;
 
-/* Structure to contain all our information, so we can pass it to callbacks */
-typedef struct {
-    GstElement *h264parse;
-    GstElement *aqueue;
-    GstElement *vqueue;
-    GstElement *muxer;
-    GstElement *filesink;
-    GstElement *bin;
-} CustomBinData;
 
 GstElement *
 create_instance();

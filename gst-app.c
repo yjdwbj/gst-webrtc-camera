@@ -52,15 +52,16 @@ _initial_device();
 static int start_udpsrc_rec();
 static int start_appsrc_record();
 
-// static GstCaps *_getVideoCaps(gchar *type, gchar *format, int framerate, int width, int height) {
-//     return gst_caps_new_simple(type,
-//                                "format", G_TYPE_STRING, format,
-//                                "framerate", GST_TYPE_FRACTION, framerate, 1,
-//                                "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
-//                                "width", G_TYPE_INT, width,
-//                                "height", G_TYPE_INT, height,
-//                                NULL);
-// }
+#if 0
+static GstCaps *_getVideoCaps(gchar *type, gchar *format, int framerate, int width, int height) {
+    return gst_caps_new_simple(type,
+                               "format", G_TYPE_STRING, format,
+                               "framerate", GST_TYPE_FRACTION, framerate, 1,
+                               "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
+                               "width", G_TYPE_INT, width,
+                               "height", G_TYPE_INT, height,
+                               NULL);
+}
 
 static GstCaps *_getAudioCaps(gchar *type, gchar *format, int rate, int channel) {
     return gst_caps_new_simple(type,
@@ -69,6 +70,8 @@ static GstCaps *_getAudioCaps(gchar *type, gchar *format, int rate, int channel)
                                "channel", G_TYPE_INT, channel,
                                NULL);
 }
+
+#endif
 
 static void _mkdir(const char *path, int mask) {
 
@@ -80,11 +83,11 @@ static void _mkdir(const char *path, int mask) {
     }
     return result;
 #endif
-    char tmp[256];
+    gchar *tmp;
     char *p = NULL;
     size_t len;
 
-    snprintf(tmp, sizeof(tmp), "%s", path);
+    tmp = g_strdup_printf("%s", path);
     len = strlen(tmp);
     if (tmp[len - 1] == '/')
         tmp[len - 1] = 0;
@@ -95,6 +98,7 @@ static void _mkdir(const char *path, int mask) {
             *p = '/';
         }
     mkdir(tmp, S_IRWXU);
+    g_free(tmp);
 }
 
 static gboolean _check_initial_status() {
@@ -177,12 +181,12 @@ static GstElement *video_src() {
             config_data.v4l2src_data.framerate);
     srcCaps = gst_caps_from_string(capBuf);
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
+    gst_caps_unref(srcCaps);
 
     g_object_set(G_OBJECT(source),
                  "device", config_data.v4l2src_data.device,
                  "io-mode", config_data.v4l2src_data.io_mode,
                  NULL);
-    gst_caps_unref(srcCaps);
 
     gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, srcvconvert, teesrc, queue, NULL);
 
@@ -257,6 +261,8 @@ static GstElement *encoder_h264() {
 
     srcCaps = gst_caps_from_string("video/x-h264,profile=constrained-baseline");
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
+    gst_caps_unref(srcCaps);
+
     if (!encoder || !clock || !teeh264 || !queue || !capsfilter) {
         g_printerr("encoder_h264 all elements could not be created.\n");
         // g_printerr("encoder %x ; clock %x.\n", encoder, clock);
@@ -278,6 +284,7 @@ static GstElement *encoder_h264() {
         g_error("Tee source could not be linked.\n");
         return NULL;
     }
+    gst_object_unref(src_pad);
     gst_object_unref(queue_pad);
 
     return teeh264;
@@ -286,7 +293,7 @@ static GstElement *encoder_h264() {
 static GstElement *vaapi_postproc() {
     GstElement *vaapipostproc, *capsfilter, *clock, *tee;
     GstPad *src_pad, *queue_pad;
-    gchar capBuf[256] = {0};
+    gchar *capBuf;
 
     if (!gst_element_factory_find("vaapipostproc")) {
         return video_source;
@@ -316,12 +323,13 @@ static GstElement *vaapi_postproc() {
     //     config_data.v4l2src_data.width,
     //     config_data.v4l2src_data.height);
 
-    sprintf(capBuf, "%s, width=%d, height=%d, framerate=(fraction)%d/1",
-            "video/x-raw",
-            config_data.v4l2src_data.width,
-            config_data.v4l2src_data.height,
-            config_data.v4l2src_data.framerate);
+    capBuf = g_strdup_printf("%s, width=%d, height=%d, framerate=(fraction)%d/1",
+                             "video/x-raw",
+                             config_data.v4l2src_data.width,
+                             config_data.v4l2src_data.height,
+                             config_data.v4l2src_data.framerate);
     GstCaps *srcCaps = gst_caps_from_string(capBuf);
+    g_free(capBuf);
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
     gst_caps_unref(srcCaps);
 
@@ -335,6 +343,7 @@ static GstElement *vaapi_postproc() {
         return NULL;
     }
     gst_object_unref(queue_pad);
+    gst_object_unref(src_pad);
     return tee;
 }
 
@@ -932,9 +941,252 @@ int start_av_appsink() {
     return 0;
 }
 
-static
-void start_recv_webrtcbin(gpointer user_data)
-{
+static gboolean
+has_running_xwindow() {
+    const gchar *xdg_stype = g_getenv("XDG_SESSION_TYPE");
+    // const gchar *gdm = g_getenv("GDMSESSION");
+
+    return g_strcmp0(xdg_stype, "tty");
+}
+
+static void
+on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
+                             GstElement *pipe) {
+    GstStructure *structure;
+    GstCaps *caps;
+    const gchar *name;
+    const gchar *encode_name;
+    GstPadLinkReturn ret;
+    GstElement *playbin;
+    gchar *desc;
+
+    if (GST_PAD_DIRECTION(pad) != GST_PAD_SRC)
+        return;
+
+    if (!gst_pad_has_current_caps(pad)) {
+        gst_printerr("Pad '%s' has no caps, can't do anything, ignoring\n",
+                     GST_PAD_NAME(pad));
+        return;
+    }
+    caps = gst_pad_get_current_caps(pad);
+    structure = gst_caps_get_structure(caps, 0);
+    // name = gst_structure_get_name(gst_caps_get_structure(caps, 0));
+    /**
+     * @NOTE webrtcbin pad-added caps is below:
+     *  application/x-rtp, media=(string)audio, payload=(int)111, clock-rate=(int)48000, encoding-name=(string)OPUS,
+     *  encoding-params=(string)2, minptime=(string)10, useinbandfec=(string)1, rtcp-fb-transport-cc=(boolean)true,
+     *  ssrc=(uint)1413127686
+     */
+    name = gst_structure_get_string(structure, "media");
+    encode_name = gst_structure_get_string(structure, "encoding-name");
+
+#if 1
+    gchar *caps_str = gst_caps_to_string(caps);
+    GST_DEBUG("name: %s, caps size: %d, caps : %s \n", name, gst_caps_get_size(caps), caps_str);
+    g_free(caps_str);
+#endif
+    gst_caps_unref(caps);
+    if (g_strcmp0(name, "audio") == 0) {
+        if (g_strcmp0(encode_name, "OPUS") == 0) {
+            desc = g_strdup_printf(" rtpopusdepay ! opusdec ! queue ! audioconvert ! audioresample ! autoaudiosink");
+        } else {
+            desc = g_strdup_printf(" decodebin ! queue ! audioconvert ! audioresample ! autoaudiosink");
+        }
+
+        playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
+        g_free(desc);
+        gst_bin_add(GST_BIN(pipe), playbin);
+    } else if (g_strcmp0(name, "video") == 0) {
+        if (!has_running_xwindow()) {
+            gst_printerr("Current system not running on Xwindow. \n");
+            return;
+        }
+
+        if (g_strcmp0(encode_name, "VP8") == 0) {
+            desc = g_strdup_printf(" rtpvp8depay ! vp8dec ! queue ! videoconvert ! autovideosink");
+        } else if (g_strcmp0(encode_name, "H264") == 0) {
+            const gchar *vah264 = "vaapih264dec";
+            const gchar *nvh264 = "nvh264dec";
+            desc = g_strdup_printf(" rtph264depay ! h264parse ! %s ! queue ! videoconvert ! autovideosink",
+                                   gst_element_factory_find(vah264) ? vah264 : gst_element_factory_find(nvh264) ? nvh264
+                                                                                                                : "avdec_h264");
+        } else {
+            desc = g_strdup_printf(" decodebin ! queue ! videoconvert ! autovideosink");
+        }
+
+        playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
+        g_free(desc);
+        gst_bin_add(GST_BIN(pipe), playbin);
+    } else {
+        gst_printerr("Unknown pad %s, ignoring", GST_PAD_NAME(pad));
+        return;
+    }
+    gst_element_sync_state_with_parent(playbin);
+
+    ret = gst_pad_link(pad, playbin->sinkpads->data);
+    g_assert_cmphex(ret, ==, GST_PAD_LINK_OK);
+}
+
+static void
+on_remove_decodebin_stream(GstElement *srcbin, GstPad *pad,
+                           GstElement *pipe) {
+    gchar *name = gst_pad_get_name(pad);
+    g_print("pad removed %s !!! \n", name);
+    gst_bin_remove(GST_BIN_CAST(pipe), srcbin);
+    gst_element_set_state(srcbin, GST_STATE_NULL);
+    g_free(name);
+}
+
+static GObject *send_channel, *receive_channel;
+
+static void
+data_channel_on_error(GObject *dc, gpointer user_data) {
+    g_printerr("Data channel error \n");
+}
+
+static void
+data_channel_on_open(GObject *dc, gpointer user_data) {
+    GBytes *bytes = g_bytes_new("data", strlen("data"));
+    gst_print("data channel opened\n");
+    g_signal_emit_by_name(dc, "send-string", "Hi! from GStreamer");
+    g_signal_emit_by_name(dc, "send-data", bytes);
+    g_bytes_unref(bytes);
+}
+
+static void
+data_channel_on_close(GObject *dc, gpointer user_data) {
+    g_print("Data channel closed\n");
+}
+
+static void stop_recv_webrtc(gpointer user_data) {
+    GstBus *bus;
+    GstIterator *iter = NULL;
+    gboolean done;
+    g_signal_emit_by_name(receive_channel, "close", user_data);
+    g_signal_emit_by_name(send_channel, "close", user_data);
+    RecvItem *recv_entry = (RecvItem *)user_data;
+
+    iter = gst_bin_iterate_elements(GST_BIN(recv_entry->recvpipe));
+    if(iter == NULL)
+        return;
+    done = FALSE;
+    while (!done) {
+        GValue data = {
+            0,
+        };
+
+        switch (gst_iterator_next(iter, &data)) {
+        case GST_ITERATOR_OK: {
+            GstElement *child = g_value_get_object(&data);
+            g_print("remove bin: %s \n", gst_element_get_name(child));
+            gst_bin_remove(GST_BIN(recv_entry->recvpipe), child);
+            gst_element_set_state(child, GST_STATE_NULL);
+            // gst_object_unref(child);
+            g_value_reset(&data);
+            break;
+        }
+        case GST_ITERATOR_RESYNC:
+            gst_iterator_resync(iter);
+            break;
+        case GST_ITERATOR_ERROR:
+            done = TRUE;
+            break;
+        case GST_ITERATOR_DONE:
+            done = TRUE;
+            break;
+        }
+    }
+    gst_iterator_free(iter);
+
+    if (recv_entry->recvpipe)
+        gst_element_set_state(GST_ELEMENT(recv_entry->recvpipe),
+                              GST_STATE_NULL);
+
+    bus = gst_pipeline_get_bus(GST_PIPELINE(recv_entry->recvpipe));
+    if (bus != NULL) {
+        gst_bus_remove_watch(bus);
+        gst_object_unref(bus);
+    }
+
+    gst_object_unref(GST_OBJECT(recv_entry->recvpipe));
+    recv_entry->stop_recv = NULL;
+    recv_entry->recvpipe = NULL;
+}
+
+static void
+data_channel_on_message_string(GObject *dc, gchar *str, gpointer user_data) {
+    JsonNode *root_json;
+    JsonObject *root_json_object;
+    JsonParser *json_parser = NULL;
+    const gchar *type_string;
+    WebrtcItem *item_entry = (WebrtcItem *)user_data;
+
+    gst_print("Received data channel message: %s\n", str);
+
+    json_parser = json_parser_new();
+    if (!json_parser_load_from_data(json_parser, str, -1, NULL))
+        goto unknown_message;
+
+    root_json = json_parser_get_root(json_parser);
+    if (!JSON_NODE_HOLDS_OBJECT(root_json))
+        goto unknown_message;
+
+    root_json_object = json_node_get_object(root_json);
+
+    if (!json_object_has_member(root_json_object, "type")) {
+        g_error("Received message without type field\n");
+        goto cleanup;
+    }
+    type_string = json_object_get_string_member(root_json_object, "type");
+
+    if (json_object_has_member(root_json_object, type_string)) {
+        const gchar *cmd_type_string;
+        const gchar *cmd_data;
+        cmd_type_string = json_object_get_string_member(root_json_object, type_string);
+        if (!g_strcmp0(cmd_type_string, "talk")) {
+            cmd_data = json_object_get_string_member(root_json_object, "arg");
+            if (!g_strcmp0(cmd_data, "stop")) {
+
+                if (item_entry->recv.stop_recv) {
+                    item_entry->recv.stop_recv(&item_entry->recv);
+                    g_print("stop recv stream \n");
+                    goto cleanup;
+                }
+            }
+            goto cleanup;
+        }
+    }
+cleanup:
+    if (json_parser != NULL)
+        g_object_unref(G_OBJECT(json_parser));
+    g_free(str);
+    return;
+
+unknown_message:
+    g_error("Unknown message \"%s\", ignoring", str);
+    goto cleanup;
+}
+
+static void
+connect_data_channel_signals(GObject *data_channel,gpointer user_data) {
+    g_signal_connect(data_channel, "on-error",
+                     G_CALLBACK(data_channel_on_error), NULL);
+    g_signal_connect(data_channel, "on-open", G_CALLBACK(data_channel_on_open),
+                     NULL);
+    g_signal_connect(data_channel, "on-close",
+                     G_CALLBACK(data_channel_on_close), NULL);
+    g_signal_connect(data_channel, "on-message-string",
+                     G_CALLBACK(data_channel_on_message_string), user_data);
+}
+
+static void
+on_data_channel(GstElement *webrtc, GObject *data_channel,
+                gpointer user_data) {
+    connect_data_channel_signals(data_channel, user_data);
+    receive_channel = data_channel;
+}
+
+static void start_recv_webrtcbin(gpointer user_data) {
     WebrtcItem *item = (WebrtcItem *)user_data;
     gchar *turn_srv;
     GstBus *bus;
@@ -942,34 +1194,53 @@ void start_recv_webrtcbin(gpointer user_data)
     gchar *bin_name = g_strdup_printf("webrtcbin_%ld", item->hash_id);
 
     turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
-    item->recvpipe = gst_pipeline_new(pipe_name);
-    item->recvbin = gst_element_factory_make_full("webrtcbin", "name", bin_name,
+    item->recv.recvpipe = gst_pipeline_new(pipe_name);
+    item->recv.recvbin = gst_element_factory_make_full("webrtcbin", "name", bin_name,
                                                   "turn-server", turn_srv, NULL);
     g_free(turn_srv);
     g_free(pipe_name);
     g_free(bin_name);
 
-    g_assert_nonnull(item->recvbin);
-    gst_util_set_object_arg(G_OBJECT(item->recvbin), "bundle-policy", "max-bundle");
+    g_assert_nonnull(item->recv.recvbin);
+    item->recv.stop_recv = &stop_recv_webrtc;
+    gst_util_set_object_arg(G_OBJECT(item->recv.recvbin), "bundle-policy", "max-bundle");
 
-    bus = gst_element_get_bus(item->recvpipe);
+    bus = gst_pipeline_get_bus(GST_PIPELINE(item->recv.recvpipe));
     gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
     gst_object_unref(bus);
 
     /* Takes ownership of each: */
-    gst_bin_add(GST_BIN(item->recvpipe), item->recvbin);
+    gst_bin_add(GST_BIN(item->recv.recvpipe), item->recv.recvbin);
 
-    // item->recv.webrtcbin = gst_bin_get_by_name(GST_BIN(item->recv.pipeline), "recv");
+    gst_element_set_state(item->recv.recvpipe, GST_STATE_READY);
+
+    g_signal_emit_by_name(item->recv.recvbin, "create-data-channel", "channel", NULL,
+                          &send_channel);
+    if (send_channel) {
+        gst_print("Created data channel\n");
+        connect_data_channel_signals(send_channel,item);
+    } else {
+        gst_print("Could not create data channel, is usrsctp available?\n");
+    }
+
+    g_signal_connect(item->recv.recvbin, "on-data-channel", G_CALLBACK(on_data_channel),
+                     (gpointer)item);
+
+    g_signal_connect(item->recv.recvbin, "pad-added",
+                     G_CALLBACK(on_incoming_decodebin_stream), item->recv.recvpipe);
+
+    g_signal_connect(item->recv.recvbin, "pad-removed",
+                     G_CALLBACK(on_remove_decodebin_stream), item->recv.recvpipe);
+
 #if 1
-    gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->recvpipe), GST_DEBUG_GRAPH_SHOW_ALL, "webrtc_recv");
+    gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->recv.recvpipe), GST_DEBUG_GRAPH_SHOW_ALL, "webrtc_recv");
 #endif
-
 }
 
 void start_udpsrc_webrtcbin(WebrtcItem *item) {
     GError *error = NULL;
     gchar *cmdline = NULL;
-    // GstBus *bus = NULL;
+    GstBus *bus = NULL;
     gchar *turn_srv = NULL;
     const gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
     gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
@@ -977,7 +1248,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
                                        " rtpopusdepay ! rtpopuspay ! queue ! "
                                        " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                        " queue ! %s.",
-                                       config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr ,webrtc_name);
+                                       config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr, webrtc_name);
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue ! "
@@ -996,15 +1267,15 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     item->sendpipe = gst_parse_launch(cmdline, &error);
 
     g_free(cmdline);
-    // bus = gst_element_get_bus(item->pipeline);
-    // gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
-    // gst_object_unref(bus);
+    bus = gst_pipeline_get_bus(GST_PIPELINE(item->sendpipe));
+    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
+    gst_object_unref(bus);
 
     item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     item->record.get_rec_state = &get_record_state;
     item->record.start = &udpsrc_cmd_rec_start;
     item->record.stop = &udpsrc_cmd_rec_stop;
-    item->addremote = &start_recv_webrtcbin;
+    item->recv.addremote = &start_recv_webrtcbin;
 #if 1
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->sendpipe), GST_DEBUG_GRAPH_SHOW_ALL, "udpsrc_webrtc");
 #endif
@@ -1194,6 +1465,7 @@ int splitfile_sink() {
         return -1;
     }
     gst_object_unref(queue_pad);
+    gst_object_unref(src_pad);
 
     // add audio to muxer.
     if (audio_source != NULL) {
@@ -1207,6 +1479,7 @@ int splitfile_sink() {
             return -1;
         }
         gst_object_unref(audio_pad);
+        gst_object_unref(tee_pad);
     }
 
     return 0;
@@ -1267,6 +1540,7 @@ int av_hlssink() {
             return -1;
         }
         gst_object_unref(queue_pad);
+        gst_object_unref(tee_pad);
     }
     return 0;
 }
@@ -1340,6 +1614,7 @@ int udp_multicastsink() {
         return -1;
     }
     gst_object_unref(GST_OBJECT(sub_sink_apad));
+    gst_object_unref(GST_OBJECT(tee_pad));
 
     return 0;
 }
@@ -1408,6 +1683,7 @@ int motion_hlssink() {
         return -1;
     }
     gst_object_unref(queue_pad);
+    gst_object_unref(src_pad);
     return 0;
 }
 
@@ -1471,6 +1747,7 @@ int cvtracker_hlssink() {
         return -1;
     }
     gst_object_unref(queue_pad);
+    gst_object_unref(src_pad);
     return 0;
 }
 
@@ -1538,6 +1815,7 @@ int facedetect_hlssink() {
         return -1;
     }
     gst_object_unref(queue_pad);
+    gst_object_unref(src_pad);
     return 0;
 }
 
@@ -1606,6 +1884,7 @@ int edgedect_hlssink() {
         return -1;
     }
     gst_object_unref(queue_pad);
+    gst_object_unref(src_pad);
     return 0;
 }
 
@@ -1692,8 +1971,7 @@ GstElement *create_instance() {
         start_av_appsink();
     }
 
-    if(config_data.webrtc.enable)
-    {
+    if (config_data.webrtc.enable) {
         start_av_udpsink();
     }
 

@@ -12,24 +12,26 @@
   <title>GStreamer webrtc camera</title>
   <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
 
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet"
-    integrity="sha384-4bw+/aepP/YC94hEpVNVgiZdgIC5+VKNBQNGCHeKRQN+PtmoHDEXuppvnDJzQIu9" crossorigin="anonymous">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet"
+    crossorigin="anonymous">
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/js/bootstrap.bundle.min.js"
-    integrity="sha384-HwwvtgBNo3bZJJLYd8oVXjrBZt8cqVSpeBNS5n7C8IVInixGAoxmnlMuBnhbgrkm"
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"
     crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
   <script>
     'use strict';
     var websocketConnection;
     var webrtcPeerConnection;
     var localpc;
+    var localdc;
     var reportError;
     var startWatch;
     var startRecord;
     var enableTalk;
 
     var isRecord = false;
-
+    var isTalk = false;
+    var vConsole = new window.VConsole();
     const turn_config = {
       'iceServers': [{
         urls: 'turn:192.168.1.100:3478',
@@ -48,8 +50,54 @@
       if (event.candidate == null)
         return;
 
-      console.log("Sending ICE candidate out: " + JSON.stringify(event.candidate));
+      // console.log("Sending ICE candidate out: " + JSON.stringify(event.candidate));
       websocketConnection.send(JSON.stringify({ "type": "ice", "data": event.candidate }));
+    }
+
+    function reportError(err) {
+      console.error(err);
+    }
+
+    function createSender(stream) {
+      console.log("stream: " + JSON.stringify(stream));
+      localpc = new RTCPeerConnection(turn_config);
+      localdc = localpc.createDataChannel("web page channel");
+
+      localdc.onmessage = (event) => {
+        console.log(`received: ${event.data}`);
+        // pc.close(); // We decided to close after the first received message
+      };
+
+      localdc.onopen = () => {
+        console.log("datachannel open");
+      };
+
+      localdc.onclose = () => {
+        console.log("datachannel close");
+      };
+
+      stream.getTracks().forEach(function (track) {
+        console.log("add track.");
+        localpc.addTrack(track);
+      });
+
+
+      localpc.createOffer().then(d => {
+        localpc.setLocalDescription(d);
+        console.log("Send offer to remote: " + d);
+        websocketConnection.send(JSON.stringify({ type: "sdp", "data": d }));
+      }).catch((err) => {
+        console.log(" crete offer err: " + err);
+      });
+      localpc.oniceconnectionstatechange = e => console.log(localpc.iceConnectionState)
+      localpc.onicecandidate = onIceCandidate;
+      localpc.onsignalingstatechange = (ev) => {
+        switch (localpc.signalingState) {
+          case "stable":
+            console.log("ICE negotiation complete");
+            break;
+        }
+      };
     }
 
     // buttons control
@@ -75,7 +123,7 @@
         webrtcPeerConnection.onicecandidate = onIceCandidate;
         webrtcPeerConnection.addTransceiver('video', { 'direction': 'sendrecv' });
         webrtcPeerConnection.addTransceiver('audio', { 'direction': 'sendrecv' });
-        playStream(null, null, null, function (errmsg) { console.error(errmsg); });
+        playStream(null, null, null);
 
         startRecord.addEventListener('click', (event) => {
           event.preventDefault();
@@ -90,29 +138,35 @@
         });
         enableTalk.addEventListener('click', (event) => {
           console.log("enable talks now!!!");
-          enableTalk.disabled = true;
-          navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: {
-              width: { min: 800, ideal: 1280, max: 1920 },
-              height: { min: 600, ideal: 720, max: 1080 },
-            }
-          }).then((stream) => {
-            localpc = new RTCPeerConnection(turn_config);
-            stream.getTracks().forEach(function (track) {
-              localpc.addTrack(track);
-            });
-            localpc.createOffer().then(d => {
-              localpc.setLocalDescription(d);
-              console.log("Send offer to remote: " + d);
-              websocketConnection.send(JSON.stringify({ type: "sdp", "data": d }));
-            }).catch(console.log);
-            localpc.oniceconnectionstatechange = e => console.log(localpc.iceConnectionState)
-            localpc.onicecandidate = onIceCandidate;
-          }).catch((err) => {
-            console.log("Capture media error: " + err);
-          });
+          if (isTalk) {
 
+            localpc.getTransceivers().forEach((transceiver) => {
+              console.log("stop track.");
+              transceiver.stop();
+            });
+            localpc.getSenders().forEach((sender) => {
+              console.log("remove track.");
+              localpc.removeTrack(sender);
+            });
+            localdc.send(JSON.stringify({ "type": "cmd", "cmd": "talk", "arg": "stop" }));
+            localpc.close();
+          } else {
+            // enableTalk.disabled = true;
+            // To get navigator.mediaDevices, https should be enabled if not opened on localhost.
+            navigator.mediaDevices.getUserMedia({
+              audio: true,
+              video: {
+                width: { min: 800, ideal: 1280, max: 1920 },
+                height: { min: 600, ideal: 720, max: 1080 },
+              }
+            }).then((stream) => {
+              createSender(stream);
+            }).catch((err) => {
+              console.log("Capture media error: " + err);
+            });
+          }
+          isTalk = !isTalk
+          enableTalk.innerHTML = isTalk ? "Talk off" : "Talk on";
           event.preventDefault();
         });
         event.preventDefault();
@@ -121,7 +175,6 @@
 
 
     // recvonly webrtc
-
     function onLocalDescription(desc) {
       // console.log("Local description: " + JSON.stringify(desc));
       webrtcPeerConnection.setLocalDescription(desc).then(function () {
@@ -131,13 +184,12 @@
 
 
     function onIncomingSDP(sdp) {
-      console.log("Incoming SDP: " + JSON.stringify(sdp));
-
+      // console.log("Incoming SDP: " + JSON.stringify(sdp));
       if (sdp.type === "offer") {
         webrtcPeerConnection.setRemoteDescription(sdp).catch(reportError);
         webrtcPeerConnection.createAnswer().then(onLocalDescription).catch(reportError);
       } else {
-        console.log("answser Sdp: " + sdp.sdp);
+        // console.log("answser Sdp: " + sdp.sdp);
         localpc.setRemoteDescription(sdp).catch(reportError);
       }
     }
@@ -145,11 +197,8 @@
 
     function onIncomingICE(ice) {
       var candidate = new RTCIceCandidate(ice);
-
-
-      if(startRecord.disabled == false && localpc)
-      {
-        console.log("answer Incoming ICE: " + JSON.stringify(ice));
+      if (startRecord.disabled == false && localpc) {
+        // console.log("answer Incoming ICE: " + JSON.stringify(ice));
         localpc.addIceCandidate(candidate).catch(reportError);
       } else {
         webrtcPeerConnection.addIceCandidate(candidate).catch(reportError);
@@ -157,7 +206,7 @@
     }
 
     function recordCallBack(data) {
-      alert("Recording thread is already running!!!");
+      // alert("Recording thread is already running!!!");
       isRecord = false;
       startRecord.innerHTML = isRecord ? "Stop Record" : "Start Record";
     }
@@ -186,6 +235,7 @@
       try {
         msg = JSON.parse(event.data);
       } catch (e) {
+        console.log("parse json error: " + e);
         return;
       }
 
@@ -201,7 +251,7 @@
     }
 
 
-    function playStream(hostname, port, path, reportErrorCB) {
+    function playStream(hostname, port, path) {
       var l = window.location;
       var wsHost = (hostname != undefined) ? hostname : l.hostname;
       var wsPort = (port != undefined) ? port : l.port;
@@ -209,14 +259,9 @@
       if (wsPort)
         wsPort = ":" + wsPort;
       var wsUrl = "wss://" + wsHost + wsPort + "/" + wsPath;
-
-      reportError = (reportErrorCB != undefined) ? reportErrorCB : function (text) { };
-
       websocketConnection = new WebSocket(wsUrl);
       websocketConnection.addEventListener("message", onServerMessage);
     }
-
-
   </script>
 </head>
 
@@ -233,11 +278,10 @@
       <div class="mt-3">
         <button type="button" class="btn btn-info" id="startWatch">Start</button>
         <button type="button" class="btn btn-light" id="startRecord">Start Record</button>
-        <button type="button" class="btn btn-light" id="enableTalk">Talk</button>
+        <button type="button" class="btn btn-light" id="enableTalk">Talk on</button>
       </div>
     </div>
   </div>
-
 </body>
 
 </html>

@@ -4,7 +4,7 @@
             "name": "C/C++: gcc-12 build and debug active file",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/v4l2-record",
+            "program": "${workspaceFolder}/gst-webrtc-camera",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -30,7 +30,7 @@
             "name": "(gdb) Attach",
             "type": "cppdbg",
             "request": "attach",
-            "program": "${workspaceFolder}/v4l2-record",
+            "program": "${workspaceFolder}/gst-webrtc-camera",
             "processId": "${command:pickProcess}",
             "MIMode": "gdb",
             "setupCommands": [

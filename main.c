@@ -270,8 +270,6 @@ static void read_config_json(gchar *fullpath) {
         config_data.webrtc.udpsink.addr = g_strdup(tmpstr);
         config_data.webrtc.udpsink.multicast = json_object_get_boolean_member_with_default(turn_obj, "multicast", TRUE);
     }
-
-
     g_object_unref(parser);
 }
 
