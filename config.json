@@ -41,12 +41,13 @@
   },
   "splitfile_sink": false,
   "app_sink": true,
+  "motion_rec": true,
   "rec_len": 20,
   "hls_onoff": {
     "av_hlssink": false,
     "motion_hlssink": true,
     "edge_hlssink": true,
-    "cvtracker_hlssink": false,
+    "cvtracker_hlssink": true,
     "facedetect_hlssink": false
   },
   "hls": {

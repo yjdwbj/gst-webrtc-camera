@@ -16,14 +16,19 @@
 #include <libsoup/soup.h>
 
 typedef void (*user_cb)(gpointer user_data);
-typedef void (*appsink_signal_add)(gpointer user_data);
-typedef void (*appsink_signal_remove)(gpointer user_data);
+typedef void (*appsink_signal_opt)(gpointer user_data);
 typedef int (*get_state)(void);
+struct _AppsrcAvPair{
+    GstElement *video_src;
+    GstElement *audio_src;
+};
+
 struct _RecordItem {
     GstElement *pipeline;
     user_cb start;
     user_cb stop;
     get_state get_rec_state;
+    struct _AppsrcAvPair rec_avpair;
 };
 
 struct _RecvItem {
@@ -33,14 +38,26 @@ struct _RecvItem {
     user_cb addremote;
 };
 
+struct _DcFile {
+    gint fd;
+    gchar *filename;
+    gint64 fsize;
+    gint64 pos;
+};
+
 /* Structure to contain all our information, so we can pass it to callbacks */
 struct _WebrtcItem {
     SoupWebsocketConnection *connection;
     GstElement *sendpipe;
     GstElement *sendbin;
+    user_cb stop_webrtc;
+    struct _AppsrcAvPair send_avpair;
+    appsink_signal_opt signal_add;
+    appsink_signal_opt signal_remove;
     guint64 hash_id; // hash value for connection;
     struct _RecordItem record;
     struct _RecvItem recv;
+    struct _DcFile dcfile;
 };
 typedef struct _WebrtcItem WebrtcItem;
 typedef struct _RecvItem RecvItem;

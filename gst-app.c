@@ -19,6 +19,14 @@ static volatile gboolean reading_inotify = TRUE;
 static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t cmd_mtx = PTHREAD_MUTEX_INITIALIZER;
 
+typedef struct {
+    GstElement *video_src;
+    GstElement *audio_src;
+} AppSrcAVPair;
+
+static GMutex G_appsrc_lock;
+static GList *G_AppsrcList;
+
 GstConfigData config_data;
 
 static CustomAppData app_data;
@@ -50,7 +58,7 @@ static CustomAppData app_data;
 static void
 _initial_device();
 static int start_udpsrc_rec();
-static int start_appsrc_record();
+static void start_appsrc_record();
 
 #if 0
 static GstCaps *_getVideoCaps(gchar *type, gchar *format, int framerate, int width, int height) {
@@ -175,10 +183,10 @@ static GstElement *video_src() {
     g_print("device: %s, Type: %s, format: %s\n", config_data.v4l2src_data.device, config_data.v4l2src_data.type, config_data.v4l2src_data.format);
 
     capBuf = g_strdup_printf("%s, width=%d, height=%d, framerate=(fraction)%d/1",
-            config_data.v4l2src_data.type,
-            config_data.v4l2src_data.width,
-            config_data.v4l2src_data.height,
-            config_data.v4l2src_data.framerate);
+                             config_data.v4l2src_data.type,
+                             config_data.v4l2src_data.width,
+                             config_data.v4l2src_data.height,
+                             config_data.v4l2src_data.framerate);
     srcCaps = gst_caps_from_string(capBuf);
     g_free(capBuf);
 
@@ -201,7 +209,7 @@ static GstElement *video_src() {
             return NULL;
         }
         gst_bin_add_many(GST_BIN(pipeline), jpegparse, jpegdec, NULL);
-        if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, srcvconvert, teesrc, NULL)) {
+        if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, queue, srcvconvert, teesrc, NULL)) {
             g_error("Failed to link elements video mjpg src\n");
             return NULL;
         }
@@ -349,26 +357,6 @@ static GstElement *vaapi_postproc() {
     return tee;
 }
 
-static void _start_record_thread() {
-    int ret;
-    pthread_t t1;
-    char abpath[PATH_MAX] = {
-        0,
-    };
-
-    ret = pthread_create(&t1, NULL, (void *)start_appsrc_record, NULL);
-
-    if (ret) {
-        gst_printerr("pthread create start record thread failed, ret: %d.\n", ret);
-    }
-    ret = pthread_detach(t1);
-    if (ret) {
-        gst_printerr("pthread detach start record thread failed!!!!, ret: %d .\n", ret);
-    }
-
-    gst_printerr("_start_record_thread  pthread  detached , tid %lu .\n", t1);
-}
-
 static void *_inotify_thread(void *filename) {
     static int inotifyFd, wd;
     int ret;
@@ -384,7 +372,7 @@ static void *_inotify_thread(void *filename) {
     }
     // gst_println("inotify monitor for file: %s .\n", (char *)filename);
     if (!g_file_test((char *)filename, G_FILE_TEST_EXISTS)) {
-        gst_println(" inotify monitor exists?\n");
+        gst_print(" inotify monitor exists: %s ?\n", (char *)filename);
         FILE *file;
         file = fopen((char *)filename, "w");
         fclose(file);
@@ -394,7 +382,7 @@ static void *_inotify_thread(void *filename) {
         gst_printerr("inotify_add_watch failed, errno: %d.\n", errno);
         exit(EXIT_FAILURE);
     }
-
+    g_free(filename);
     for (;;) {
         rsize = read(inotifyFd, buf, sizeof(buf));
         if (rsize == -1 && errno != EAGAIN) {
@@ -419,8 +407,12 @@ static void *_inotify_thread(void *filename) {
                     if (ret) {
                         g_error("Failed to lock on mutex.\n");
                     }
-                    g_thread_new("start_record_mkv", (GThreadFunc)start_udpsrc_rec, NULL);
-                    // g_thread_new("start_record_mkv", (GThreadFunc)start_appsrc_record, NULL);
+                    if (config_data.app_sink) {
+                        g_thread_new("start_record_mkv", (GThreadFunc)start_appsrc_record, NULL);
+                    } else {
+                        g_thread_new("start_record_mkv", (GThreadFunc)start_udpsrc_rec, NULL);
+                    }
+
                     // start_motion_record();
                 }
                 break;
@@ -432,8 +424,7 @@ static void *_inotify_thread(void *filename) {
     gst_println("Exiting inotify thread..., errno: %d .\n", errno);
 }
 
-static const char *src_name = "motion_bin";
-
+#if 0
 /* called when the appsink notifies us that there is a new buffer ready for
  * processing */
 static GstFlowReturn
@@ -462,6 +453,8 @@ on_new_sample_from_sink(GstElement *elt, CustomAppData *data) {
     }
     return ret;
 }
+
+#endif
 
 /* called when we get a GstMessage from the sink pipeline when we get EOS, we
  * exit the mainloop and this testapp. */
@@ -505,14 +498,16 @@ on_source_message(GstBus *bus, GstMessage *message, CustomAppData *data) {
 
 void udpsrc_cmd_rec_stop(gpointer user_data) {
     RecordItem *item = (RecordItem *)user_data;
-    // GstBus *bus;
+    GstBus *bus;
     gst_element_set_state(GST_ELEMENT(item->pipeline),
                           GST_STATE_NULL);
     g_print("stop udpsrc record.\n");
 
-    // bus = gst_pipeline_get_bus(GST_PIPELINE(rec_pipeline));
-    // gst_bus_remove_watch(bus);
-    // gst_object_unref(bus);
+    bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
+    if (bus != NULL) {
+        gst_bus_remove_watch(bus);
+        gst_object_unref(bus);
+    }
 
     gst_object_unref(GST_OBJECT(item->pipeline));
     if (pthread_mutex_lock(&cmd_mtx)) {
@@ -533,6 +528,7 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
      * Maybe it's because I'm not familiar with its mechanics.
      *
      */
+    gchar *fullpath;
     if (pthread_mutex_lock(&cmd_mtx)) {
         g_error("Failed to lock on mutex.\n");
     }
@@ -546,7 +542,7 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     gchar *cmdline = NULL;
     gchar *today = get_today_str();
 
-    const gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
+    gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
     g_free(today);
 
     timestr = get_format_current_time();
@@ -556,6 +552,8 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     _mkdir(outdir, 0755);
     timestr = get_current_time_str();
     gchar *filename = g_strdup_printf("/webrtc_record-%s.mkv", timestr);
+    fullpath = g_strconcat(outdir, filename, NULL);
+    g_free(filename);
     g_free(timestr);
 
     gchar *audio_src = g_strdup_printf("udpsrc port=6001 name=audio_save  ! "
@@ -564,8 +562,9 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     gchar *video_src = g_strdup_printf("udpsrc port=6000  name=video_save ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! queue ! mux. ");
-    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", g_strconcat(outdir, filename, NULL), audio_src, video_src);
-    g_free(filename);
+    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+    g_free(fullpath);
+    g_free(outdir);
     g_print("record cmdline: %s \n", cmdline);
     g_free(audio_src);
     g_free(video_src);
@@ -575,7 +574,7 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
 }
 
-gboolean stop_udpsrc_rec(GstElement *rec_pipeline) {
+static gboolean stop_udpsrc_rec(GstElement *rec_pipeline) {
     // GstBus *bus;
     gst_element_set_state(GST_ELEMENT(rec_pipeline),
                           GST_STATE_NULL);
@@ -597,18 +596,19 @@ gboolean stop_udpsrc_rec(GstElement *rec_pipeline) {
     return TRUE;
 }
 
-int start_udpsrc_rec(gpointer user_data) {
+static int start_udpsrc_rec(gpointer user_data) {
     /**
      * @brief I want to create a module for recording, but it cannot be dynamically added and deleted while the pipeline is running。
      * Maybe it's because I'm not familiar with its mechanics.
      *
      */
     GstElement *rec_pipeline;
+    gchar *fullpath;
     gchar *timestr = NULL;
     gchar *cmdline = NULL;
     gchar *today = get_today_str();
 
-    const gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
+    gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
     g_free(today);
 
     timestr = get_format_current_time();
@@ -619,6 +619,8 @@ int start_udpsrc_rec(gpointer user_data) {
     timestr = get_current_time_str();
     gchar *filename = g_strdup_printf("/motion-%s.mkv", timestr);
     g_free(timestr);
+    fullpath = g_strconcat(outdir, filename, NULL);
+    g_free(outdir);
 
     gchar *audio_src = g_strdup_printf("udpsrc port=6001 name=audio_save  ! "
                                        " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
@@ -626,8 +628,8 @@ int start_udpsrc_rec(gpointer user_data) {
     gchar *video_src = g_strdup_printf("udpsrc port=6000  name=video_save ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! queue ! mux. ");
-    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", g_strconcat(outdir, filename, NULL), audio_src, video_src);
-    g_free(filename);
+    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+    g_free(fullpath);
     g_print("record cmdline: %s \n", cmdline);
     g_free(audio_src);
     g_free(video_src);
@@ -639,47 +641,129 @@ int start_udpsrc_rec(gpointer user_data) {
     return 0;
 }
 
-static gboolean stop_appsrc(CustomAppData *data) {
-    GstStateChangeReturn lret;
-    GstState state, pending;
-    gchar *timestr;
+#if 0
+/** the need-data function does not work on multiple threads. Becuase the appsink will become a race condition. */
+static pthread_mutex_t appsink_mtx = PTHREAD_MUTEX_INITIALIZER;
+static void
+need_data(GstElement *appsrc, guint unused, GstElement *appsink) {
+    GstSample *sample;
+    GstFlowReturn ret;
 
-    gst_element_send_event(data->appsrc, gst_event_new_eos());
-    gst_element_set_state(data->appsrc, GST_STATE_NULL);
-    timestr = get_format_current_time();
-    gst_println("stop record at: %s .\n", timestr);
-    g_free(timestr);
-    g_signal_handler_disconnect(data->appsink, data->appsink_connected_id);
-    // gst_println("stop record muxer state: %s !!!!\n", gst_element_state_get_name(state));
-    lret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
-    if (lret == GST_STATE_CHANGE_FAILURE) {
-        g_error("Failed to change pipepline state.\n");
-    }
-    gst_element_get_state(GST_ELEMENT(pipeline), &state, &pending, -1);
-    // gst_println("after stop record pipeline state: %s !!!!\n", gst_element_state_get_name(state));
-    if (pthread_mutex_lock(&mtx)) {
+    if (pthread_mutex_lock(&appsink_mtx)) {
         g_error("Failed to lock on mutex.\n");
     }
-    threads_running = FALSE;
-    if (pthread_mutex_unlock(&mtx)) {
+    sample = gst_app_sink_pull_sample(GST_APP_SINK(appsink));
+    if (pthread_mutex_unlock(&appsink_mtx)) {
         g_error("Failed to lock on mutex.\n");
     }
 
-    gst_object_unref(data->appsrc);
-    // gst_element_get_state(GST_ELEMENT(pipeline), &state, NULL, -1);
-    // gst_println("after stop record, at: %s!!!!\n", get_format_current_time());
-    return TRUE;
+    if (sample) {
+        GstBuffer *buffer = gst_sample_get_buffer(sample);
+        GstSegment *seg = gst_sample_get_segment(sample);
+        GstClockTime pts, dts;
+
+        /* Convert the PTS/DTS to running time so they start from 0 */
+        pts = GST_BUFFER_PTS(buffer);
+        if (GST_CLOCK_TIME_IS_VALID(pts))
+            pts = gst_segment_to_running_time(seg, GST_FORMAT_TIME, pts);
+
+        dts = GST_BUFFER_DTS(buffer);
+        if (GST_CLOCK_TIME_IS_VALID(dts))
+            dts = gst_segment_to_running_time(seg, GST_FORMAT_TIME, dts);
+
+        if (buffer) {
+            /* Make writable so we can adjust the timestamps */
+            buffer = gst_buffer_copy(buffer);
+            GST_BUFFER_PTS(buffer) = pts;
+            GST_BUFFER_DTS(buffer) = dts;
+            g_signal_emit_by_name(appsrc, "push-buffer", buffer, &ret);
+            gst_buffer_unref(buffer);
+        }
+
+        /* we don't need the appsink sample anymore */
+        gst_sample_unref(sample);
+    }
+}
+#endif
+
+static void
+on_ice_gathering_state_notify(GstElement *webrtcbin, GParamSpec *pspec,
+                              gpointer user_data) {
+    GstWebRTCICEGatheringState ice_gather_state;
+    const gchar *new_state = "unknown";
+    gchar *biname = gst_element_get_name(webrtcbin);
+
+    g_object_get(webrtcbin, "ice-gathering-state", &ice_gather_state, NULL);
+    switch (ice_gather_state) {
+    case GST_WEBRTC_ICE_GATHERING_STATE_NEW:
+        new_state = "new";
+        break;
+    case GST_WEBRTC_ICE_GATHERING_STATE_GATHERING:
+        new_state = "gathering";
+        break;
+    case GST_WEBRTC_ICE_GATHERING_STATE_COMPLETE:
+        new_state = "complete";
+        break;
+    }
+    gst_print("%s ICE gathering state changed to %s\n", biname, new_state);
+    g_free(biname);
 }
 
-/** It must run after appsink. */
-static int start_appsrc_record() {
-    gchar *string = NULL;
+void appsrc_cmd_rec_stop(gpointer user_data) {
+    RecordItem *item = (RecordItem *)user_data;
+    GstBus *bus;
+    gst_element_set_state(GST_ELEMENT(item->pipeline),
+                          GST_STATE_NULL);
+    g_print("stop appsrc record.\n");
+
+    bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
+    if (bus != NULL) {
+        gst_bus_remove_watch(bus);
+        gst_object_unref(bus);
+    }
+
+    gst_object_unref(GST_OBJECT(item->pipeline));
+    if (pthread_mutex_lock(&cmd_mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+    cmd_recording = FALSE;
+    if (pthread_mutex_unlock(&cmd_mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+    g_mutex_lock(&G_appsrc_lock);
+    G_AppsrcList = g_list_remove(G_AppsrcList, &item->rec_avpair);
+    g_mutex_unlock(&G_appsrc_lock);
+    gst_object_unref(item->rec_avpair.audio_src);
+    gst_object_unref(item->rec_avpair.video_src);
+    item->pipeline = NULL;
+}
+
+static void appsrc_cmd_rec_start(gpointer user_data) {
+    /**
+     * @brief I want to create a module for recording, but it cannot be dynamically added and deleted while the pipeline is running。
+     * Maybe it's because I'm not familiar with its mechanics.
+     *
+     */
+    RecordItem *item = (RecordItem *)user_data;
+    gchar *fullpath;
+    gchar *cmdline;
     gchar *timestr = NULL;
     gchar *today = NULL;
     GstBus *bus;
-    today = get_today_str();
 
-    const gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
+    if (pthread_mutex_lock(&cmd_mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+    cmd_recording = TRUE;
+    if (pthread_mutex_unlock(&cmd_mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+
+    today = get_today_str();
+    const gchar *vid_str = "video_appsrc_cmd_rec";
+    const gchar *aid_str = "audio_appsrc_cmd_rec";
+
+    gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
     g_free(today);
 
     timestr = get_format_current_time();
@@ -690,69 +774,133 @@ static int start_appsrc_record() {
     timestr = get_current_time_str();
 
     /** here just work for mpegtsmux */
-    gchar *filename = g_strdup_printf("/motion-%s.ts", timestr);
+    gchar *filename = g_strdup_printf("/webrtc-%s.mkv", timestr);
     g_free(timestr);
+    fullpath = g_strconcat(outdir, filename, NULL);
+    g_free(outdir);
 
-    string = g_strdup_printf("appsrc name=%s ! filesink location=\"%s\" name=fileout ", src_name,
-                             g_strconcat(outdir, filename, NULL));
+    gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 ! "
+                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                       " rtpopusdepay  ! opusparse ! queue  ! mux.",
+                                       aid_str);
+    gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " rtph264depay ! h264parse !  queue ! mux. ",
+                                       vid_str);
+    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+    g_free(fullpath);
     g_free(filename);
+    g_print("webrtc cmdline: %s \n", cmdline);
+    g_free(audio_src);
+    g_free(video_src);
 
-    app_data.appsrc = gst_parse_launch(string, NULL);
-    g_free(string);
+    item->pipeline = gst_parse_launch(cmdline, NULL);
+    g_free(cmdline);
 
-    // g_object_set(app_src, "block", TRUE, NULL);
-    bus = gst_element_get_bus(app_data.appsrc);
-    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, &app_data);
+    bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
+    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
     gst_object_unref(bus);
 
-#if 0 // dynamic replace element not working， maybe my approach is wrong。
-    GstElement *muxer;
-    GstPad *peer_pad, *src_pad, *sink_pad;
+    gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
+    item->rec_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->pipeline), vid_str);
+    // g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
 
-    MAKE_ELEMENT_AND_ADD(muxer, "matroskamux");
-    gst_element_set_state(pipeline, GST_STATE_READY);
-    gst_element_set_state(app_data.muxer, GST_STATE_NULL);
+    item->rec_avpair.audio_src = gst_bin_get_by_name(GST_BIN(item->pipeline), aid_str);
+    // g_signal_connect(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
+    g_mutex_lock(&G_appsrc_lock);
+    G_AppsrcList = g_list_append(G_AppsrcList, &item->rec_avpair);
+    g_mutex_unlock(&G_appsrc_lock);
+}
 
-    // replace muxer src_pad.
-    src_pad= app_data.muxer->srcpads->data;
-    peer_pad = gst_pad_get_peer(src_pad);
-    gst_pad_unlink(src_pad, peer_pad);
-    src_pad = gst_element_get_static_pad(muxer, "src");
-    gst_pad_link_full(src_pad, peer_pad,GST_PAD_LINK_CHECK_NO_RECONFIGURE);
-    gst_object_unref(peer_pad);
-    gst_object_unref(src_pad);
+static gboolean stop_appsrc_rec(gpointer user_data) {
+    gchar *timestr;
+    RecordItem *item = (RecordItem *)user_data;
+    gst_element_send_event(item->pipeline, gst_event_new_eos());
+    gst_element_set_state(item->pipeline, GST_STATE_NULL);
+    timestr = get_format_current_time();
+    gst_println("stop appsrc record at: %s .\n", timestr);
+    g_free(timestr);
 
-    // replace muxer video_0 sink_pad
-    sink_pad = app_data.muxer->sinkpads->data;
-    gst_println("sink pads name: %s\n", gst_pad_get_name(sink_pad));
-    peer_pad = gst_pad_get_peer(sink_pad);
-    gst_pad_unlink(peer_pad, sink_pad);
-    gst_element_release_request_pad(app_data.muxer, sink_pad);
-    sink_pad = gst_element_request_pad_simple(muxer, "video_%u");
-    gst_pad_link_full(peer_pad, sink_pad, GST_PAD_LINK_CHECK_NO_RECONFIGURE);
-    gst_object_unref(peer_pad);
-    gst_object_unref(sink_pad);
+    // gst_println("after stop record pipeline state: %s !!!!\n", gst_element_state_get_name(state));
+    if (pthread_mutex_lock(&mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
+    threads_running = FALSE;
+    if (pthread_mutex_unlock(&mtx)) {
+        g_error("Failed to lock on mutex.\n");
+    }
 
-    // replace muxer audio_0 sink_pad
-    sink_pad = app_data.muxer->sinkpads->data;
-    peer_pad = gst_pad_get_peer(sink_pad);
-    gst_pad_unlink(peer_pad, sink_pad);
-    gst_element_release_request_pad(app_data.muxer, sink_pad);
-    sink_pad = gst_element_request_pad_simple(muxer, "audio_%u");
-    gst_pad_link_full(peer_pad, sink_pad, GST_PAD_LINK_CHECK_NO_RECONFIGURE);
-    gst_object_unref(peer_pad);
-    gst_object_unref(sink_pad);
-    gst_bin_remove(pipeline, app_data.muxer);
-    app_data.muxer = muxer;
-#endif
-    app_data.appsink_connected_id = g_signal_connect(app_data.appsink, "new-sample", G_CALLBACK(on_new_sample_from_sink), &app_data);
+    g_mutex_lock(&G_appsrc_lock);
+    G_AppsrcList = g_list_remove(G_AppsrcList, &item->rec_avpair);
+    g_mutex_unlock(&G_appsrc_lock);
+    gst_object_unref(item->rec_avpair.audio_src);
+    gst_object_unref(item->rec_avpair.video_src);
 
-    gst_element_set_state(app_data.appsrc, GST_STATE_PLAYING);
-    gst_element_set_state(app_data.appsink, GST_STATE_PLAYING);
-    gst_element_set_state(pipeline, GST_STATE_PLAYING);
-    // gst_println(" new muxer name: %s, new signal id: %d\n", gst_element_get_name(app_data.muxer), app_data.appsink_connected_id);
-    g_timeout_add_once(record_time * 1000, (GSourceOnceFunc)stop_appsrc, &app_data);
-    return 0;
+    gst_object_unref(item->pipeline);
+    g_free(item);
+    return TRUE;
+}
+
+static void start_appsrc_record() {
+    RecordItem *item;
+    gchar *fullpath;
+    gchar *cmdline;
+    gchar *timestr = NULL;
+    gchar *today = NULL;
+    GstBus *bus;
+    today = get_today_str();
+    const gchar *vid_str = "video_appsrc";
+    const gchar *aid_str = "audio_appsrc";
+    item = g_new0(RecordItem, 1);
+    gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
+    g_free(today);
+
+    timestr = get_format_current_time();
+    gst_println("start appsrc record at: %s .\n", timestr);
+    g_free(timestr);
+
+    _mkdir(outdir, 0755);
+    timestr = get_current_time_str();
+
+    /** here just work for mpegtsmux */
+    gchar *filename = g_strdup_printf("/motion-%s.mkv", timestr);
+    g_free(timestr);
+    fullpath = g_strconcat(outdir, filename, NULL);
+    g_free(outdir);
+
+    gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 ! "
+                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                       " rtpopusdepay  ! opusparse ! queue  ! mux.",
+                                       aid_str);
+    gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " rtph264depay ! h264parse !  queue ! mux. ",
+                                       vid_str);
+    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+    g_free(fullpath);
+    g_free(filename);
+    g_print("webrtc cmdline: %s \n", cmdline);
+    g_free(audio_src);
+    g_free(video_src);
+
+    item->pipeline = gst_parse_launch(cmdline, NULL);
+    g_free(cmdline);
+
+    item->rec_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->pipeline), vid_str);
+    // g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
+
+    item->rec_avpair.audio_src = gst_bin_get_by_name(GST_BIN(item->pipeline), aid_str);
+    // g_signal_connect(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
+
+    bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
+    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
+    gst_object_unref(bus);
+
+    gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
+    g_timeout_add_once(record_time * 1000, (GSourceOnceFunc)stop_appsrc_rec, item);
+    g_mutex_lock(&G_appsrc_lock);
+    G_AppsrcList = g_list_append(G_AppsrcList, &item->rec_avpair);
+    g_mutex_unlock(&G_appsrc_lock);
 }
 
 static gboolean
@@ -818,6 +966,7 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
 
         if (g_strcmp0(encode_name, "VP8") == 0) {
             desc = g_strdup_printf(" rtpvp8depay ! vp8dec ! queue ! videoconvert ! autovideosink");
+            g_print("recv vp8 stream from remote.\n");
         } else if (g_strcmp0(encode_name, "H264") == 0) {
             const gchar *vah264 = "vaapih264dec";
             const gchar *nvh264 = "nvh264dec";
@@ -876,8 +1025,7 @@ static void stop_recv_webrtc(gpointer user_data) {
     GstBus *bus;
     GstIterator *iter = NULL;
     gboolean done;
-    g_signal_emit_by_name(receive_channel, "close", user_data);
-    g_signal_emit_by_name(send_channel, "close", user_data);
+
     RecvItem *recv_entry = (RecvItem *)user_data;
 
     iter = gst_bin_iterate_elements(GST_BIN(recv_entry->recvpipe));
@@ -928,6 +1076,80 @@ static void stop_recv_webrtc(gpointer user_data) {
 }
 
 static void
+data_channel_on_buffered_amound_low(GObject *channel, gpointer user_data) {
+    GstWebRTCDataChannelState state;
+    g_object_get(channel, "ready-state", &state, NULL);
+    g_print("receive data_channel_on_buffered_amound_low channel state:%d \n", state);
+}
+
+static void
+play_voice(gpointer user_data) {
+    WebrtcItem *item_entry = (WebrtcItem *)user_data;
+    GstBus *bus;
+    GstMessage *msg;
+    GstElement *playline;
+    gchar *cmdline = g_strdup_printf("filesrc location=%s ! decodebin ! audioconvert ! audioresample ! autoaudiosink", item_entry->dcfile.filename);
+    g_print("play cmdline : %s\n", cmdline);
+    playline = gst_parse_launch(cmdline, NULL);
+    g_free(cmdline);
+    gst_element_set_state(playline, GST_STATE_PLAYING);
+
+    bus = gst_pipeline_get_bus(GST_PIPELINE(playline));
+    msg = gst_bus_poll(bus, GST_MESSAGE_EOS | GST_MESSAGE_ERROR, -1);
+    switch (GST_MESSAGE_TYPE(msg)) {
+    case GST_MESSAGE_EOS: {
+        g_print("EOS\n");
+        break;
+    }
+    case GST_MESSAGE_ERROR: {
+        GError *err = NULL; /* error to show to users                 */
+        gchar *dbg = NULL;  /* additional debug string for developers */
+
+        gst_message_parse_error(msg, &err, &dbg);
+        if (err) {
+            g_print("ERROR: %s\n", err->message);
+            g_error_free(err);
+        }
+        if (dbg) {
+            g_print("[Debug details: %s]\n", dbg);
+            g_free(dbg);
+        }
+    }
+    default:
+        g_print("Unexpected message of type %d", GST_MESSAGE_TYPE(msg));
+        break;
+    }
+    gst_message_unref(msg);
+
+    gst_element_set_state(playline, GST_STATE_NULL);
+    gst_object_unref(playline);
+    gst_object_unref(bus);
+
+    remove(item_entry->dcfile.filename);
+    g_free(item_entry->dcfile.filename);
+}
+
+static void
+data_channel_on_message_data(GObject *channel, GBytes *bytes, gpointer user_data) {
+    GstWebRTCDataChannelState state;
+    gsize size;
+    const gchar *data;
+    WebrtcItem *item_entry = (WebrtcItem *)user_data;
+    g_object_get(channel, "ready-state", &state, NULL);
+    if (item_entry->dcfile.fd > 0) {
+        if (item_entry->dcfile.pos != item_entry->dcfile.fsize) {
+            data = g_bytes_get_data(bytes, &size);
+            write(item_entry->dcfile.fd, data, size);
+            item_entry->dcfile.pos += size;
+            if (item_entry->dcfile.pos == item_entry->dcfile.fsize) {
+                close(item_entry->dcfile.fd);
+                g_timeout_add_once(100, (GSourceOnceFunc)play_voice, user_data);
+            }
+        }
+    }
+}
+
+static void
 data_channel_on_message_string(GObject *dc, gchar *str, gpointer user_data) {
     JsonNode *root_json;
     JsonObject *root_json_object;
@@ -936,7 +1158,6 @@ data_channel_on_message_string(GObject *dc, gchar *str, gpointer user_data) {
     WebrtcItem *item_entry = (WebrtcItem *)user_data;
 
     gst_print("Received data channel message: %s\n", str);
-
     json_parser = json_parser_new();
     if (!json_parser_load_from_data(json_parser, str, -1, NULL))
         goto unknown_message;
@@ -955,29 +1176,28 @@ data_channel_on_message_string(GObject *dc, gchar *str, gpointer user_data) {
 
     if (json_object_has_member(root_json_object, type_string)) {
         const gchar *cmd_type_string;
-        const gchar *cmd_data;
         cmd_type_string = json_object_get_string_member(root_json_object, type_string);
-        if (!g_strcmp0(cmd_type_string, "talk")) {
-            cmd_data = json_object_get_string_member(root_json_object, "arg");
-            if (!g_strcmp0(cmd_data, "stop")) {
+        if (!g_strcmp0(cmd_type_string, "sendfile")) {
+            JsonObject *file_object = json_object_get_object_member(root_json_object, "file");
+            // const gchar *file_type = json_object_get_string_member(file_object, "type");
 
-                if (item_entry->recv.stop_recv) {
-                    item_entry->recv.stop_recv(&item_entry->recv);
-                    g_print("stop recv stream \n");
-                    goto cleanup;
-                }
-            }
+            item_entry->dcfile.filename = g_strdup_printf("/tmp/%s", json_object_get_string_member(file_object, "name"));
+            item_entry->dcfile.fsize = json_object_get_int_member_with_default(file_object, "size", 0);
+            g_print("recv msg file: %s\n", item_entry->dcfile.filename);
+            item_entry->dcfile.fd = open(item_entry->dcfile.filename, O_RDWR | O_CREAT, 0644);
+            item_entry->dcfile.pos = 0;
+
+            // g_print("recv sendfile, name: %s, size: %ld, type: %s\n", file_name, file_size, file_type);
             goto cleanup;
         }
     }
 cleanup:
     if (json_parser != NULL)
         g_object_unref(G_OBJECT(json_parser));
-    g_free(str);
     return;
 
 unknown_message:
-    g_error("Unknown message \"%s\", ignoring", str);
+    g_print("Unknown message \"%s\", ignoring\n", str);
     goto cleanup;
 }
 
@@ -991,6 +1211,12 @@ connect_data_channel_signals(GObject *data_channel, gpointer user_data) {
                      G_CALLBACK(data_channel_on_close), NULL);
     g_signal_connect(data_channel, "on-message-string",
                      G_CALLBACK(data_channel_on_message_string), user_data);
+    g_signal_connect(data_channel, "on-message-data",
+                     G_CALLBACK(data_channel_on_message_data), user_data);
+
+    g_object_set(data_channel, "buffered-amount-low-threshold", TRUE, NULL);
+    g_signal_connect(data_channel, "on-buffered-amount-low",
+                     G_CALLBACK(data_channel_on_buffered_amound_low), user_data);
 }
 
 static void
@@ -998,6 +1224,22 @@ on_data_channel(GstElement *webrtc, GObject *data_channel,
                 gpointer user_data) {
     connect_data_channel_signals(data_channel, user_data);
     receive_channel = data_channel;
+}
+
+static void
+create_data_channel(gpointer user_data) {
+    WebrtcItem *item = (WebrtcItem *)user_data;
+
+    g_signal_connect(item->sendbin, "on-data-channel", G_CALLBACK(on_data_channel),
+                     (gpointer)item);
+
+    g_signal_connect(item->sendbin, "notify::ice-gathering-state",
+                     G_CALLBACK(on_ice_gathering_state_notify), NULL);
+
+    gchar *chname = g_strdup_printf("channel_%ld", item->hash_id);
+    g_signal_emit_by_name(item->sendbin, "create-data-channel", chname, NULL,
+                          &send_channel);
+    g_free(chname);
 }
 
 static void start_recv_webrtcbin(gpointer user_data) {
@@ -1017,7 +1259,8 @@ static void start_recv_webrtcbin(gpointer user_data) {
 
     g_assert_nonnull(item->recv.recvbin);
     item->recv.stop_recv = &stop_recv_webrtc;
-    gst_util_set_object_arg(G_OBJECT(item->recv.recvbin), "bundle-policy", "max-bundle");
+    g_object_set(G_OBJECT(item->recv.recvbin), "async-handling", TRUE, NULL);
+    // gst_util_set_object_arg(G_OBJECT(item->recv.recvbin), "bundle-policy", "max-bundle");
 
     bus = gst_pipeline_get_bus(GST_PIPELINE(item->recv.recvpipe));
     gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
@@ -1028,23 +1271,17 @@ static void start_recv_webrtcbin(gpointer user_data) {
 
     gst_element_set_state(item->recv.recvpipe, GST_STATE_READY);
 
-    g_signal_emit_by_name(item->recv.recvbin, "create-data-channel", "channel", NULL,
-                          &send_channel);
-    if (send_channel) {
-        gst_print("Created data channel\n");
-        connect_data_channel_signals(send_channel, item);
-    } else {
-        gst_print("Could not create data channel, is usrsctp available?\n");
-    }
-
-    g_signal_connect(item->recv.recvbin, "on-data-channel", G_CALLBACK(on_data_channel),
-                     (gpointer)item);
-
     g_signal_connect(item->recv.recvbin, "pad-added",
                      G_CALLBACK(on_incoming_decodebin_stream), item->recv.recvpipe);
 
     g_signal_connect(item->recv.recvbin, "pad-removed",
                      G_CALLBACK(on_remove_decodebin_stream), item->recv.recvpipe);
+
+    g_signal_connect(item->recv.recvbin, "notify::ice-gathering-state",
+                     G_CALLBACK(on_ice_gathering_state_notify), NULL);
+
+    // g_signal_connect(item->recv.recvbin, "notify::ice-connection-state",
+    //                  G_CALLBACK(on_remove_decodebin_stream), item->recv.recvpipe);
 
 #if 1
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->recv.recvpipe), GST_DEBUG_GRAPH_SHOW_ALL, "webrtc_recv");
@@ -1079,6 +1316,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     g_free(video_src);
 
     item->sendpipe = gst_parse_launch(cmdline, &error);
+    gst_element_set_state(item->sendpipe, GST_STATE_READY);
 
     g_free(cmdline);
     bus = gst_pipeline_get_bus(GST_PIPELINE(item->sendpipe));
@@ -1090,6 +1328,8 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     item->record.start = &udpsrc_cmd_rec_start;
     item->record.stop = &udpsrc_cmd_rec_stop;
     item->recv.addremote = &start_recv_webrtcbin;
+
+    create_data_channel((gpointer)item);
 #if 1
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->sendpipe), GST_DEBUG_GRAPH_SHOW_ALL, "udpsrc_webrtc");
 #endif
@@ -1161,38 +1401,26 @@ int start_av_udpsink() {
     return 0;
 }
 
-static void
-need_data(GstElement *appsrc, guint unused,  GstElement *appsink) {
-    GstSample *sample;
-    GstFlowReturn ret;
-    sample = gst_app_sink_pull_sample(GST_APP_SINK(appsink));
+static void stop_appsrc_webrtc(gpointer user_data) {
+    GstBus *bus;
+    WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
 
-    if (sample) {
-        GstBuffer *buffer = gst_sample_get_buffer(sample);
-        GstSegment *seg = gst_sample_get_segment(sample);
-        GstClockTime pts, dts;
+    gst_element_set_state(GST_ELEMENT(webrtc_entry->sendpipe),
+                          GST_STATE_NULL);
 
-        /* Convert the PTS/DTS to running time so they start from 0 */
-        pts = GST_BUFFER_PTS(buffer);
-        if (GST_CLOCK_TIME_IS_VALID(pts))
-            pts = gst_segment_to_running_time(seg, GST_FORMAT_TIME, pts);
-
-        dts = GST_BUFFER_DTS(buffer);
-        if (GST_CLOCK_TIME_IS_VALID(dts))
-            dts = gst_segment_to_running_time(seg, GST_FORMAT_TIME, dts);
-
-        if (buffer) {
-            /* Make writable so we can adjust the timestamps */
-            buffer = gst_buffer_copy(buffer);
-            GST_BUFFER_PTS(buffer) = pts;
-            GST_BUFFER_DTS(buffer) = dts;
-            g_signal_emit_by_name(appsrc, "push-buffer", buffer, &ret);
-            gst_buffer_unref(buffer);
-        }
-
-        /* we don't need the appsink sample anymore */
-        gst_sample_unref(sample);
+    bus = gst_pipeline_get_bus(GST_PIPELINE(webrtc_entry->sendpipe));
+    if (bus != NULL) {
+        gst_bus_remove_watch(bus);
+        gst_object_unref(bus);
     }
+
+    gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
+    gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
+    g_mutex_lock(&G_appsrc_lock);
+    G_AppsrcList = g_list_remove(G_AppsrcList, &webrtc_entry->send_avpair);
+    g_mutex_unlock(&G_appsrc_lock);
+    gst_object_unref(webrtc_entry->send_avpair.video_src);
+    gst_object_unref(webrtc_entry->send_avpair.audio_src);
 }
 
 void start_appsrc_webrtcbin(WebrtcItem *item) {
@@ -1200,11 +1428,7 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     gchar *cmdline = NULL;
     GstBus *bus = NULL;
     gchar *turn_srv = NULL;
-    GstElement *appsrc_vid, *appsrc_aid;
-    GstElement *video_sink, *audio_sink;
 
-    video_sink = gst_bin_get_by_name(GST_BIN(pipeline), "video_sink");
-    audio_sink = gst_bin_get_by_name(GST_BIN(pipeline), "audio_sink");
     gchar *webrtc_name = g_strdup_printf("webrtc_appsrc_%ld", item->hash_id);
     // vcaps = gst_caps_from_string("video/x-h264,stream-format=(string)avc,alignment=(string)au,width=(int)1280,height=(int)720,framerate=(fraction)30/1,profile=(string)main");
     // acaps = gst_caps_from_string("audio/x-opus, channels=(int)1,channel-mapping-family=(int)1");
@@ -1235,26 +1459,80 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     g_free(webrtc_name);
 
     webrtc_name = g_strdup_printf("video_%ld", item->hash_id);
-    appsrc_vid = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
+    item->send_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     g_free(webrtc_name);
 
-    g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
+    // g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
 
     webrtc_name = g_strdup_printf("audio_%ld", item->hash_id);
-    appsrc_aid = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
+    item->send_avpair.audio_src = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     g_free(webrtc_name);
 
-    g_signal_connect(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
+    // g_signal_conne/ct(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
+    g_mutex_lock(&G_appsrc_lock);
+    G_AppsrcList = g_list_append(G_AppsrcList, &item->send_avpair);
+    g_mutex_unlock(&G_appsrc_lock);
 
     bus = gst_pipeline_get_bus(GST_PIPELINE(item->sendpipe));
     gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
     gst_object_unref(bus);
+    gst_element_set_state(item->sendpipe, GST_STATE_READY);
+    create_data_channel((gpointer)item);
 
     item->record.get_rec_state = &get_record_state;
-    item->record.start = &udpsrc_cmd_rec_start;
-    item->record.stop = &udpsrc_cmd_rec_stop;
+    item->record.start = &appsrc_cmd_rec_start;
+    item->record.stop = &appsrc_cmd_rec_stop;
     item->recv.addremote = &start_recv_webrtcbin;
+    item->stop_webrtc = &stop_appsrc_webrtc;
+}
 
+static GstFlowReturn
+on_new_sample_from_sink(GstElement *elt, gpointer user_data) {
+    GstSample *sample;
+    GstFlowReturn ret;
+    gchar *sink_name = gst_element_get_name(elt);
+    // g_print("new sample from :%s\n", sink_name);
+    gboolean isVideo = g_str_has_prefix(sink_name, "video");
+    g_free(sink_name);
+
+    sample = gst_app_sink_pull_sample(GST_APP_SINK(elt));
+    ret = GST_FLOW_ERROR;
+    if (sample) {
+        GstBuffer *buffer = gst_sample_get_buffer(sample);
+        GstSegment *seg = gst_sample_get_segment(sample);
+        GstClockTime pts, dts;
+        ret = GST_FLOW_OK;
+
+        /* Convert the PTS/DTS to running time so they start from 0 */
+        pts = GST_BUFFER_PTS(buffer);
+        if (GST_CLOCK_TIME_IS_VALID(pts))
+            pts = gst_segment_to_running_time(seg, GST_FORMAT_TIME, pts);
+
+        dts = GST_BUFFER_DTS(buffer);
+        if (GST_CLOCK_TIME_IS_VALID(dts))
+            dts = gst_segment_to_running_time(seg, GST_FORMAT_TIME, dts);
+
+        if (buffer) {
+            /* Make writable so we can adjust the timestamps */
+            buffer = gst_buffer_copy(buffer);
+            GST_BUFFER_PTS(buffer) = pts;
+            GST_BUFFER_DTS(buffer) = dts;
+            GList *item;
+
+            g_mutex_lock(&G_appsrc_lock);
+            for (item = G_AppsrcList; item; item = item->next) {
+                AppSrcAVPair *pair = item->data;
+                g_signal_emit_by_name(isVideo ? pair->video_src : pair->audio_src, "push-buffer", buffer, &ret);
+            }
+            g_mutex_unlock(&G_appsrc_lock);
+
+            gst_buffer_unref(buffer);
+        }
+
+        /* we don't need the appsink sample anymore */
+        gst_sample_unref(sample);
+    }
+    return ret;
 }
 
 int start_av_appsink() {
@@ -1273,7 +1551,7 @@ int start_av_appsink() {
 
     /* Configure udpsink */
     g_object_set(video_sink, "sync", FALSE, "async", FALSE, "emit-signals", TRUE, NULL);
-    g_object_set(audio_sink, "sync", FALSE, "async", FALSE, "emit-signals", TRUE,NULL);
+    g_object_set(audio_sink, "sync", FALSE, "async", FALSE, "emit-signals", TRUE, NULL);
     g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
     g_object_set(audio_pay, "pt", 97, NULL);
     g_object_set(vqueue, "max-size-time", 100000000, NULL);
@@ -1311,6 +1589,12 @@ int start_av_appsink() {
     }
     gst_object_unref(GST_OBJECT(sink_apad));
     gst_object_unref(GST_OBJECT(src_apad));
+
+    g_mutex_init(&G_appsrc_lock);
+    g_signal_connect(audio_sink, "new-sample",
+                     (GCallback)on_new_sample_from_sink, NULL);
+    g_signal_connect(video_sink, "new-sample",
+                     (GCallback)on_new_sample_from_sink, NULL);
     return 0;
 }
 
@@ -1402,8 +1686,9 @@ int splitfile_sink() {
     GstElement *splitmuxsink, *h264parse, *vqueue;
     GstPad *src_pad, *queue_pad;
     GstPadLinkReturn lret;
+    gchar *tmpfile;
 
-    const gchar *outdir = g_strconcat(config_data.root_dir, "/mp4", NULL);
+    gchar *outdir = g_strconcat(config_data.root_dir, "/mp4", NULL);
     MAKE_ELEMENT_AND_ADD(splitmuxsink, "splitmuxsink");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
@@ -1413,16 +1698,18 @@ int splitfile_sink() {
         g_error("Failed to link elements splitmuxsink.\n");
         return -1;
     }
-
+    tmpfile = g_strconcat(outdir, "/segment-%05d.mp4", NULL);
     g_object_set(splitmuxsink,
                  "async-handling", TRUE,
                  "location",
-                 g_strconcat(outdir, "/segment-%05d.mp4", NULL),
+                 tmpfile,
                  //  "muxer", matroskamux,
                  //  "async-finalize", TRUE, "muxer-factory", "matroskamux",
                  "max-size-time", (guint64)600 * GST_SECOND, // 600000000000,
                  NULL);
+    g_free(tmpfile);
     _mkdir(outdir, 0755);
+    g_free(outdir);
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
     g_print("split file obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(vqueue, "sink");
@@ -1452,6 +1739,20 @@ int splitfile_sink() {
     return 0;
 }
 
+static void set_hlssink_object(GstElement *hlssink, gchar *outdir, gchar *location) {
+    gchar *tmp1, *tmp2;
+    tmp1 = g_strconcat(outdir, location, NULL);
+    tmp2 = g_strconcat(outdir, "/playlist.m3u8", NULL);
+    g_object_set(hlssink,
+                 "max-files", config_data.hls.files,
+                 "target-duration", config_data.hls.duration,
+                 "location", tmp1,
+                 "playlist-location", tmp2,
+                 NULL);
+    g_free(tmp1);
+    g_free(tmp2);
+}
+
 int av_hlssink() {
     GstElement *hlssink, *h264parse, *mpegtsmux, *vqueue;
     GstPad *src_pad, *queue_pad;
@@ -1459,7 +1760,7 @@ int av_hlssink() {
     if (!_check_initial_status())
         return -1;
 
-    const gchar *outdir = g_strconcat(config_data.root_dir, "/hls", NULL);
+    gchar *outdir = g_strconcat(config_data.root_dir, "/hls", NULL);
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
@@ -1470,15 +1771,10 @@ int av_hlssink() {
         return -1;
     }
     g_object_set(vqueue, "max-size-time", 100000000, NULL);
-    g_object_set(hlssink,
-                 "async-handling", TRUE,
-                 "max-files",
-                 config_data.hls.files,
-                 "target-duration", config_data.hls.duration,
-                 "location", g_strconcat(outdir, "/segment%05d.ts", NULL),
-                 "playlist-location", g_strconcat(outdir, "/playlist.m3u8", NULL),
-                 NULL);
+    set_hlssink_object(hlssink, outdir, "/segment%05d.ts");
+
     _mkdir(outdir, 0755);
+    g_free(outdir);
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
     g_print("av obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(vqueue, "sink");
@@ -1491,10 +1787,12 @@ int av_hlssink() {
     // add audio to muxer.
     if (audio_source != NULL) {
         GstPad *tee_pad;
-        GstElement *aqueue;
+        GstElement *aqueue,*opusparse;
 
         MAKE_ELEMENT_AND_ADD(aqueue, "queue");
-        if (!gst_element_link(aqueue, mpegtsmux)) {
+        MAKE_ELEMENT_AND_ADD(opusparse, "opusparse");
+
+        if (!gst_element_link_many(aqueue, opusparse, mpegtsmux,NULL)) {
             g_error("Failed to link elements audio to mpegtsmux.\n");
             return -1;
         }
@@ -1593,7 +1891,7 @@ int motion_hlssink() {
     if (!_check_initial_status())
         return -1;
 
-    const gchar *outdir = g_strconcat(config_data.root_dir, "/hls/motion", NULL);
+    gchar *outdir = g_strconcat(config_data.root_dir, "/hls/motion", NULL);
     if (gst_element_factory_find("vaapih264enc")) {
         MAKE_ELEMENT_AND_ADD(encoder, "vaapih264enc");
     } else {
@@ -1630,18 +1928,16 @@ int motion_hlssink() {
         }
     }
 
-    g_object_set(hlssink,
-                 "max-files", config_data.hls.files,
-                 "target-duration", config_data.hls.duration,
-                 "location", g_strconcat(outdir, "/motion-%05d.ts", NULL),
-                 "playlist-location", g_strconcat(outdir, "/playlist.m3u8", NULL),
-                 NULL);
+    set_hlssink_object(hlssink, outdir, "/segment%05d.ts");
+    gchar *tmp2;
+    tmp2 = g_strconcat(outdir, "/motioncells", NULL);
     g_object_set(motioncells,
                  // "postallmotion", TRUE,
-                 "datafile", g_strconcat(outdir, "/motioncells", NULL),
+                 "datafile", tmp2,
                  NULL);
-
+    g_free(tmp2);
     _mkdir(outdir, 0755);
+    g_free(outdir);
     src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
     g_print("motion obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
@@ -1661,7 +1957,7 @@ int cvtracker_hlssink() {
     if (!_check_initial_status())
         return -1;
 
-    const gchar *outdir = g_strconcat(config_data.root_dir, "/hls/cvtracker", NULL);
+    gchar *outdir = g_strconcat(config_data.root_dir, "/hls/cvtracker", NULL);
     if (gst_element_factory_find("vaapih264enc")) {
         MAKE_ELEMENT_AND_ADD(encoder, "vaapih264enc");
     } else {
@@ -1698,14 +1994,9 @@ int cvtracker_hlssink() {
         }
     }
 
-    g_object_set(hlssink,
-                 "max-files", config_data.hls.files,
-                 "target-duration", config_data.hls.duration,
-                 "location", g_strconcat(outdir, "/cvtracker-%05d.ts", NULL),
-                 "playlist-location", g_strconcat(outdir, "/playlist.m3u8", NULL),
-                 NULL);
-
+    set_hlssink_object(hlssink, outdir, "/cvtracker-%05d.ts");
     _mkdir(outdir, 0755);
+    g_free(outdir);
     src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
     g_print("cvtracker obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
@@ -1725,7 +2016,7 @@ int facedetect_hlssink() {
 
     if (!_check_initial_status())
         return -1;
-    const gchar *outdir = g_strconcat(config_data.root_dir, "/hls/face", NULL);
+    gchar *outdir = g_strconcat(config_data.root_dir, "/hls/face", NULL);
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
@@ -1763,17 +2054,13 @@ int facedetect_hlssink() {
             return -1;
         }
     }
+    set_hlssink_object(hlssink, outdir, "/face-%05d.ts");
 
-    g_object_set(hlssink,
-                 "max-files", config_data.hls.files,
-                 "target-duration", config_data.hls.duration,
-                 "location", g_strconcat(outdir, "/face-%05d.ts", NULL),
-                 "playlist-location", g_strconcat(outdir, "/playlist.m3u8", NULL),
-                 NULL);
     g_object_set(facedetect, "min-stddev", 24, "scale-factor", 2.8,
                  "eyes-profile", "/usr/share/opencv4/haarcascades/haarcascade_eye_tree_eyeglasses.xml", NULL);
 
     _mkdir(outdir, 0755);
+    g_free(outdir);
     src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
     g_print("face obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
@@ -1794,7 +2081,7 @@ int edgedect_hlssink() {
     if (!_check_initial_status())
         return -1;
 
-    const gchar *outdir = g_strconcat(config_data.root_dir, "/hls/edge", NULL);
+    gchar *outdir = g_strconcat(config_data.root_dir, "/hls/edge", NULL);
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
     MAKE_ELEMENT_AND_ADD(post_queue, "queue");
@@ -1833,16 +2120,11 @@ int edgedect_hlssink() {
             return -1;
         }
     }
-
-    g_object_set(hlssink,
-                 "max-files", config_data.hls.files,
-                 "target-duration", config_data.hls.duration,
-                 "location", g_strconcat(outdir, "/edge-%05d.ts", NULL),
-                 "playlist-location", g_strconcat(outdir, "/playlist.m3u8", NULL),
-                 NULL);
+    set_hlssink_object(hlssink, outdir, "/edge-%05d.ts");
     g_object_set(edgedetect, "threshold1", 80, "threshold2", 240, NULL);
 
     _mkdir(outdir, 0755);
+    g_free(outdir);
     src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
     g_print("edge obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
@@ -1866,6 +2148,7 @@ static void _initial_device() {
         _mkdir(dotdir, 0755);
         // https://gstreamer.freedesktop.org/documentation/gstreamer/running.html?gi-language=c
         g_setenv("GST_DEBUG_DUMP_DOT_DIR", dotdir, TRUE);
+        g_free(dotdir);
     }
 
     video_source = video_src();
@@ -1895,16 +2178,18 @@ static void _initial_device() {
 }
 
 GThread *start_inotify_thread(void) {
-    gchar *tmpath = NULL;
     GThread *tid = NULL;
-    char abpath[PATH_MAX] = {
-        0,
-    };
+    gchar *fullpath;
+    char abpath[PATH_MAX];
+
+    fullpath = g_strconcat(config_data.root_dir, "/hls/motion/motioncells-0.vamc", NULL);
     g_print("Starting inotify watch thread....\n");
-    realpath(g_strconcat(config_data.root_dir, "/hls/motion/motioncells-0.vamc", NULL), abpath);
-    tmpath = g_strdup(abpath);
-    tid = g_thread_new("_inotify_thread", _inotify_thread, tmpath);
-    g_free(tmpath);
+    if (!realpath(fullpath, abpath)) {
+        g_printerr("Get realpath of %s failed\n", fullpath);
+        return NULL;
+    }
+    g_free(fullpath);
+    tid = g_thread_new("_inotify_thread", _inotify_thread, g_strdup(abpath));
 
     return tid;
 }

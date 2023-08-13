@@ -146,10 +146,10 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
                     gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
             GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
                                       GST_DEBUG_GRAPH_SHOW_ALL, gst_element_state_get_name(new_state));
-            // if (new_state == GST_STATE_PLAYING) {
-            //     if (inotify_watch == NULL && config_data.app_sink && config_data.hls_onoff.motion_hlssink)
-            //         inotify_watch = start_inotify_thread();
-            // }
+            if (new_state == GST_STATE_PLAYING) {
+                if (inotify_watch == NULL && config_data.app_sink && config_data.hls_onoff.motion_hlssink && config_data.motion_rec)
+                    inotify_watch = start_inotify_thread();
+            }
             break;
         }
     default:
@@ -222,6 +222,7 @@ static void read_config_json(gchar *fullpath) {
     config_data.showdot = json_object_get_boolean_member_with_default(root_obj, "showdot", FALSE);
 
     config_data.rec_len = json_object_get_int_member_with_default(root_obj, "rec_len", 60);
+    config_data.motion_rec = json_object_get_boolean_member_with_default(root_obj, "motion_rec", FALSE);
 
     object = json_object_get_object_member(root_obj, "audio");
     config_data.audio.path = json_object_get_int_member_with_default(root_obj, "path", 0);
@@ -289,8 +290,11 @@ static gchar *_get_config_path() {
 
 int main(int argc, char *argv[]) {
     gchar *fullpath = _get_config_path();
-    if (fullpath != NULL)
+    if (fullpath != NULL){
         read_config_json(fullpath);
+        g_free(fullpath);
+    }
+
     _get_cpuid();
 
     signal(SIGINT, sigintHandler);
@@ -323,9 +327,15 @@ int main(int argc, char *argv[]) {
     }
 
     g_print("Starting loop.\n");
-    start_http(&start_appsrc_webrtcbin, config_data.http.port);
 
-    // start_http(&start_udpsrc_webrtcbin, config_data.http.port);
+    // webrtcbin priority use appsink.
+    if(config_data.app_sink)
+    {
+        start_http(&start_appsrc_webrtcbin, config_data.http.port);
+    } else {
+        start_http(&start_udpsrc_webrtcbin, config_data.http.port);
+    }
+
     g_main_loop_run(loop);
     gst_element_set_state(pipeline, GST_STATE_NULL);
 

@@ -10,27 +10,76 @@
   <meta id="theme-color" name="theme-color" content="#ffffff">
 
   <title>GStreamer webrtc camera</title>
-  <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
 
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet"
+  <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.2.3/css/bootstrap.min.css" rel="stylesheet"
     crossorigin="anonymous">
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"
+  <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.2.3/js/bootstrap.min.js"
     crossorigin="anonymous"></script>
   <!-- <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script> -->
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+    }
+
+    .container {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .visualizer {
+      height: 0%;
+    }
+
+
+    /* Adjustments for wider screens */
+    @media all and (min-width: 800px) {
+
+      /* Don't take all the space as readability is lost when line length
+     goes past a certain size */
+      .container {
+        width: 90%;
+        max-width: 1000px;
+        margin: 0 auto;
+      }
+    }
+  </style>
   <script>
     'use strict';
     var websocketConnection;
     var webrtcPeerConnection;
     var localpc;
     var localdc;
+    var localStream;
     var reportError;
     var startWatch;
     var startRecord;
     var enableTalk;
+    var sendVoice;
 
-    var isRecord = false;
-    var isTalk = false;
+    let isRecord = false;
+    let isTalk = false;
+    let isVoiceRecord = false;
+
+    let canvas;
+    let audioCtx;
+    let canvasCtx;
+
+    // senc voice
+    let lowWaterMark;
+    let highWaterMark;
+    const MAX_CHUNK_SIZE = 262144;
+    let chunkSize;
+    let mediaRecorder;
+
     // var vConsole = new window.VConsole();
     const turn_config = {
       'iceServers': [{
@@ -46,35 +95,54 @@
       }]
     };
 
-    function onIceCandidate(event) {
+    async function onIceCandidate(event) {
       if (event.candidate == null)
         return;
 
       // console.log("Sending ICE candidate out: " + JSON.stringify(event.candidate));
-      websocketConnection.send(JSON.stringify({ "type": "ice", "data": event.candidate }));
+      await websocketConnection.send(JSON.stringify({ "type": "ice", "data": event.candidate }));
     }
 
     function reportError(err) {
       console.error(err);
     }
 
+    function toggleCanvas(show) {
+      var vdom = document.getElementById('vis-dom');
+      if (show === 'none') {
+        vdom.style['height'] = '0%';
+      } else {
+        vdom.style['height'] = '10%';
+      }
+      vdom.style['display'] = show;
+      canvas.style['display'] = show;
+    }
+
+    function stopLocalMedia() {
+      if (localStream) {
+        localStream.getTracks().forEach((track) => {
+          track.stop();
+        });
+      }
+
+      localpc.getTransceivers().forEach((transceiver) => {
+        console.log("stop track.");
+        transceiver.stop();
+      });
+      localpc.getSenders().forEach((sender) => {
+        console.log("remove track.");
+        localpc.removeTrack(sender);
+      });
+      toggleCanvas('none');
+    }
+
     function createSender(stream) {
+      localStream = stream;
+      visualize(stream);
+      toggleCanvas('block');
       console.log("stream: " + JSON.stringify(stream));
       localpc = new RTCPeerConnection(turn_config);
-      localdc = localpc.createDataChannel("web page channel");
 
-      localdc.onmessage = (event) => {
-        console.log(`received: ${event.data}`);
-        // pc.close(); // We decided to close after the first received message
-      };
-
-      localdc.onopen = () => {
-        console.log("datachannel open");
-      };
-
-      localdc.onclose = () => {
-        console.log("datachannel close");
-      };
 
       stream.getTracks().forEach(function (track) {
         console.log("add track.");
@@ -89,7 +157,16 @@
       }).catch((err) => {
         console.log(" crete offer err: " + err);
       });
-      localpc.oniceconnectionstatechange = e => console.log(localpc.iceConnectionState)
+      localpc.oniceconnectionstatechange = e => {
+        console.log("send stream state change: " + localpc.iceConnectionState);
+        if (localpc.iceConnectionState == 'disconnected') {
+          stopLocalMedia();
+          isTalk = !isTalk
+          enableTalk.innerHTML = isTalk ? "Video off" : "Video on";
+          sendVoice.disabled = isTalk;
+          console.log("isTalk is: " + isTalk);
+        }
+      };
       localpc.onicecandidate = onIceCandidate;
       localpc.onsignalingstatechange = (ev) => {
         switch (localpc.signalingState) {
@@ -100,16 +177,25 @@
       };
     }
 
+
+
     // buttons control
     window.onload = function () {
       startWatch = document.getElementById('startWatch');
       startRecord = document.getElementById('startRecord');
       enableTalk = document.getElementById('enableTalk');
+      sendVoice = document.getElementById('sendVoice');
+
+      canvas = document.getElementById('visualizer');
+      canvasCtx = canvas.getContext('2d');
 
       startRecord.disabled = true;
       enableTalk.disabled = true;
+      sendVoice.disabled = true;
+      document.querySelector('.visualizer').style['display'] = "none";
 
       startWatch.addEventListener('click', (event) => {
+        event.preventDefault();
         console.log("start watch webrtc!!!");
         document.getElementById('loading').style['display'] = "block";
         startWatch.disabled = true;
@@ -119,94 +205,172 @@
         // media.peerconnection.turn.disable = false
 
         webrtcPeerConnection = new RTCPeerConnection(turn_config);
+
         webrtcPeerConnection.ontrack = onAddRemoteStream;
         webrtcPeerConnection.onicecandidate = onIceCandidate;
         webrtcPeerConnection.addTransceiver('video', { 'direction': 'sendrecv' });
         webrtcPeerConnection.addTransceiver('audio', { 'direction': 'sendrecv' });
         playStream(null, null, null);
 
-        startRecord.addEventListener('click', (event) => {
-          event.preventDefault();
-          console.log(startRecord.innerHTML + " on remote !!! " + isRecord);
-          isRecord = !isRecord;
+        localdc = webrtcPeerConnection.createDataChannel("web page channel", { ordered: true });
 
-          startRecord.innerHTML = isRecord ? "Stop Record" : "Start Record";
-          if (websocketConnection != undefined) {
-            websocketConnection.send(JSON.stringify({ "type": "cmd", "cmd": "record", "arg": isRecord ? "start" : "stop" }));
-          }
+        localdc.onmessage = (event) => {
+          console.log(`received: ${event.data}`);
+        };
 
-        });
-        enableTalk.addEventListener('click', (event) => {
-          console.log("enable talks now!!!");
-          if (isTalk) {
+        localdc.onopen = () => {
+          console.log("datachannel open -------------->");
+          // localdc.send("Hi, I'm browser!!!");
+        };
 
-            localpc.getTransceivers().forEach((transceiver) => {
-              console.log("stop track.");
-              transceiver.stop();
-            });
-            localpc.getSenders().forEach((sender) => {
-              console.log("remove track.");
-              localpc.removeTrack(sender);
-            });
-            localdc.send(JSON.stringify({ "type": "cmd", "cmd": "talk", "arg": "stop" }));
-            localpc.close();
-          } else {
-            // enableTalk.disabled = true;
-            // To get navigator.mediaDevices, https should be enabled if not opened on localhost.
-            navigator.mediaDevices.getUserMedia({
-              audio: true,
-              video: {
-                width: { min: 800, ideal: 1280, max: 1920 },
-                height: { min: 600, ideal: 720, max: 1080 },
-              }
-            }).then((stream) => {
-              createSender(stream);
-            }).catch((err) => {
-              console.log("Capture media error: " + err);
-            });
-          }
-          isTalk = !isTalk
-          enableTalk.innerHTML = isTalk ? "Talk off" : "Talk on";
-          event.preventDefault();
-        });
+        localdc.onclose = () => {
+          console.log("datachannel close");
+        };
+      });
+
+      startRecord.addEventListener('click', (event) => {
         event.preventDefault();
+        console.log(startRecord.innerHTML + " on remote !!! " + isRecord);
+        isRecord = !isRecord;
+        startRecord.innerHTML = isRecord ? "Stop Record" : "Start Record";
+        if (websocketConnection != undefined) {
+          websocketConnection.send(JSON.stringify({ "type": "cmd", "cmd": "record", "arg": isRecord ? "start" : "stop" }));
+        }
+
+      });
+
+
+      enableTalk.addEventListener('click', (event) => {
+        console.log("enable talks now!!!");
+        if (isTalk) {
+          toggleCanvas('none');
+          stopLocalMedia();
+          websocketConnection.send(JSON.stringify({ "type": "cmd", "cmd": "talk", "arg": "stop" }));
+          localStream = null;
+        } else {
+          // enableTalk.disabled = true;
+          // To get navigator.mediaDevices, https should be enabled if not opened on localhost.
+          navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: {
+              width: { min: 800, ideal: 1280, max: 1920 },
+              height: { min: 600, ideal: 720, max: 1080 },
+            }
+          }).then((stream) => {
+            createSender(stream);
+          }).catch((err) => {
+            console.log("Capture media error: " + err);
+          });
+        }
+        isTalk = !isTalk
+        enableTalk.innerHTML = isTalk ? "Video off" : "Video on";
+        sendVoice.disabled = isTalk;
+        event.preventDefault();
+      });
+
+      function startRecordVoice(stream) {
+        let chunks = [];
+        console.log(" start record from stream");
+        mediaRecorder = new MediaRecorder(stream);
+        console.log("support audio/ogg;codecs=opus ?  " + MediaRecorder.isTypeSupported('audio/ogg;codecs=opus'));
+
+        mediaRecorder.ondataavailable = (e) => {
+          chunks.push(e.data);
+        }
+
+        mediaRecorder.onstop = (e) => {
+          console.log("mediarecord on stop");
+          const blob = new Blob(chunks, { 'type': 'audio/ogg; codecs=opus' });
+          chunks = [];
+          chunkSize = Math.min(webrtcPeerConnection.sctp.maxMessageSize, 16384);
+          lowWaterMark = chunkSize;
+          highWaterMark = blob.size;
+          localdc.send(JSON.stringify({
+            "type": "cmd", "cmd": "sendfile",
+            "file": { 'type': 'audio/ogg; codecs=opus', 'size': blob.size,"name": "voice-"+ performance.now() + ".ogg"}
+          }));
+          // localdc.binaryType = 'arraybuffer';
+          localdc.bufferedAmountLowThreshold = lowWaterMark;
+
+          var fileReader = new FileReader();
+          let bufferedAmount = localdc.bufferedAmount;
+          let numberSendCalls = 0;
+          fileReader.onload = (e) => {
+            console.log("file read blob load len : " + e.target.result.byteLength);
+            while (bufferedAmount < highWaterMark) {
+              numberSendCalls += 1;
+              bufferedAmount += chunkSize;
+              bufferedAmount = bufferedAmount > highWaterMark ? bufferedAmount + (bufferedAmount - highWaterMark) : bufferedAmount + chunkSize;
+              const data = e.target.result.slice(localdc.bufferedAmount, bufferedAmount);
+              localdc.send(data);
+            }
+
+          };
+          fileReader.readAsArrayBuffer(blob);
+        };
+        mediaRecorder.start();
+      }
+
+
+      sendVoice.addEventListener('click', (event) => {
+        event.preventDefault();
+        if (isVoiceRecord) {
+          console.log(" stop record voice.");
+          mediaRecorder.stop();
+          toggleCanvas('none');
+          // send blob data;
+        } else {
+          console.log("start to record voice...");
+          navigator.mediaDevices.getUserMedia({
+            audio: true,
+          }).then((stream) => {
+            toggleCanvas('block');
+            visualize(stream);
+            startRecordVoice(stream);
+          }).catch((err) => {
+            console.log("Capture media error: " + err);
+          });
+        }
+
+        isVoiceRecord = !isVoiceRecord;
+        sendVoice.innerHTML = isVoiceRecord ? "Send Voice" : "Start Voice";
+        enableTalk.disabled = isVoiceRecord;
       });
     }
 
-
     // recvonly webrtc
-    function onLocalDescription(desc) {
+    async function onLocalDescription(desc) {
       console.log("Local description: " + JSON.stringify(desc));
-      webrtcPeerConnection.setLocalDescription(desc).then(function () {
+      await webrtcPeerConnection.setLocalDescription(desc).then(function () {
         websocketConnection.send(JSON.stringify({ type: "sdp", "data": webrtcPeerConnection.localDescription }));
       }).catch(reportError);
     }
 
 
-    function onIncomingSDP(sdp) {
+    async function onIncomingSDP(sdp) {
       console.log("Incoming SDP: " + JSON.stringify(sdp));
       if (sdp.type === "offer") {
-        webrtcPeerConnection.setRemoteDescription(sdp).catch(reportError);
+        await webrtcPeerConnection.setRemoteDescription(sdp).catch(reportError);
         webrtcPeerConnection.createAnswer().then(onLocalDescription).catch(reportError);
       } else {
         // console.log("answser Sdp: " + sdp.sdp);
-        localpc.setRemoteDescription(sdp).catch(reportError);
+        await localpc.setRemoteDescription(sdp).catch(reportError);
       }
     }
 
 
-    function onIncomingICE(ice) {
+    async function onIncomingICE(ice) {
       var candidate = new RTCIceCandidate(ice);
       if (startRecord.disabled == false && localpc) {
         console.log("answer Incoming ICE: " + JSON.stringify(ice));
-        localpc.addIceCandidate(candidate).catch(reportError);
+        await localpc.addIceCandidate(candidate).catch(reportError);
       } else {
-        webrtcPeerConnection.addIceCandidate(candidate).catch(reportError);
+        await webrtcPeerConnection.addIceCandidate(candidate).catch(reportError);
       }
     }
 
     function recordCallBack(data) {
-      // alert("Recording thread is already running!!!");
+      alert("Recording thread is already running!!!");
       isRecord = false;
       startRecord.innerHTML = isRecord ? "Stop Record" : "Start Record";
     }
@@ -219,14 +383,17 @@
       el.controls = true
 
       // enable other two buttons
-      startRecord.disabled = false;
-      startRecord.classList.remove('btn-light');
-      startRecord.classList.add('btn-info');
+      changeButtonState(startRecord, false);
+      changeButtonState(enableTalk, false);
+      changeButtonState(sendVoice, false);
 
-      enableTalk.disabled = false;
-      enableTalk.classList.remove('btn-light');
-      enableTalk.classList.add('btn-info');
       document.getElementById('loading').style['display'] = "none";
+    }
+
+    function changeButtonState(target, flag) {
+      target.disabled = flag;
+      target.classList.remove('btn-light');
+      target.classList.add('btn-info');
     }
 
     function onServerMessage(event) {
@@ -241,7 +408,6 @@
 
       if (msg.record)
         return recordCallBack(msg.record);
-
 
       switch (msg.type) {
         case "sdp": onIncomingSDP(msg.data); break;
@@ -262,6 +428,63 @@
       websocketConnection = new WebSocket(wsUrl);
       websocketConnection.addEventListener("message", onServerMessage);
     }
+
+    // visualizer handle
+    function visualize(stream) {
+      if (!audioCtx) {
+        audioCtx = new AudioContext();
+      }
+
+      const source = audioCtx.createMediaStreamSource(stream);
+
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      source.connect(analyser);
+      //analyser.connect(audioCtx.destination);
+
+      draw()
+
+      function draw() {
+        const WIDTH = canvas.width
+        const HEIGHT = canvas.height;
+
+        requestAnimationFrame(draw);
+
+        analyser.getByteTimeDomainData(dataArray);
+
+        canvasCtx.fillStyle = 'rgb(200, 200, 200)';
+        canvasCtx.fillRect(0, 0, WIDTH, HEIGHT);
+
+        canvasCtx.lineWidth = 2;
+        canvasCtx.strokeStyle = 'rgb(0, 0, 0)';
+
+        canvasCtx.beginPath();
+
+        let sliceWidth = WIDTH * 1.0 / bufferLength;
+        let x = 0;
+
+
+        for (let i = 0; i < bufferLength; i++) {
+
+          let v = dataArray[i] / 128.0;
+          let y = v * HEIGHT / 2;
+
+          if (i === 0) {
+            canvasCtx.moveTo(x, y);
+          } else {
+            canvasCtx.lineTo(x, y);
+          }
+
+          x += sliceWidth;
+        }
+
+        canvasCtx.lineTo(canvas.width, canvas.height / 2);
+        canvasCtx.stroke();
+      }
+    }
   </script>
 </head>
 
@@ -275,11 +498,17 @@
           <span class="visually-hidden">Loading...</span>
         </div>
       </div>
-      <div class="mt-3">
-        <button type="button" class="btn btn-info" id="startWatch">Start</button>
-        <button type="button" class="btn btn-light" id="startRecord">Start Record</button>
-        <button type="button" class="btn btn-light" id="enableTalk">Talk on</button>
+      <div class="visualizer w-100 d-flex justify-content-center my-2" id="vis-dom">
+        <canvas class="w-75" id="visualizer"></canvas>
       </div>
+      <section class="main-controls">
+        <div class="mt-3" id="buttons">
+          <button type="button" class="btn btn-info" id="startWatch">Start</button>
+          <button type="button" class="btn btn-light" id="startRecord">Start Record</button>
+          <button type="button" class="btn btn-light" id="enableTalk">Video on</button>
+          <button type="button" class="btn btn-light" id="sendVoice">Start Voice</button>
+        </div>
+      </section>
     </div>
   </div>
 </body>

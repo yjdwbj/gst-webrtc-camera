@@ -61,6 +61,7 @@ struct _GstConfigData {
         int buf_time;
     } audio;
     int rec_len; // motion detect record duration, seconds.
+    gboolean motion_rec;
     struct _webrtc webrtc;
 };
 

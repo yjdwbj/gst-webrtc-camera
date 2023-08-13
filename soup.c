@@ -49,7 +49,7 @@ static void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
     gst_promise_unref(local_desc_promise);
 
     sdp_string = gst_sdp_message_as_text(offer->sdp);
-    g_print("Negotiation offer created:\n%s\n", sdp_string);
+    GST_DEBUG("Negotiation offer created:\n%s\n", sdp_string);
 
     sdp_json = json_object_new();
     json_object_set_string_member(sdp_json, "type", "sdp");
@@ -221,7 +221,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
     if (json_object_has_member(root_json_object, "cmd")) {
         const gchar *cmd_type_string;
         const gchar *cmd_data;
-        cmd_type_string = json_object_get_string_member(root_json_object, "cmd");
+        cmd_type_string = json_object_get_string_member(root_json_object, type_string);
         if (!g_strcmp0(cmd_type_string, "record")) {
             cmd_data = json_object_get_string_member(root_json_object, "arg");
             if (!g_strcmp0(cmd_data, "start")) {
@@ -242,6 +242,17 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
                 webrtc_entry->record.start((gpointer)&webrtc_entry->record);
             } else {
                 webrtc_entry->record.stop((gpointer)&webrtc_entry->record);
+            }
+            goto cleanup;
+        } else if (!g_strcmp0(cmd_type_string, "talk")) {
+            cmd_data = json_object_get_string_member(root_json_object, "arg");
+            if (!g_strcmp0(cmd_data, "stop")) {
+
+                if (webrtc_entry->recv.stop_recv) {
+                    webrtc_entry->recv.stop_recv(&webrtc_entry->recv);
+                    g_print("stop recv stream \n");
+                    goto cleanup;
+                }
             }
             goto cleanup;
         }
@@ -265,6 +276,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         }
         sdp_type_string = json_object_get_string_member(data_json_object, "type");
 
+        // receive remote browser mediastream.
         if (g_strcmp0(sdp_type_string, "answer") != 0) {
             GST_DEBUG("Expected SDP message type \"answer\", got \"%s\"\n",
                       sdp_type_string);
@@ -290,7 +302,8 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         }
         sdp_string = json_object_get_string_member(data_json_object, "sdp");
 
-        gst_print("Received SDP:\n%s\n", sdp_string);
+        gst_print("Received SDP:\n");
+        // gst_print("Received SDP:\n%s\n", sdp_string);
 
         ret = gst_sdp_message_new(&sdp);
         g_assert_cmphex(ret, ==, GST_SDP_OK);
@@ -334,7 +347,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         candidate_string = json_object_get_string_member(data_json_object,
                                                          "candidate");
 
-        g_print("Received ICE candidate with mline index %u; candidate: %s\n",
+        GST_DEBUG("Received ICE candidate with mline index %u; candidate: %s\n",
                   mline_index, candidate_string);
 
         if (webrtc_entry->recv.recvbin) {
@@ -417,7 +430,7 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     CustomSoupData *data = (CustomSoupData *)user_data;
 
     GHashTable *webrtc_connected_table = data->webrtc_connected_table;
-    GST_DEBUG("Processing new websocket connection %p \n", (gpointer)connection);
+    g_print("Processing new websocket connection %p \n", (gpointer)connection);
 
     g_signal_connect(G_OBJECT(connection), "closed",
                      G_CALLBACK(soup_websocket_closed_cb), (gpointer)webrtc_connected_table);
@@ -431,7 +444,6 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                      G_CALLBACK(soup_websocket_message_cb), (gpointer)webrtc_entry);
 
     data->fn(webrtc_entry);
-    // gst_util_set_object_arg(G_OBJECT(item_entry->webrtcbin), "bundle-policy", "max-bundle");
 
     g_signal_connect(webrtc_entry->sendbin, "on-negotiation-needed",
                      G_CALLBACK(on_negotiation_needed_cb), (gpointer)webrtc_entry);
@@ -450,18 +462,8 @@ static void destroy_webrtc_table(gpointer entry_ptr) {
     GstBus *bus;
     g_assert(webrtc_entry != NULL);
 
-    if (webrtc_entry->sendpipe != NULL) {
-        gst_element_set_state(GST_ELEMENT(webrtc_entry->sendpipe),
-                              GST_STATE_NULL);
-
-        bus = gst_pipeline_get_bus(GST_PIPELINE(webrtc_entry->sendpipe));
-        if (bus != NULL) {
-            gst_bus_remove_watch(bus);
-            gst_object_unref(bus);
-        }
-
-        gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
-        gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
+    if (webrtc_entry->sendpipe != NULL && webrtc_entry->stop_webrtc != NULL) {
+        webrtc_entry->stop_webrtc(webrtc_entry);
     }
 
     if (webrtc_entry->record.pipeline != NULL) {
