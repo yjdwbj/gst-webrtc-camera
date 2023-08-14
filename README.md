@@ -7,7 +7,19 @@
 
 ## pipeline workflow
 
-* ![readme.svg](readme.svg)
-* ![playing.png](playing.png)
-* ![webrtcbin.png](webrtcbin.png)
-* ![udpsrc.png](udpsrc.png)
+
+  ![readme.svg](readme.svg)
+---
+* Playing diagram
+ ![playing.png](playing.png)
+---
+* Webrtcbin diagram
+ ![webrtcbin.png](webrtcbin.png)
+ ![udpsrc.png](udpsrc.png)
+---
+* sequence diagram
+ ![request](request.svg)
+
+## webrtc complete diagram
+
+ ![webrtc-complete-diagram.png](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Connectivity/webrtc-complete-diagram.png)

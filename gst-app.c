@@ -537,6 +537,7 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     RecordItem *item = (RecordItem *)user_data;
     gchar *timestr = NULL;
     gchar *cmdline = NULL;
+    GstBus *bus = NULL;
     gchar *today = get_today_str();
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
@@ -553,12 +554,14 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     g_free(filename);
     g_free(timestr);
 
-    gchar *audio_src = g_strdup_printf("udpsrc port=6001 name=audio_save  ! "
+    gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
                                        " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay ! opusparse ! queue ! mux.");
-    gchar *video_src = g_strdup_printf("udpsrc port=6000  name=video_save ! "
+                                       " rtpopusdepay ! opusparse ! queue ! mux.",
+                                       config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  name=video_save ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! queue ! mux. ");
+                                       " rtph264depay ! h264parse ! queue ! mux. ",
+                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr);
     cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
     g_free(fullpath);
     g_free(outdir);
@@ -567,6 +570,9 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     g_free(video_src);
 
     item->pipeline = gst_parse_launch(cmdline, NULL);
+    bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
+    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
+    gst_object_unref(bus);
     g_free(cmdline);
     gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
 }
@@ -603,6 +609,7 @@ static int start_udpsrc_rec(gpointer user_data) {
     gchar *fullpath;
     gchar *timestr = NULL;
     gchar *cmdline = NULL;
+    GstBus *bus = NULL;
     gchar *today = get_today_str();
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
@@ -619,12 +626,14 @@ static int start_udpsrc_rec(gpointer user_data) {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(outdir);
 
-    gchar *audio_src = g_strdup_printf("udpsrc port=6001 name=audio_save  ! "
+    gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
                                        " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay ! opusparse ! queue ! mux.");
-    gchar *video_src = g_strdup_printf("udpsrc port=6000  name=video_save ! "
+                                       " rtpopusdepay ! opusparse ! queue ! mux.",
+                                       config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  name=video_save ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! queue ! mux. ");
+                                       " rtph264depay ! h264parse ! queue ! mux. ",
+                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr);
     cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
     g_free(fullpath);
     g_print("record cmdline: %s \n", cmdline);
@@ -632,6 +641,9 @@ static int start_udpsrc_rec(gpointer user_data) {
     g_free(video_src);
 
     rec_pipeline = gst_parse_launch(cmdline, NULL);
+    bus = gst_pipeline_get_bus(GST_PIPELINE(rec_pipeline));
+    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
+    gst_object_unref(bus);
     g_free(cmdline);
     gst_element_set_state(rec_pipeline, GST_STATE_PLAYING);
     g_timeout_add_once(record_time * 1000, (GSourceOnceFunc)stop_udpsrc_rec, rec_pipeline);

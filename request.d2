@@ -1,0 +1,34 @@
+shape: sequence_diagram
+
+client.style: {
+  stroke: red
+  stroke-dash: 0
+}
+
+
+client -> websrv(libsoup): brower http get request
+websrv(libsoup) -> client: webrtc.html websockets inside javascript
+client -> websocket(libsoup): connect to websocket server
+websocket(libsoup) -> gst-webrtc-camera: websocket and gst-webrtc-camera runnig same process.
+gst-webrtc-camera -> gst-webrtc-camera: create webrtcbin , connect  on-negotiation-needed signal
+gst-webrtc-camera -> gst-webrtc-camera: on offer created , set local description
+gst-webrtc-camera -> websocket(libsoup): send offer sdp to signal channel
+websocket(libsoup) -> client: send offer sdp to peer
+client -> websocket(libsoup): send answer sdp to signal channel
+websocket(libsoup) -> gst-webrtc-camera: send answer sdp to peer
+
+gst-webrtc-camera -> STUN: Who am I?
+STUN -> gst-webrtc-camera : Symmetric NAT
+gst-webrtc-camera -> TURN: Channel please
+gst-webrtc-camera -> websocket(libsoup): ICE candidate from camera
+websocket(libsoup) -> client: ICE candidate from camera
+
+client -> STUN: Who am I?
+STUN -> client : Symmetric NAT
+client -> websocket(libsoup): ICE candidate from client browser
+websocket(libsoup) -> gst-webrtc-camera: ICE candidate from client browser
+
+gst-webrtc-camera.style: {
+  stroke: red
+  stroke-dash: 0
+}
