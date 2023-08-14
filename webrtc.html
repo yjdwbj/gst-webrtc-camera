@@ -16,7 +16,7 @@
 
   <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.2.3/js/bootstrap.min.js"
     crossorigin="anonymous"></script>
-  <!-- <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script> -->
+  <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
   <style>
     * {
       margin: 0;
@@ -73,14 +73,15 @@
     let audioCtx;
     let canvasCtx;
 
-    // senc voice
+    // send record voice
     let lowWaterMark;
     let highWaterMark;
-    const MAX_CHUNK_SIZE = 262144;
+    const MAX_CHUNK_SIZE = 65536;
     let chunkSize;
     let mediaRecorder;
+    let elapseTimer;
 
-    // var vConsole = new window.VConsole();
+    var vConsole = new window.VConsole();
     const turn_config = {
       'iceServers': [{
         urls: 'turn:192.168.1.100:3478',
@@ -91,9 +92,27 @@
 
     const stun_config = {
       'iceServers': [{
-        urls: 'turn:stunserver.stunprotocol.org:3478'
+        urls: 'stun:stunserver.stunprotocol.org:3478'
       }]
     };
+    const supportedConstraints = navigator.mediaDevices.getSupportedConstraints();
+    const video_traints = {
+      audio: true,
+      video: {
+        width: { min: 800, ideal: 1280, max: 1920 },
+        height: { min: 600, ideal: 720, max: 1080 },
+      },
+      noiseSuppression: true,
+      echoCancellation: true
+    };
+
+    const audio_traints = {
+      audio: true,
+      video: false,
+      noiseSuppression: true,
+      echoCancellation: true
+    };
+
 
     async function onIceCandidate(event) {
       if (event.candidate == null)
@@ -141,7 +160,7 @@
       visualize(stream);
       toggleCanvas('block');
       console.log("stream: " + JSON.stringify(stream));
-      localpc = new RTCPeerConnection(turn_config);
+      localpc = new RTCPeerConnection(stun_config);
 
 
       stream.getTracks().forEach(function (track) {
@@ -161,7 +180,10 @@
         console.log("send stream state change: " + localpc.iceConnectionState);
         if (localpc.iceConnectionState == 'disconnected') {
           stopLocalMedia();
-          isTalk = !isTalk
+          isTalk = false;
+          enableTalk.innerHTML = isTalk ? "Video off" : "Video on";
+          sendVoice.disabled = isTalk;
+
           enableTalk.innerHTML = isTalk ? "Video off" : "Video on";
           sendVoice.disabled = isTalk;
           console.log("isTalk is: " + isTalk);
@@ -204,7 +226,7 @@
         // On firefox browser needed set media.peerconnection.use_document_iceservers = false
         // media.peerconnection.turn.disable = false
 
-        webrtcPeerConnection = new RTCPeerConnection(turn_config);
+        webrtcPeerConnection = new RTCPeerConnection(stun_config);
 
         webrtcPeerConnection.ontrack = onAddRemoteStream;
         webrtcPeerConnection.onicecandidate = onIceCandidate;
@@ -250,13 +272,7 @@
         } else {
           // enableTalk.disabled = true;
           // To get navigator.mediaDevices, https should be enabled if not opened on localhost.
-          navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: {
-              width: { min: 800, ideal: 1280, max: 1920 },
-              height: { min: 600, ideal: 720, max: 1080 },
-            }
-          }).then((stream) => {
+          navigator.mediaDevices.getUserMedia(video_traints).then((stream) => {
             createSender(stream);
           }).catch((err) => {
             console.log("Capture media error: " + err);
@@ -267,6 +283,15 @@
         sendVoice.disabled = isTalk;
         event.preventDefault();
       });
+
+      function format(seconds) {
+        var numhours = parseInt(Math.floor(((seconds % 31536000) % 86400) / 3600), 10);
+        var numminutes = parseInt(Math.floor((((seconds % 31536000) % 86400) % 3600) / 60), 10);
+        var numseconds = parseInt((((seconds % 31536000) % 86400) % 3600) % 60, 10);
+        return ((numhours < 10) ? "0" + numhours : numhours)
+          + ":" + ((numminutes < 10) ? "0" + numminutes : numminutes)
+          + ":" + ((numseconds < 10) ? "0" + numseconds : numseconds);
+      }
 
       function startRecordVoice(stream) {
         let chunks = [];
@@ -287,7 +312,7 @@
           highWaterMark = blob.size;
           localdc.send(JSON.stringify({
             "type": "cmd", "cmd": "sendfile",
-            "file": { 'type': 'audio/ogg; codecs=opus', 'size': blob.size,"name": "voice-"+ performance.now() + ".ogg"}
+            "file": { 'type': 'audio/ogg; codecs=opus', 'size': blob.size, "name": "voice-" + performance.now() + ".ogg" }
           }));
           // localdc.binaryType = 'arraybuffer';
           localdc.bufferedAmountLowThreshold = lowWaterMark;
@@ -311,22 +336,42 @@
         mediaRecorder.start();
       }
 
+      function makeElapseTimer(startDate) {
+        var currDate = new Date();
+        var diff = currDate - startDate;
+        document.getElementById("elapse").innerHTML = format(diff / 1000);
+      }
+
+      function toggleElapseTimer(toStart) {
+        if (toStart) {
+          const nowDate = new Date();
+          elapseTimer = setInterval(makeElapseTimer.bind(this, nowDate), 1000);
+        } else {
+          clearInterval(elapseTimer);
+          document.getElementById("elapse").innerHTML = "00:00:00";
+        }
+        document.getElementById("elapse").style['display'] = toStart ? 'block' : 'none';
+      }
 
       sendVoice.addEventListener('click', (event) => {
         event.preventDefault();
         if (isVoiceRecord) {
           console.log(" stop record voice.");
           mediaRecorder.stop();
+          toggleElapseTimer(false);
           toggleCanvas('none');
           // send blob data;
         } else {
           console.log("start to record voice...");
-          navigator.mediaDevices.getUserMedia({
-            audio: true,
-          }).then((stream) => {
+          navigator.mediaDevices.getUserMedia(audio_traints).then((stream) => {
             toggleCanvas('block');
             visualize(stream);
             startRecordVoice(stream);
+            sendVoice.disabled = true;
+            toggleElapseTimer(true);
+            setTimeout(() => {
+              sendVoice.disabled = false;
+            }, 2000);
           }).catch((err) => {
             console.log("Capture media error: " + err);
           });
@@ -450,11 +495,8 @@
       function draw() {
         const WIDTH = canvas.width
         const HEIGHT = canvas.height;
-
         requestAnimationFrame(draw);
-
         analyser.getByteTimeDomainData(dataArray);
-
         canvasCtx.fillStyle = 'rgb(200, 200, 200)';
         canvasCtx.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -466,18 +508,14 @@
         let sliceWidth = WIDTH * 1.0 / bufferLength;
         let x = 0;
 
-
         for (let i = 0; i < bufferLength; i++) {
-
           let v = dataArray[i] / 128.0;
           let y = v * HEIGHT / 2;
-
           if (i === 0) {
             canvasCtx.moveTo(x, y);
           } else {
             canvasCtx.lineTo(x, y);
           }
-
           x += sliceWidth;
         }
 
@@ -501,6 +539,7 @@
       <div class="visualizer w-100 d-flex justify-content-center my-2" id="vis-dom">
         <canvas class="w-75" id="visualizer"></canvas>
       </div>
+      <div id="elapse"></div>
       <section class="main-controls">
         <div class="mt-3" id="buttons">
           <button type="button" class="btn btn-info" id="startWatch">Start</button>

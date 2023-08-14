@@ -236,12 +236,7 @@ static GstElement *audio_src() {
         return NULL;
     }
 
-    // g_object_set(source, "do-timestamp", TRUE, NULL);
-    // g_object_set(source, "do-timestamp", TRUE, "wave", 2, NULL);
-    // g_object_set(queue, "max-size-buffers", 1, "leaky",2, NULL);
-
     gst_bin_add_many(GST_BIN(pipeline), source, teesrc, srcvconvert, enc, resample, NULL);
-
     if (!gst_element_link_many(source, srcvconvert, resample, enc, teesrc, NULL)) {
         g_error("Failed to link elements audio src.\n");
         return NULL;
@@ -709,6 +704,38 @@ on_ice_gathering_state_notify(GstElement *webrtcbin, GParamSpec *pspec,
     g_free(biname);
 }
 
+static void
+on_peer_connection_state_notify(GstElement *webrtcbin, GParamSpec *pspec,
+                                gpointer user_data) {
+    GstWebRTCPeerConnectionState ice_gather_state;
+    const gchar *new_state = "unknown";
+    gchar *biname = gst_element_get_name(webrtcbin);
+
+    g_object_get(webrtcbin, "connection-state", &ice_gather_state, NULL);
+    switch (ice_gather_state) {
+    case GST_WEBRTC_PEER_CONNECTION_STATE_NEW:
+        new_state = "new";
+        break;
+    case GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTING:
+        new_state = "connecting";
+        break;
+    case GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED:
+        new_state = "connected";
+        break;
+    case GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED:
+        new_state = "disconnected";
+        break;
+    case GST_WEBRTC_PEER_CONNECTION_STATE_FAILED:
+        new_state = "failed";
+        break;
+    case GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED:
+        new_state = "closed";
+        break;
+    }
+    gst_print("%s webrtc connection state changed to %s\n", biname, new_state);
+    g_free(biname);
+}
+
 void appsrc_cmd_rec_stop(gpointer user_data) {
     RecordItem *item = (RecordItem *)user_data;
     GstBus *bus;
@@ -942,7 +969,7 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     name = gst_structure_get_string(structure, "media");
     encode_name = gst_structure_get_string(structure, "encoding-name");
 
-#if 1
+#if 0
     gchar *caps_str = gst_caps_to_string(caps);
     GST_DEBUG("name: %s, caps size: %d, caps : %s \n", name, gst_caps_get_size(caps), caps_str);
     g_free(caps_str);
@@ -950,11 +977,10 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     gst_caps_unref(caps);
     if (g_strcmp0(name, "audio") == 0) {
         if (g_strcmp0(encode_name, "OPUS") == 0) {
-            desc = g_strdup_printf(" rtpopusdepay ! opusdec ! queue ! audioconvert ! audioresample ! autoaudiosink");
+            desc = g_strdup_printf(" rtpopusdepay ! opusdec ! queue !  audioconvert  ! webrtcechoprobe ! autoaudiosink");
         } else {
-            desc = g_strdup_printf(" decodebin ! queue ! audioconvert ! audioresample ! autoaudiosink");
+            desc = g_strdup_printf(" decodebin ! queue ! audioconvert  ! webrtcechoprobe  ! autoaudiosink");
         }
-
         playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
         g_free(desc);
         gst_bin_add(GST_BIN(pipe), playbin);
@@ -988,16 +1014,6 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
 
     ret = gst_pad_link(pad, playbin->sinkpads->data);
     g_assert_cmphex(ret, ==, GST_PAD_LINK_OK);
-}
-
-static void
-on_remove_decodebin_stream(GstElement *srcbin, GstPad *pad,
-                           GstElement *pipe) {
-    gchar *name = gst_pad_get_name(pad);
-    g_print("pad removed %s !!! \n", name);
-    gst_bin_remove(GST_BIN_CAST(pipe), srcbin);
-    gst_element_set_state(srcbin, GST_STATE_NULL);
-    g_free(name);
 }
 
 static GObject *send_channel, *receive_channel;
@@ -1070,17 +1086,19 @@ static void stop_recv_webrtc(gpointer user_data) {
         gst_object_unref(bus);
     }
 
-    gst_object_unref(GST_OBJECT(recv_entry->recvpipe));
+    gst_object_unref(recv_entry->recvpipe);
     recv_entry->stop_recv = NULL;
     recv_entry->recvpipe = NULL;
 }
 
+#if 0
 static void
 data_channel_on_buffered_amound_low(GObject *channel, gpointer user_data) {
     GstWebRTCDataChannelState state;
     g_object_get(channel, "ready-state", &state, NULL);
     g_print("receive data_channel_on_buffered_amound_low channel state:%d \n", state);
 }
+#endif
 
 static void
 play_voice(gpointer user_data) {
@@ -1088,7 +1106,7 @@ play_voice(gpointer user_data) {
     GstBus *bus;
     GstMessage *msg;
     GstElement *playline;
-    gchar *cmdline = g_strdup_printf("filesrc location=%s ! decodebin ! audioconvert ! audioresample ! autoaudiosink", item_entry->dcfile.filename);
+    gchar *cmdline = g_strdup_printf("filesrc location=%s ! decodebin ! audioconvert ! autoaudiosink", item_entry->dcfile.filename);
     g_print("play cmdline : %s\n", cmdline);
     playline = gst_parse_launch(cmdline, NULL);
     g_free(cmdline);
@@ -1126,16 +1144,18 @@ play_voice(gpointer user_data) {
     gst_object_unref(bus);
 
     remove(item_entry->dcfile.filename);
-    g_free(item_entry->dcfile.filename);
+    if (item_entry->dcfile.filename != NULL)
+    {
+        g_free(item_entry->dcfile.filename);
+        item_entry->dcfile.filename = NULL;
+    }
 }
 
 static void
 data_channel_on_message_data(GObject *channel, GBytes *bytes, gpointer user_data) {
-    GstWebRTCDataChannelState state;
     gsize size;
     const gchar *data;
     WebrtcItem *item_entry = (WebrtcItem *)user_data;
-    g_object_get(channel, "ready-state", &state, NULL);
     if (item_entry->dcfile.fd > 0) {
         if (item_entry->dcfile.pos != item_entry->dcfile.fsize) {
             data = g_bytes_get_data(bytes, &size);
@@ -1143,7 +1163,8 @@ data_channel_on_message_data(GObject *channel, GBytes *bytes, gpointer user_data
             item_entry->dcfile.pos += size;
             if (item_entry->dcfile.pos == item_entry->dcfile.fsize) {
                 close(item_entry->dcfile.fd);
-                g_timeout_add_once(100, (GSourceOnceFunc)play_voice, user_data);
+                // g_timeout_add_once(50, (GSourceOnceFunc)play_voice, user_data);
+                g_thread_new("play_voice", (GThreadFunc)play_voice, user_data);
             }
         }
     }
@@ -1156,10 +1177,12 @@ data_channel_on_message_string(GObject *dc, gchar *str, gpointer user_data) {
     JsonParser *json_parser = NULL;
     const gchar *type_string;
     WebrtcItem *item_entry = (WebrtcItem *)user_data;
+    // direct use str will occur malloc_consolidate(): unaligned fastbin chunk detected.
+    gchar *tmp_str = g_strdup(str);
 
-    gst_print("Received data channel message: %s\n", str);
+    // gst_print("Received data channel message: %s\n", tmp_str);
     json_parser = json_parser_new();
-    if (!json_parser_load_from_data(json_parser, str, -1, NULL))
+    if (!json_parser_load_from_data(json_parser, tmp_str, -1, NULL))
         goto unknown_message;
 
     root_json = json_parser_get_root(json_parser);
@@ -1192,12 +1215,13 @@ data_channel_on_message_string(GObject *dc, gchar *str, gpointer user_data) {
         }
     }
 cleanup:
+    g_free(tmp_str);
     if (json_parser != NULL)
         g_object_unref(G_OBJECT(json_parser));
     return;
 
 unknown_message:
-    g_print("Unknown message \"%s\", ignoring\n", str);
+    g_print("Unknown message \"%s\", ignoring\n", tmp_str);
     goto cleanup;
 }
 
@@ -1213,10 +1237,11 @@ connect_data_channel_signals(GObject *data_channel, gpointer user_data) {
                      G_CALLBACK(data_channel_on_message_string), user_data);
     g_signal_connect(data_channel, "on-message-data",
                      G_CALLBACK(data_channel_on_message_data), user_data);
-
-    g_object_set(data_channel, "buffered-amount-low-threshold", TRUE, NULL);
+#if 0
+    g_object_set(data_channel, "buffered-amount-low-threshold", FALSE, NULL);
     g_signal_connect(data_channel, "on-buffered-amount-low",
                      G_CALLBACK(data_channel_on_buffered_amound_low), user_data);
+#endif
 }
 
 static void
@@ -1233,34 +1258,51 @@ create_data_channel(gpointer user_data) {
     g_signal_connect(item->sendbin, "on-data-channel", G_CALLBACK(on_data_channel),
                      (gpointer)item);
 
-    g_signal_connect(item->sendbin, "notify::ice-gathering-state",
-                     G_CALLBACK(on_ice_gathering_state_notify), NULL);
-
     gchar *chname = g_strdup_printf("channel_%ld", item->hash_id);
     g_signal_emit_by_name(item->sendbin, "create-data-channel", chname, NULL,
                           &send_channel);
     g_free(chname);
 }
 
+static void
+_on_new_transceiver(GstElement *webrtc, GstWebRTCRTPTransceiver *trans) {
+    /* If we expected more than one transceiver, we would take a look at
+     * trans->mline, and compare it with webrtcbin's local description */
+    g_object_set(trans, "fec-type", GST_WEBRTC_FEC_TYPE_ULP_RED, NULL);
+}
+
+static void
+on_remove_decodebin_stream(GstElement *srcbin, GstPad *pad,
+                           GstElement *pipe) {
+    gchar *name = gst_pad_get_name(pad);
+    g_print("pad removed %s !!! \n", name);
+    // gst_bin_remove(GST_BIN_CAST(pipe), srcbin);
+    gst_element_set_state(srcbin, GST_STATE_NULL);
+    g_free(name);
+}
+
 static void start_recv_webrtcbin(gpointer user_data) {
     WebrtcItem *item = (WebrtcItem *)user_data;
-    gchar *turn_srv;
+    // gchar *turn_srv;
     GstBus *bus;
     gchar *pipe_name = g_strdup_printf("recv_%ld", item->hash_id);
-    gchar *bin_name = g_strdup_printf("webrtcbin_%ld", item->hash_id);
+    gchar *bin_name = g_strdup_printf("recvbin_%ld", item->hash_id);
 
-    turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
+    // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
     item->recv.recvpipe = gst_pipeline_new(pipe_name);
+    // item->recv.recvbin = gst_element_factory_make_full("webrtcbin", "name", bin_name,
+    //                                                    "turn-server", turn_srv, NULL);
+
     item->recv.recvbin = gst_element_factory_make_full("webrtcbin", "name", bin_name,
-                                                       "turn-server", turn_srv, NULL);
-    g_free(turn_srv);
+                                                       "stun-server", config_data.webrtc.stun, NULL);
+    // g_free(turn_srv);
     g_free(pipe_name);
     g_free(bin_name);
 
     g_assert_nonnull(item->recv.recvbin);
     item->recv.stop_recv = &stop_recv_webrtc;
     g_object_set(G_OBJECT(item->recv.recvbin), "async-handling", TRUE, NULL);
-    // gst_util_set_object_arg(G_OBJECT(item->recv.recvbin), "bundle-policy", "max-bundle");
+    g_object_set(G_OBJECT(item->recv.recvbin), "bundle-policy", 3, NULL);
 
     bus = gst_pipeline_get_bus(GST_PIPELINE(item->recv.recvpipe));
     gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
@@ -1280,10 +1322,13 @@ static void start_recv_webrtcbin(gpointer user_data) {
     g_signal_connect(item->recv.recvbin, "notify::ice-gathering-state",
                      G_CALLBACK(on_ice_gathering_state_notify), NULL);
 
-    // g_signal_connect(item->recv.recvbin, "notify::ice-connection-state",
-    //                  G_CALLBACK(on_remove_decodebin_stream), item->recv.recvpipe);
+    g_signal_connect(item->recv.recvbin, "notify::ice-connection-state",
+                     G_CALLBACK(on_peer_connection_state_notify), NULL);
 
-#if 1
+    g_signal_connect(item->recv.recvbin, "on-new-transceiver",
+                     G_CALLBACK(_on_new_transceiver), item->recv.recvpipe);
+
+#if 0
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->recv.recvpipe), GST_DEBUG_GRAPH_SHOW_ALL, "webrtc_recv");
 #endif
 }
@@ -1292,7 +1337,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     GError *error = NULL;
     gchar *cmdline = NULL;
     GstBus *bus = NULL;
-    gchar *turn_srv = NULL;
+    // gchar *turn_srv = NULL;
     const gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
     gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
                                        " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
@@ -1307,9 +1352,10 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
                                        " queue ! %s. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, webrtc_name);
 
-    turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
-    cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
-    g_free(turn_srv);
+    // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
+    // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
+    cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
+    // g_free(turn_srv);
 
     GST_DEBUG("webrtc cmdline: %s \n", cmdline);
     g_free(audio_src);
@@ -1330,7 +1376,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     item->recv.addremote = &start_recv_webrtcbin;
 
     create_data_channel((gpointer)item);
-#if 1
+#if 0
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->sendpipe), GST_DEBUG_GRAPH_SHOW_ALL, "udpsrc_webrtc");
 #endif
 }
@@ -1423,11 +1469,18 @@ static void stop_appsrc_webrtc(gpointer user_data) {
     gst_object_unref(webrtc_entry->send_avpair.audio_src);
 }
 
+static void
+check_webrtcbin_state_by_timer(GstElement *webrtcbin)
+{
+    g_print("timeout to check webrtc connection state\n");
+    g_signal_emit_by_name(G_OBJECT(webrtcbin), "notify::ice-connection-state", NULL, NULL);
+}
+
 void start_appsrc_webrtcbin(WebrtcItem *item) {
     GError *error = NULL;
     gchar *cmdline = NULL;
     GstBus *bus = NULL;
-    gchar *turn_srv = NULL;
+    // gchar *turn_srv = NULL;
 
     gchar *webrtc_name = g_strdup_printf("webrtc_appsrc_%ld", item->hash_id);
     // vcaps = gst_caps_from_string("video/x-h264,stream-format=(string)avc,alignment=(string)au,width=(int)1280,height=(int)720,framerate=(fraction)30/1,profile=(string)main");
@@ -1444,9 +1497,11 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " queue ! %s. ",
                                        item->hash_id, webrtc_name);
-    turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
-    cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
-    g_free(turn_srv);
+    // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
+    // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
+    cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
+
+    // g_free(turn_srv);
 
     g_print("webrtc cmdline: %s \n", cmdline);
     g_free(audio_src);
@@ -1484,6 +1539,15 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     item->record.stop = &appsrc_cmd_rec_stop;
     item->recv.addremote = &start_recv_webrtcbin;
     item->stop_webrtc = &stop_appsrc_webrtc;
+    g_signal_connect(item->sendbin, "notify::ice-gathering-state",
+                     G_CALLBACK(on_ice_gathering_state_notify), NULL);
+
+    g_signal_connect(item->sendbin, "notify::ice-connection-state",
+                     G_CALLBACK(on_peer_connection_state_notify), NULL);
+
+    g_signal_connect(item->sendbin, "on-new-transceiver",
+                     G_CALLBACK(_on_new_transceiver), item->sendbin);
+    g_timeout_add(3 * 1000, (GSourceFunc)check_webrtcbin_state_by_timer, item->sendbin);
 }
 
 static GstFlowReturn
@@ -1787,12 +1851,12 @@ int av_hlssink() {
     // add audio to muxer.
     if (audio_source != NULL) {
         GstPad *tee_pad;
-        GstElement *aqueue,*opusparse;
+        GstElement *aqueue, *opusparse;
 
         MAKE_ELEMENT_AND_ADD(aqueue, "queue");
         MAKE_ELEMENT_AND_ADD(opusparse, "opusparse");
 
-        if (!gst_element_link_many(aqueue, opusparse, mpegtsmux,NULL)) {
+        if (!gst_element_link_many(aqueue, opusparse, mpegtsmux, NULL)) {
             g_error("Failed to link elements audio to mpegtsmux.\n");
             return -1;
         }

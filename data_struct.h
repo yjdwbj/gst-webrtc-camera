@@ -9,6 +9,7 @@ struct _webrtc {
         gchar *user;
         gchar *pwd;
     } turn;
+    const gchar *stun;
     struct _udpsink {
         gboolean multicast;
         int port;

@@ -454,7 +454,7 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     gst_element_set_state(webrtc_entry->sendpipe, GST_STATE_PLAYING);
 
     g_hash_table_insert(webrtc_connected_table, connection, webrtc_entry);
-    GST_DEBUG("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
+    g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
 }
 
 static void destroy_webrtc_table(gpointer entry_ptr) {
@@ -490,7 +490,7 @@ static void destroy_webrtc_table(gpointer entry_ptr) {
 static void
 got_headers_callback(SoupMessage *msg, gpointer data) {
     const char *header;
-
+    GHashTable *webrtc_connected_table = (GHashTable *)data;
     header = soup_message_headers_get_one(msg->request_headers,
                                           "Authorization");
     if (header) {
@@ -499,6 +499,7 @@ got_headers_callback(SoupMessage *msg, gpointer data) {
         if (strstr(header, "Digest "))
             g_print("client send requested digest \n");
     }
+    g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
 }
 
 static void
@@ -519,9 +520,9 @@ static void
 request_started_callback(SoupServer *server, SoupMessage *msg,
                          SoupClientContext *client, gpointer data) {
     g_signal_connect(msg, "got_headers",
-                     G_CALLBACK(got_headers_callback), NULL);
+                     G_CALLBACK(got_headers_callback), data);
     g_signal_connect(msg, "wrote_headers",
-                     G_CALLBACK(wrote_headers_callback), NULL);
+                     G_CALLBACK(wrote_headers_callback), data);
 }
 
 extern GstConfigData config_data;
@@ -626,7 +627,7 @@ void start_http(webrtc_callback fn, int port) {
                         NULL);
     g_object_unref(cert);
     g_signal_connect(soup_server, "request_started",
-                     G_CALLBACK(request_started_callback), NULL);
+                     G_CALLBACK(request_started_callback), webrtc_connected_table);
     soup_server_add_handler(soup_server, "/", soup_http_handler, NULL, NULL);
     soup_server_add_websocket_handler(soup_server, "/ws", NULL, NULL,
                                       soup_websocket_handler, (gpointer)data, NULL);

@@ -253,6 +253,7 @@ static void read_config_json(gchar *fullpath) {
     config_data.hls.showtext = json_object_get_int_member_with_default(object, "files", 10);
     config_data.hls.showtext = json_object_get_boolean_member_with_default(object, "showtext", FALSE);
 
+    config_data.webrtc.stun = json_object_get_string_member_with_default(root_obj, "stun", "stun://stun.l.google.com:19302");
     object = json_object_get_object_member(root_obj, "webrtc");
     if(object)
     {
