@@ -36,7 +36,7 @@
     "stun":"stun://stun.l.google.com:19302",
     "udpsink": {
       "port": 7000,
-      "addr": "224.1.1.4",
+      "addr": "224.1.1.2",
       "multicast": false
     }
   },

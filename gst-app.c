@@ -31,6 +31,8 @@ GstConfigData config_data;
 
 static CustomAppData app_data;
 
+static GObject *send_channel, *receive_channel;
+
 #define MAKE_ELEMENT_AND_ADD(elem, name)                          \
     G_STMT_START {                                                \
         GstElement *_elem = gst_element_factory_make(name, NULL); \
@@ -986,6 +988,7 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
         gst_bin_add(GST_BIN(pipe), playbin);
     } else if (g_strcmp0(name, "video") == 0) {
         if (!has_running_xwindow()) {
+            g_signal_emit_by_name(receive_channel, "send-string", "{\"notify\":\"The remote peer cannot view your video\"}");
             gst_printerr("Current system not running on Xwindow. \n");
             return;
         }
@@ -1016,7 +1019,6 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     g_assert_cmphex(ret, ==, GST_PAD_LINK_OK);
 }
 
-static GObject *send_channel, *receive_channel;
 
 static void
 data_channel_on_error(GObject *dc, gpointer user_data) {

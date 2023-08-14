@@ -73,6 +73,9 @@
     let audioCtx;
     let canvasCtx;
 
+    let hasCamera = false;
+    let hasMicroPhone = false;
+
     // send record voice
     let lowWaterMark;
     let highWaterMark;
@@ -96,21 +99,14 @@
       }]
     };
     const supportedConstraints = navigator.mediaDevices.getSupportedConstraints();
-    const video_traints = {
-      audio: true,
-      video: {
-        width: { min: 800, ideal: 1280, max: 1920 },
-        height: { min: 600, ideal: 720, max: 1080 },
-      },
-      noiseSuppression: true,
-      echoCancellation: true
-    };
 
     const audio_traints = {
-      audio: true,
+      audio: {
+        noiseSuppression: true,
+        echoCancellation: true
+      },
       video: false,
-      noiseSuppression: true,
-      echoCancellation: true
+
     };
 
 
@@ -124,6 +120,31 @@
 
     function reportError(err) {
       console.error(err);
+    }
+
+    function listCamerasAndMicrophone() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        console.log("enumerateDevices() not supported.");
+      } else {
+        // List cameras and microphones.
+        navigator.mediaDevices
+          .enumerateDevices()
+          .then((devices) => {
+            devices.forEach((device) => {
+              console.log(`${device.kind}: ${device.label} \n,id = ${device.deviceId}`);
+              if (device.kind === 'audioinput')
+                hasMicroPhone = true;
+              if (device.kind === 'videoinput')
+                hasCamera = true;
+            });
+            console.log(`browser has camera: ${hasCamera}, has microphone: ${hasMicroPhone}`);
+          })
+          .catch((err) => {
+            console.log(`${err.name}: ${err.message}`);
+          });
+
+      }
+
     }
 
     function toggleCanvas(show) {
@@ -156,18 +177,28 @@
     }
 
     function createSender(stream) {
-      localStream = stream;
-      visualize(stream);
       toggleCanvas('block');
       console.log("stream: " + JSON.stringify(stream));
       localpc = new RTCPeerConnection(stun_config);
-
-
-      stream.getTracks().forEach(function (track) {
-        console.log("add track.");
-        localpc.addTrack(track);
-      });
-
+      if (hasCamera && hasMicroPhone) {
+        localStream = stream;
+        visualize(stream);
+        stream.getTracks().forEach(function (track) {
+          console.log("add track.");
+          localpc.addTrack(track);
+        });
+      } else if (hasCamera) {
+        console.log("just add video track");
+        stream.getVideoTracks().forEach((track) => {
+          localpc.addTrack(track);
+        })
+      } else if (hasMicroPhone) {
+        localStream = stream;
+        visualize(stream);
+        stream.getAudioTracks().forEach((track) => {
+          localpc.addTrack(track);
+        })
+      }
 
       localpc.createOffer().then(d => {
         localpc.setLocalDescription(d);
@@ -181,12 +212,10 @@
         if (localpc.iceConnectionState == 'disconnected') {
           stopLocalMedia();
           isTalk = false;
+          isRecord = false;
           enableTalk.innerHTML = isTalk ? "Video off" : "Video on";
-          sendVoice.disabled = isTalk;
-
-          enableTalk.innerHTML = isTalk ? "Video off" : "Video on";
-          sendVoice.disabled = isTalk;
-          console.log("isTalk is: " + isTalk);
+          sendVoice.disabled = hasMicroPhone ? isTalk : true;
+          sendVoice.innerHTML = isVoiceRecord ? "Send Voice" : "Start Voice";
         }
       };
       localpc.onicecandidate = onIceCandidate;
@@ -199,10 +228,9 @@
       };
     }
 
-
-
     // buttons control
     window.onload = function () {
+      listCamerasAndMicrophone();
       startWatch = document.getElementById('startWatch');
       startRecord = document.getElementById('startRecord');
       enableTalk = document.getElementById('enableTalk');
@@ -238,10 +266,21 @@
 
         localdc.onmessage = (event) => {
           console.log(`received: ${event.data}`);
+          let msg;
+          try {
+            msg = JSON.parse(event.data);
+          } catch (e) {
+            console.log("parse json error: " + e);
+            return;
+          }
+          if(msg.notify)
+          {
+            alert(msg.notify);
+          }
         };
 
         localdc.onopen = () => {
-          console.log("datachannel open -------------->");
+          console.log("datachannel open");
           // localdc.send("Hi, I'm browser!!!");
         };
 
@@ -272,7 +311,17 @@
         } else {
           // enableTalk.disabled = true;
           // To get navigator.mediaDevices, https should be enabled if not opened on localhost.
-          navigator.mediaDevices.getUserMedia(video_traints).then((stream) => {
+          console.log("enable talk has microphone ? " + hasMicroPhone);
+          navigator.mediaDevices.getUserMedia({
+            audio: hasMicroPhone ? {
+              noiseSuppression: true,
+              echoCancellation: true
+            } : false,
+            video: {
+              width: { min: 800, ideal: 1280, max: 1920 },
+              height: { min: 600, ideal: 720, max: 1080 },
+            }
+          }).then((stream) => {
             createSender(stream);
           }).catch((err) => {
             console.log("Capture media error: " + err);
@@ -280,7 +329,7 @@
         }
         isTalk = !isTalk
         enableTalk.innerHTML = isTalk ? "Video off" : "Video on";
-        sendVoice.disabled = isTalk;
+        sendVoice.disabled = hasMicroPhone ? isTalk : true;
         event.preventDefault();
       });
 
@@ -429,8 +478,8 @@
 
       // enable other two buttons
       changeButtonState(startRecord, false);
-      changeButtonState(enableTalk, false);
-      changeButtonState(sendVoice, false);
+      changeButtonState(enableTalk, hasCamera ? false : true);
+      changeButtonState(sendVoice, hasMicroPhone ? false : true);
 
       document.getElementById('loading').style['display'] = "none";
     }
