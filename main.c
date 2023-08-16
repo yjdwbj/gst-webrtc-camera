@@ -179,7 +179,7 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
 void sigintHandler(int unused) {
     g_print("You ctrl-c-ed! Sending EoS");
     gboolean ret = gst_element_send_event(pipeline, gst_event_new_eos());
-    g_print("send Eos ret: %b .\n", ret);
+    g_print("send Eos ret: %B .\n", ret);
     exit(0);
 }
 

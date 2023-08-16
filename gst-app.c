@@ -368,7 +368,7 @@ static void *_inotify_thread(void *filename) {
         exit(EXIT_FAILURE);
     }
     // gst_println("inotify monitor for file: %s .\n", (char *)filename);
-    if (!g_file_test((char *)filename, G_FILE_TEST_EXISTS)) {
+    if (!g_file_test((char *)filename, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR)) {
         gst_print(" inotify monitor exists: %s ?\n", (char *)filename);
         FILE *file;
         file = fopen((char *)filename, "w");

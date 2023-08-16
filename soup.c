@@ -3,7 +3,6 @@
 #include <gst/gst.h>
 #include <gst/gstbin.h>
 
-static gchar *index_source = NULL;
 gchar *video_priority = NULL;
 gchar *audio_priority = NULL;
 
@@ -383,36 +382,27 @@ static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
                               SoupMessage *message, const char *path, G_GNUC_UNUSED GHashTable *query,
                               G_GNUC_UNUSED SoupClientContext *client_context,
                               G_GNUC_UNUSED gpointer user_data) {
-    SoupBuffer *soup_buffer;
-
     if ((g_strcmp0(path, "/") != 0) && (g_strcmp0(path, "/index.html") != 0)) {
         soup_message_set_status(message, SOUP_STATUS_NOT_FOUND);
         return;
     }
-    if (index_source == NULL) {
-        struct stat buffer;
-        const gchar *index_file = "webrtc.html\0";
-        int status;
-        int fd = open(index_file, O_RDONLY);
-        status = stat(index_file, &buffer);
-        if (fd && status == 0) {
-            index_source = (char *)g_malloc(sizeof(char) * buffer.st_size + 1);
-            memset(index_source, 0, buffer.st_size);
-            read(fd, index_source, buffer.st_size);
-            close(fd);
+
+    if (message->method == SOUP_METHOD_GET) {
+        GMappedFile *mapping;
+        SoupBuffer *buffer;
+
+        mapping = g_mapped_file_new("webrtc.html", FALSE, NULL);
+        if (!mapping) {
+            soup_message_set_status(message, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            return;
         }
+
+        buffer = soup_buffer_new_with_owner(g_mapped_file_get_contents(mapping),
+                                            g_mapped_file_get_length(mapping),
+                                            mapping, (GDestroyNotify)g_mapped_file_unref);
+        soup_message_body_append_buffer(message->response_body, buffer);
+        soup_buffer_free(buffer);
     }
-    gchar *tmp_str = g_strdup(index_source);
-    // g_free(index_source);
-
-    soup_buffer =
-        soup_buffer_new(SOUP_MEMORY_COPY, tmp_str, strlen(tmp_str));
-    g_free(tmp_str);
-
-    soup_message_headers_set_content_type(message->response_headers, "text/html",
-                                          NULL);
-    soup_message_body_append_buffer(message->response_body, soup_buffer);
-    soup_buffer_free(soup_buffer);
 
     soup_message_set_status(message, SOUP_STATUS_OK);
 }
