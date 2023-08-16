@@ -169,19 +169,9 @@ static GstElement *video_src() {
     GstCaps *srcCaps;
     gchar *capBuf;
     GstElement *teesrc, *source, *srcvconvert, *capsfilter, *queue;
-    source = gst_element_factory_make("v4l2src", NULL);
-
     teesrc = gst_element_factory_make("tee", NULL);
-    srcvconvert = gst_element_factory_make("videoconvert", NULL);
     capsfilter = gst_element_factory_make("capsfilter", NULL);
 
-    queue = gst_element_factory_make("queue", NULL);
-
-    if (!teesrc || !source || !srcvconvert || !capsfilter || !queue) {
-        g_printerr("video_src all elements could be created.\n");
-        return NULL;
-    }
-    // srcCaps = _getVideoCaps("image/jpeg", "NV12", 30, 1280, 720);
     g_print("device: %s, Type: %s, format: %s\n", config_data.v4l2src_data.device, config_data.v4l2src_data.type, config_data.v4l2src_data.format);
 
     capBuf = g_strdup_printf("%s, width=%d, height=%d, framerate=(fraction)%d/1",
@@ -194,11 +184,32 @@ static GstElement *video_src() {
 
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
     gst_caps_unref(srcCaps);
+#if defined(__aarch64__) || defined(_M_ARM64)
+    // for jetson nano caps 'video/x-raw(memory:NVMM),width=3820, height=2464, framerate=21/1, format=NV12'
+    source = gst_element_factory_make("nvarguscamerasrc", NULL);
+    g_object_set(source, "sensor_id", 0, NULL);
 
+    gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, teesrc, NULL);
+    if (!gst_element_link_many(source, capsfilter, teesrc, NULL)) {
+        g_error("Failed to link elements nvarguscamerasrc src\n");
+        return NULL;
+    }
+
+#else
+    source = gst_element_factory_make("v4l2src", NULL);
     g_object_set(G_OBJECT(source),
                  "device", config_data.v4l2src_data.device,
                  "io-mode", config_data.v4l2src_data.io_mode,
                  NULL);
+    srcvconvert = gst_element_factory_make("videoconvert", NULL);
+
+    queue = gst_element_factory_make("queue", NULL);
+
+    if (!teesrc || !source || !srcvconvert || !capsfilter || !queue) {
+        g_printerr("video_src all elements could be created.\n");
+        return NULL;
+    }
+    // srcCaps = _getVideoCaps("image/jpeg", "NV12", 30, 1280, 720);
 
     gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, srcvconvert, teesrc, queue, NULL);
 
@@ -221,7 +232,7 @@ static GstElement *video_src() {
             return NULL;
         }
     }
-
+#endif
     return teesrc;
 }
 
@@ -251,6 +262,7 @@ static GstElement *encoder_h264() {
     GstElement *encoder, *clock, *teeh264, *queue, *capsfilter;
     GstPad *src_pad, *queue_pad;
     GstCaps *srcCaps;
+    GstPadLinkReturn lret;
     clock = gst_element_factory_make("clockoverlay", NULL);
     teeh264 = gst_element_factory_make("tee", NULL);
     queue = gst_element_factory_make("queue", NULL);
@@ -260,6 +272,8 @@ static GstElement *encoder_h264() {
     if (gst_element_factory_find("vaapih264enc")) {
         encoder = gst_element_factory_make("vaapih264enc", NULL);
         g_object_set(G_OBJECT(encoder), "bitrate", 8000, NULL);
+    } else if (gst_element_factory_find("nvv4l2h264enc")) {
+        encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
     } else {
         encoder = gst_element_factory_make("x264enc", NULL);
         // g_object_set(G_OBJECT(encoder), "key-int-max", 2, NULL);
@@ -276,19 +290,32 @@ static GstElement *encoder_h264() {
         return NULL;
     }
 
-    gst_bin_add_many(GST_BIN(pipeline), clock, encoder, teeh264, queue, capsfilter, NULL);
-    if (!gst_element_link_many(queue, clock, encoder, capsfilter, teeh264, NULL)) {
-        g_error("Failed to link elements encoder \n");
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+    GstElement *clockbin;
+    const static gchar *tmp = " nvvidconv ! video/x-raw ! clockoverlay time-format=\"%D %H:%M:%S\" ! video/x-raw ! nvvidconv";
+    clockbin = gst_parse_bin_from_description(tmp, TRUE, NULL);
+    gst_bin_add(GST_BIN(pipeline), clockbin);
+    gst_element_sync_state_with_parent(clockbin);
+    gst_bin_add_many(GST_BIN(pipeline), clockbin, encoder, teeh264, queue, capsfilter, NULL);
+    if (!gst_element_link_many(queue, clockbin, encoder, capsfilter, teeh264, NULL)) {
+        g_print("Failed to link nvv4l2h264enc elements encoder \n");
         return NULL;
     }
-
+#else
+    gst_bin_add_many(GST_BIN(pipeline), clock, encoder, teeh264, queue, capsfilter, NULL);
+    if (!gst_element_link_many(queue, clock, encoder, capsfilter, teeh264, NULL)) {
+        g_print("Failed to link elements encoder \n");
+        return NULL;
+    }
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
+#endif
 
     src_pad = gst_element_request_pad_simple(video_source, "src_%u");
     g_print("Obtained request pad %s for from device source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
-    if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
-        g_error("Tee source could not be linked.\n");
+    if ((lret=gst_pad_link(src_pad, queue_pad)) != GST_PAD_LINK_OK) {
+        g_error("Tee source could not be linked, return :%d.\n",lret);
         return NULL;
     }
     gst_object_unref(src_pad);
@@ -1404,27 +1431,32 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     GstBus *bus = NULL;
     // gchar *turn_srv = NULL;
     const gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
-    gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay ! rtpopuspay ! queue ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " queue ! %s.",
-                                       config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr, webrtc_name);
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " queue ! %s. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, webrtc_name);
+    if(audio_source != NULL)
+    {
+        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " rtpopusdepay ! rtpopuspay ! queue ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " queue ! %s.",
+                                           config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr, webrtc_name);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
+        GST_DEBUG("webrtc cmdline: %s \n", cmdline);
+        g_free(audio_src);
+        g_free(video_src);
+    } else {
 
-    // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
-    // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
-    cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
-    // g_free(turn_srv);
+        // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
+        // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s", webrtc_name, config_data.webrtc.stun,video_src);
+        // g_free(turn_srv);
+    }
 
-    GST_DEBUG("webrtc cmdline: %s \n", cmdline);
-    g_free(audio_src);
-    g_free(video_src);
 
     item->sendpipe = gst_parse_launch(cmdline, &error);
     gst_element_set_state(item->sendpipe, GST_STATE_READY);
@@ -1453,35 +1485,18 @@ int start_av_udpsink() {
     GstPad *src_vpad, *src_apad, *sink_vpad, *sink_apad;
     GstPadLinkReturn lret;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(aqueue, "queue");
     MAKE_ELEMENT_AND_ADD(video_pay, "rtph264pay");
-    MAKE_ELEMENT_AND_ADD(audio_pay, "rtpopuspay");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
-
     MAKE_ELEMENT_AND_ADD(video_sink, "udpsink");
-    MAKE_ELEMENT_AND_ADD(audio_sink, "udpsink");
-
-    gst_bin_add_many(GST_BIN(pipeline), video_sink, audio_sink, NULL);
 
     /* Configure udpsink */
     g_object_set(video_sink, "sync", FALSE, "async", FALSE,
                  "port", config_data.webrtc.udpsink.port,
                  "host", config_data.webrtc.udpsink.addr,
                  "auto-multicast", config_data.webrtc.udpsink.multicast, NULL);
-    g_object_set(audio_sink, "sync", FALSE, "async", FALSE,
-                 "port", config_data.webrtc.udpsink.port + 1,
-                 "host", config_data.webrtc.udpsink.addr,
-                 "auto-multicast", config_data.webrtc.udpsink.multicast, NULL);
 
     g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
-    g_object_set(audio_pay, "pt", 97, NULL);
     g_object_set(vqueue, "max-size-time", 100000000, NULL);
-
-    /* link to upstream. */
-    if (!gst_element_link_many(aqueue, audio_pay, audio_sink, NULL)) {
-        g_error("Failed to link elements audio to mpegtsmux.\n");
-        return -1;
-    }
 
     if (!gst_element_link_many(vqueue, h264parse, video_pay, video_sink, NULL)) {
         g_error("Failed to link elements audio to mpegtsmux.\n");
@@ -1499,15 +1514,30 @@ int start_av_udpsink() {
     gst_object_unref(sink_vpad);
     gst_object_unref(src_vpad);
 
-    // add audio to muxer.
-    src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
-    sink_apad = gst_element_get_static_pad(aqueue, "sink");
-    if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
-        gst_printerrln("Tee udp audio sink could not be linked, link return :%d .\n", lret);
-        return -1;
+    if (audio_source != NULL) {
+        MAKE_ELEMENT_AND_ADD(audio_sink, "udpsink");
+        MAKE_ELEMENT_AND_ADD(audio_pay, "rtpopuspay");
+        MAKE_ELEMENT_AND_ADD(aqueue, "queue");
+        g_object_set(audio_sink, "sync", FALSE, "async", FALSE,
+                     "port", config_data.webrtc.udpsink.port + 1,
+                     "host", config_data.webrtc.udpsink.addr,
+                     "auto-multicast", config_data.webrtc.udpsink.multicast, NULL);
+        g_object_set(audio_pay, "pt", 97, NULL);
+        /* link to upstream. */
+        if (!gst_element_link_many(aqueue, audio_pay, audio_sink, NULL)) {
+            g_error("Failed to link elements audio to mpegtsmux.\n");
+            return -1;
+        }
+
+        src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
+        sink_apad = gst_element_get_static_pad(aqueue, "sink");
+        if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
+            gst_printerrln("Tee udp audio sink could not be linked, link return :%d .\n", lret);
+            return -1;
+        }
+        gst_object_unref(GST_OBJECT(sink_apad));
+        gst_object_unref(GST_OBJECT(src_apad));
     }
-    gst_object_unref(GST_OBJECT(sink_apad));
-    gst_object_unref(GST_OBJECT(src_apad));
 
     return 0;
 }
@@ -1670,36 +1700,23 @@ int start_av_appsink() {
     GstPad *src_vpad, *src_apad, *sink_vpad, *sink_apad;
     GstPadLinkReturn lret;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(aqueue, "queue");
     MAKE_ELEMENT_AND_ADD(video_pay, "rtph264pay");
-    MAKE_ELEMENT_AND_ADD(audio_pay, "rtpopuspay");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
     video_sink = gst_element_factory_make("appsink", "video_sink");
-    audio_sink = gst_element_factory_make("appsink", "audio_sink");
 
     /* Configure udpsink */
     g_object_set(video_sink, "sync", FALSE, "async", FALSE, "emit-signals", TRUE, NULL);
-    g_object_set(audio_sink, "sync", FALSE, "async", FALSE, "emit-signals", TRUE, NULL);
     g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
-    g_object_set(audio_pay, "pt", 97, NULL);
     g_object_set(vqueue, "max-size-time", 100000000, NULL);
-
-    gst_bin_add_many(GST_BIN(pipeline), video_sink, audio_sink, NULL);
-
-    /* link to upstream. */
-    if (!gst_element_link_many(aqueue, audio_pay, audio_sink, NULL)) {
-        g_error("Failed to link elements audio to mpegtsmux.\n");
-        return -1;
-    }
+    gst_bin_add(GST_BIN(pipeline), video_sink);
 
     if (!gst_element_link_many(vqueue, h264parse, video_pay, video_sink, NULL)) {
-        g_error("Failed to link elements audio to mpegtsmux.\n");
+        g_error("Failed to link elements video to mpegtsmux.\n");
         return -1;
     }
 
     sink_vpad = gst_element_get_static_pad(vqueue, "sink");
     src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-
     if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
         g_error("Tee appsink video sink could not be linked. ret: %d \n", lret);
         return -1;
@@ -1708,21 +1725,38 @@ int start_av_appsink() {
     gst_object_unref(sink_vpad);
     gst_object_unref(src_vpad);
 
-    sink_apad = gst_element_get_static_pad(aqueue, "sink");
-    src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
-
-    if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
-        gst_printerrln("Tee appsink audio sink could not be linked, link return :%d .\n", lret);
-        return -1;
-    }
-    gst_object_unref(GST_OBJECT(sink_apad));
-    gst_object_unref(GST_OBJECT(src_apad));
-
-    g_mutex_init(&G_appsrc_lock);
-    g_signal_connect(audio_sink, "new-sample",
-                     (GCallback)on_new_sample_from_sink, NULL);
     g_signal_connect(video_sink, "new-sample",
                      (GCallback)on_new_sample_from_sink, NULL);
+
+    if (audio_source != NULL) {
+        audio_sink = gst_element_factory_make("appsink", "audio_sink");
+        gst_bin_add(GST_BIN(pipeline), audio_sink);
+        MAKE_ELEMENT_AND_ADD(audio_pay, "rtpopuspay");
+        MAKE_ELEMENT_AND_ADD(aqueue, "queue");
+        g_object_set(audio_sink, "sync", FALSE, "async", FALSE, "emit-signals", TRUE, NULL);
+        g_object_set(audio_pay, "pt", 97, NULL);
+        /* link to upstream. */
+        if (!gst_element_link_many(aqueue, audio_pay, audio_sink, NULL)) {
+            g_error("Failed to link elements audio to mpegtsmux.\n");
+            return -1;
+        }
+
+        sink_apad = gst_element_get_static_pad(aqueue, "sink");
+        src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
+
+        if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
+            gst_printerrln("Tee appsink audio sink could not be linked, link return :%d .\n", lret);
+            return -1;
+        }
+        gst_object_unref(GST_OBJECT(sink_apad));
+        gst_object_unref(GST_OBJECT(src_apad));
+
+        g_signal_connect(audio_sink, "new-sample",
+                         (GCallback)on_new_sample_from_sink, NULL);
+    }
+
+    g_mutex_init(&G_appsrc_lock);
+
     return 0;
 }
 
@@ -1952,7 +1986,6 @@ int udp_multicastsink() {
     SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, rtpmp2tpay, "rtpmp2tpay");
     SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, vqueue, "queue");
     SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, mpegtsmux, "mpegtsmux");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, aqueue, "queue");
 
     if (!gst_element_link_many(vqueue, mpegtsmux, rtpmp2tpay, udpsink, NULL)) {
         g_error("Failed to link elements udpsink\n");
@@ -1980,35 +2013,38 @@ int udp_multicastsink() {
     GST_DEBUG("udp obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     sub_sink_vpad = gst_element_get_static_pad(bin, "videosink");
 
-    if (!gst_element_link(aqueue, mpegtsmux)) {
-        g_error("Failed to link elements audio to mpegtsmux.\n");
-        return -1;
+
+    if (audio_source != NULL) {
+        SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, aqueue, "queue");
+        if (!gst_element_link(aqueue, mpegtsmux)) {
+            g_error("Failed to link elements audio to mpegtsmux.\n");
+            return -1;
+        }
+
+        tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
+
+        GST_DEBUG("udp sink audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
+
+        sub_sink_apad = gst_element_get_static_pad(aqueue, "sink");
+        gst_element_add_pad(bin, gst_ghost_pad_new("audiosink", sub_sink_apad));
+        gst_object_unref(GST_OBJECT(sub_sink_apad));
+
+        sub_sink_apad = gst_element_get_static_pad(bin, "audiosink");
+
+        gst_bin_add(GST_BIN(pipeline), bin);
+        if (gst_pad_link(src_pad, sub_sink_vpad) != GST_PAD_LINK_OK) {
+            g_error("Tee udp hlssink could not be linked.\n");
+            return -1;
+        }
+        gst_object_unref(GST_OBJECT(sub_sink_vpad));
+
+        if ((lret = gst_pad_link(tee_pad, sub_sink_apad)) != GST_PAD_LINK_OK) {
+            g_error("Tee udp sink could not be linked. ret: %d \n", lret);
+            return -1;
+        }
+        gst_object_unref(GST_OBJECT(sub_sink_apad));
+        gst_object_unref(GST_OBJECT(tee_pad));
     }
-
-    tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
-
-    GST_DEBUG("udp sink audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
-
-    sub_sink_apad = gst_element_get_static_pad(aqueue, "sink");
-    gst_element_add_pad(bin, gst_ghost_pad_new("audiosink", sub_sink_apad));
-    gst_object_unref(GST_OBJECT(sub_sink_apad));
-
-    sub_sink_apad = gst_element_get_static_pad(bin, "audiosink");
-
-    gst_bin_add(GST_BIN(pipeline), bin);
-    if (gst_pad_link(src_pad, sub_sink_vpad) != GST_PAD_LINK_OK) {
-        g_error("Tee udp hlssink could not be linked.\n");
-        return -1;
-    }
-    gst_object_unref(GST_OBJECT(sub_sink_vpad));
-
-    if ((lret = gst_pad_link(tee_pad, sub_sink_apad)) != GST_PAD_LINK_OK) {
-        g_error("Tee udp sink could not be linked. ret: %d \n", lret);
-        return -1;
-    }
-    gst_object_unref(GST_OBJECT(sub_sink_apad));
-    gst_object_unref(GST_OBJECT(tee_pad));
-
     return 0;
 }
 
@@ -2291,11 +2327,12 @@ static void _initial_device() {
         return;
     }
 
+#if defined(__x86_64__) || defined(_M_X64)
     audio_source = audio_src();
     if (audio_source == NULL) {
         g_printerr("unable to open audio device.\n");
     }
-
+#endif
     va_pp = vaapi_postproc();
     if (va_pp == NULL) {
         g_printerr("unable to open vaapi post proc.\n");

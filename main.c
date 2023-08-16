@@ -12,27 +12,23 @@ extern GstConfigData config_data;
 static GThread *inotify_watch = NULL;
 
 static void _get_cpuid() {
-    char str[9] = {0};
-    char PSN[30] = {0};
-
     // refer from https://en.wikipedia.org/wiki/CPUID#EAX=3:_Processor_Serial_Number
     // https://wiki.osdev.org/CPUID
 
-#if defined(__arch64__) || defined(_M_ARM64)
-    uint32_t arm_cpuid;
-    __asm__("mrs %0, MIDR_EL1"
-            : "=r"(arm_cpuid));
-    g_print("arm64 cpuid is: %d \n", arm_cpuid);
-    sprintf(str, "%08X", (arm_cpuid >> 24 & 0xff));
-    sprintf(PSN, "%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
+#if defined(__aarch64__) || defined(_M_ARM64)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
 
-    sprintf(str, "%08X", ((8 << arm_cpuid) >> 24 & 0xff)); // i.e. xxxx-xxxx-XXXX-XXXX-xxxx-xxxx
-    sprintf(&PSN[9], "-%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
-
-    sprintf(str, "%08X", ((16 << arm_cpuid) >> 24 & 0xff))); // i.e. xxxx-xxxx-xxxx-xxxx-XXXX-XXXX
-    sprintf(&PSN[19], "-%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
-
+    if (!(getauxval(AT_HWCAP) & HWCAP_CPUID)) {
+        g_print("CPUID registers unavailable\n");
+        return 1;
+    }
+    unsigned long arm_cpuid = 0;
+    asm("mrs %0, MIDR_EL1" : "=r"(arm_cpuid));
+    g_print("arm64 cpuid is: 0x%016lx \n", arm_cpuid);
 #elif defined(__x86_64__) || defined(_M_X64)
+    char str[9] = {0};
+    char PSN[30] = {0};
     int deax, debx, decx, dedx;
     __asm__("cpuid"
             : "=a"(deax), "=b"(debx), "=c"(decx), "=d"(dedx) // The output variables. EAX -> a and vice versa.
@@ -45,8 +41,8 @@ static void _get_cpuid() {
     sprintf(&PSN[9], "-%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
     sprintf(str, "%08X", decx); // i.e. xxxx-xxxx-xxxx-xxxx-XXXX-XXXX
     sprintf(&PSN[19], "-%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
-#endif
     gst_println("Get Current CPUID: %s\n", PSN);
+#endif
 }
 
 static gboolean
