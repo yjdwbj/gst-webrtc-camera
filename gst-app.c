@@ -577,8 +577,31 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
 }
 
-static gboolean stop_udpsrc_rec(GstElement *rec_pipeline) {
+#if !defined(GLIB_AVAILABLE_IN_2_74)
+typedef struct {
+    guint timeout_id;
+    gpointer user_data;
+} TimeoutFulldata;
+
+static void
+destroy_timeout(TimeoutFulldata *tdata) {
+    tdata->timeout_id = 0;
+    g_free(tdata);
+}
+#endif
+
+static gboolean stop_udpsrc_rec(gpointer user_data) {
     // GstBus *bus;
+#if defined(GLIB_AVAILABLE_IN_2_74)
+    GstElement *rec_pipeline = (GstElement *)user_data;
+#else
+    TimeoutFulldata *tdata = (TimeoutFulldata *)user_data;
+    GstElement *rec_pipeline = (GstElement *)tdata->user_data;
+    if (tdata->timeout_id) {
+        g_source_remove(tdata->timeout_id);
+        tdata->timeout_id = 0;
+    }
+#endif
     gst_element_set_state(GST_ELEMENT(rec_pipeline),
                           GST_STATE_NULL);
     g_print("stop udpsrc record.\n");
@@ -646,7 +669,17 @@ static int start_udpsrc_rec(gpointer user_data) {
     gst_object_unref(bus);
     g_free(cmdline);
     gst_element_set_state(rec_pipeline, GST_STATE_PLAYING);
+#if defined(GLIB_AVAILABLE_IN_2_74)
     g_timeout_add_once(record_time * 1000, (GSourceOnceFunc)stop_udpsrc_rec, rec_pipeline);
+#else
+    TimeoutFulldata *tdata = g_new(TimeoutFulldata, 1);
+    tdata->user_data = user_data;
+    tdata->timeout_id = g_timeout_add_full(G_PRIORITY_DEFAULT,
+                                           record_time * 1000,
+                                           (GSourceFunc)stop_udpsrc_rec,
+                                           tdata,
+                                           (GDestroyNotify)destroy_timeout);
+#endif
     return 0;
 }
 
@@ -855,7 +888,17 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
 
 static gboolean stop_appsrc_rec(gpointer user_data) {
     gchar *timestr;
+
+#if defined(GLIB_AVAILABLE_IN_2_74)
     RecordItem *item = (RecordItem *)user_data;
+#else
+    TimeoutFulldata *tdata = (TimeoutFulldata *)user_data;
+    RecordItem *item = (RecordItem *)tdata->user_data;
+    if (tdata->timeout_id) {
+        g_source_remove(tdata->timeout_id);
+        tdata->timeout_id = 0;
+    }
+#endif
     gst_element_send_event(item->pipeline, gst_event_new_eos());
     gst_element_set_state(item->pipeline, GST_STATE_NULL);
     timestr = get_format_current_time();
@@ -938,7 +981,18 @@ static void start_appsrc_record() {
     gst_object_unref(bus);
 
     gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
+
+#if defined(GLIB_AVAILABLE_IN_2_74)
     g_timeout_add_once(record_time * 1000, (GSourceOnceFunc)stop_appsrc_rec, item);
+#else
+    TimeoutFulldata *tdata = g_new(TimeoutFulldata, 1);
+    tdata->user_data = item;
+    tdata->timeout_id = g_timeout_add_full(G_PRIORITY_DEFAULT,
+                                           record_time * 1000,
+                                           (GSourceFunc)stop_appsrc_rec,
+                                           tdata,
+                                           (GDestroyNotify)destroy_timeout);
+#endif
     g_mutex_lock(&G_appsrc_lock);
     G_AppsrcList = g_list_append(G_AppsrcList, &item->rec_avpair);
     g_mutex_unlock(&G_appsrc_lock);
@@ -1030,7 +1084,6 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     ret = gst_pad_link(pad, playbin->sinkpads->data);
     g_assert_cmphex(ret, ==, GST_PAD_LINK_OK);
 }
-
 
 static void
 data_channel_on_error(GObject *dc, gpointer user_data) {
@@ -1158,8 +1211,7 @@ play_voice(gpointer user_data) {
     gst_object_unref(bus);
 
     remove(item_entry->dcfile.filename);
-    if (item_entry->dcfile.filename != NULL)
-    {
+    if (item_entry->dcfile.filename != NULL) {
         g_free(item_entry->dcfile.filename);
         item_entry->dcfile.filename = NULL;
     }
@@ -1177,7 +1229,6 @@ data_channel_on_message_data(GObject *channel, GBytes *bytes, gpointer user_data
             item_entry->dcfile.pos += size;
             if (item_entry->dcfile.pos == item_entry->dcfile.fsize) {
                 close(item_entry->dcfile.fd);
-                // g_timeout_add_once(50, (GSourceOnceFunc)play_voice, user_data);
                 g_thread_new("play_voice", (GThreadFunc)play_voice, user_data);
             }
         }
@@ -1219,7 +1270,7 @@ data_channel_on_message_string(GObject *dc, gchar *str, gpointer user_data) {
             // const gchar *file_type = json_object_get_string_member(file_object, "type");
 
             item_entry->dcfile.filename = g_strdup_printf("/tmp/%s", json_object_get_string_member(file_object, "name"));
-            item_entry->dcfile.fsize = json_object_get_int_member_with_default(file_object, "size", 0);
+            item_entry->dcfile.fsize = json_object_get_int_member(file_object, "size");
             g_print("recv msg file: %s\n", item_entry->dcfile.filename);
             item_entry->dcfile.fd = open(item_entry->dcfile.filename, O_RDWR | O_CREAT, 0644);
             item_entry->dcfile.pos = 0;
@@ -1304,11 +1355,11 @@ static void start_recv_webrtcbin(gpointer user_data) {
 
     // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
     item->recv.recvpipe = gst_pipeline_new(pipe_name);
-    // item->recv.recvbin = gst_element_factory_make_full("webrtcbin", "name", bin_name,
-    //                                                    "turn-server", turn_srv, NULL);
+    // item->recv.recvbin = gst_element_factory_make("webrtcbin",bin_name);
+    // g_object_set(item->recv.recvbin, "turn-server", config_data.webrtc.turn, NULL);
 
-    item->recv.recvbin = gst_element_factory_make_full("webrtcbin", "name", bin_name,
-                                                       "stun-server", config_data.webrtc.stun, NULL);
+    item->recv.recvbin = gst_element_factory_make("webrtcbin", bin_name);
+    g_object_set(item->recv.recvbin, "stun-server", config_data.webrtc.stun, NULL);
     // g_free(turn_srv);
     g_free(pipe_name);
     g_free(bin_name);
@@ -1484,8 +1535,7 @@ static void stop_appsrc_webrtc(gpointer user_data) {
 }
 
 static void
-check_webrtcbin_state_by_timer(GstElement *webrtcbin)
-{
+check_webrtcbin_state_by_timer(GstElement *webrtcbin) {
     g_print("timeout to check webrtc connection state\n");
     g_signal_emit_by_name(G_OBJECT(webrtcbin), "notify::ice-connection-state", NULL, NULL);
 }

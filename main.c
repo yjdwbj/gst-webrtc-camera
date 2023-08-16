@@ -14,13 +14,29 @@ static GThread *inotify_watch = NULL;
 static void _get_cpuid() {
     char str[9] = {0};
     char PSN[30] = {0};
-    int deax, debx, decx, dedx;
+
     // refer from https://en.wikipedia.org/wiki/CPUID#EAX=3:_Processor_Serial_Number
     // https://wiki.osdev.org/CPUID
+
+#if defined(__arch64__) || defined(_M_ARM64)
+    uint32_t arm_cpuid;
+    __asm__("mrs %0, MIDR_EL1"
+            : "=r"(arm_cpuid));
+    g_print("arm64 cpuid is: %d \n", arm_cpuid);
+    sprintf(str, "%08X", (arm_cpuid >> 24 & 0xff));
+    sprintf(PSN, "%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
+
+    sprintf(str, "%08X", ((8 << arm_cpuid) >> 24 & 0xff)); // i.e. xxxx-xxxx-XXXX-XXXX-xxxx-xxxx
+    sprintf(&PSN[9], "-%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
+
+    sprintf(str, "%08X", ((16 << arm_cpuid) >> 24 & 0xff))); // i.e. xxxx-xxxx-xxxx-xxxx-XXXX-XXXX
+    sprintf(&PSN[19], "-%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
+
+#elif defined(__x86_64__) || defined(_M_X64)
+    int deax, debx, decx, dedx;
     __asm__("cpuid"
             : "=a"(deax), "=b"(debx), "=c"(decx), "=d"(dedx) // The output variables. EAX -> a and vice versa.
             : "0"(1));
-
     //%eax=1 gives most significant 32 bits in eax
     sprintf(str, "%08X", deax); // i.e. XXXX-XXXX-xxxx-xxxx-xxxx-xxxx
     sprintf(PSN, "%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
@@ -29,7 +45,7 @@ static void _get_cpuid() {
     sprintf(&PSN[9], "-%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
     sprintf(str, "%08X", decx); // i.e. xxxx-xxxx-xxxx-xxxx-XXXX-XXXX
     sprintf(&PSN[19], "-%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
-
+#endif
     gst_println("Get Current CPUID: %s\n", PSN);
 }
 
@@ -188,89 +204,71 @@ static void read_config_json(gchar *fullpath) {
     root_obj = json_node_get_object(root);
 
     object = json_object_get_object_member(root_obj, "v4l2src");
-
-    const gchar *tmpstr = json_object_get_string_member_with_default(object, "device", "/dev/video0");
-    config_data.v4l2src_data.device = g_strdup(tmpstr);
-
-    tmpstr = json_object_get_string_member_with_default(object, "format", "NV12");
-    config_data.v4l2src_data.format = g_strdup(tmpstr);
-
-    tmpstr = json_object_get_string_member_with_default(object, "type", "image/jpeg");
-    config_data.v4l2src_data.type = g_strdup(tmpstr);
+    config_data.v4l2src_data.device = g_strdup(json_object_get_string_member(object, "device"));
+    config_data.v4l2src_data.format = g_strdup(json_object_get_string_member(object, "format"));
+    config_data.v4l2src_data.type = g_strdup(json_object_get_string_member(object, "type"));
 
     // g_print("json_string '%s'\n", config_data.v4l2src_data.device);
 
-    config_data.v4l2src_data.width = json_object_get_int_member_with_default(object, "width", 1280);
-    config_data.v4l2src_data.height = json_object_get_int_member_with_default(object, "height", 720);
-    config_data.v4l2src_data.io_mode = json_object_get_int_member_with_default(object, "io_mode", 0);
-    config_data.v4l2src_data.framerate = json_object_get_int_member_with_default(object, "framerate", 25);
-
-    config_data.splitfile_sink = json_object_get_boolean_member_with_default(root_obj, "splitfile_sink", FALSE);
-    config_data.app_sink = json_object_get_boolean_member_with_default(root_obj, "app_sink", FALSE);
-
+    config_data.v4l2src_data.width = json_object_get_int_member(object, "width");
+    config_data.v4l2src_data.height = json_object_get_int_member(object, "height");
+    config_data.v4l2src_data.io_mode = json_object_get_int_member(object, "io_mode");
+    config_data.v4l2src_data.framerate = json_object_get_int_member(object, "framerate");
+    config_data.splitfile_sink = json_object_get_boolean_member(root_obj, "splitfile_sink");
+    config_data.app_sink = json_object_get_boolean_member(root_obj, "app_sink");
     object = json_object_get_object_member(root_obj, "hls_onoff");
 
-    config_data.hls_onoff.av_hlssink = json_object_get_boolean_member_with_default(object, "av_hlssink", FALSE);
-    config_data.hls_onoff.motion_hlssink = json_object_get_boolean_member_with_default(object, "motion_hlssink", FALSE);
-    config_data.hls_onoff.edge_hlssink = json_object_get_boolean_member_with_default(object, "edge_hlssink", FALSE);
-    config_data.hls_onoff.facedetect_hlssink = json_object_get_boolean_member_with_default(object, "facedetect_hlssink", FALSE);
-    config_data.hls_onoff.cvtracker_hlssink = json_object_get_boolean_member_with_default(object, "cvtracker_hlssink", FALSE);
+    config_data.hls_onoff.av_hlssink = json_object_get_boolean_member(object, "av_hlssink");
+    config_data.hls_onoff.motion_hlssink = json_object_get_boolean_member(object, "motion_hlssink");
+    config_data.hls_onoff.edge_hlssink = json_object_get_boolean_member(object, "edge_hlssink");
+    config_data.hls_onoff.facedetect_hlssink = json_object_get_boolean_member(object, "facedetect_hlssink");
+    config_data.hls_onoff.cvtracker_hlssink = json_object_get_boolean_member(object, "cvtracker_hlssink");
 
-    tmpstr = json_object_get_string_member(root_obj, "rootdir");
-    config_data.root_dir = g_strdup(tmpstr);
+    config_data.root_dir = g_strdup(json_object_get_string_member(root_obj, "rootdir"));
 
-    config_data.showdot = json_object_get_boolean_member_with_default(root_obj, "showdot", FALSE);
+    config_data.showdot = json_object_get_boolean_member(root_obj, "showdot");
 
-    config_data.rec_len = json_object_get_int_member_with_default(root_obj, "rec_len", 60);
-    config_data.motion_rec = json_object_get_boolean_member_with_default(root_obj, "motion_rec", FALSE);
+    config_data.rec_len = json_object_get_int_member(root_obj, "rec_len");
+    config_data.motion_rec = json_object_get_boolean_member(root_obj, "motion_rec");
 
     object = json_object_get_object_member(root_obj, "audio");
-    config_data.audio.path = json_object_get_int_member_with_default(root_obj, "path", 0);
-    config_data.audio.buf_time = json_object_get_int_member_with_default(root_obj, "buf_time", 5000000);
+    config_data.audio.path = json_object_get_int_member(object, "path");
+    config_data.audio.buf_time = json_object_get_int_member(object, "buf_time");
 
     object = json_object_get_object_member(root_obj, "http");
-    if(object)
-    {
-        config_data.http.port = json_object_get_int_member_with_default(object, "port", 7788);
-        tmpstr = json_object_get_string_member(object, "host");
-        config_data.http.host = g_strdup(tmpstr);
-        tmpstr = json_object_get_string_member(object, "user");
-        config_data.http.user = g_strdup(tmpstr);
-        tmpstr = json_object_get_string_member(object, "password");
-        config_data.http.password = g_strdup(tmpstr);
+    if (object) {
+        config_data.http.port = json_object_get_int_member(object, "port");
+        config_data.http.host = g_strdup(json_object_get_string_member(object, "host"));
+        config_data.http.user = g_strdup(json_object_get_string_member(object, "user"));
+        config_data.http.password = g_strdup(json_object_get_string_member(object, "password"));
     }
 
     object = json_object_get_object_member(root_obj, "udp");
-    config_data.udp.port = json_object_get_int_member_with_default(object, "port", 5000);
-    tmpstr = json_object_get_string_member(object, "host");
-    config_data.udp.host = g_strdup(tmpstr);
-    config_data.udp.multicast = json_object_get_boolean_member_with_default(object, "multicast", FALSE);
-    config_data.udp.enable = json_object_get_boolean_member_with_default(object, "enable", FALSE);
+    config_data.udp.port = json_object_get_int_member(object, "port");
+    config_data.udp.host = g_strdup(json_object_get_string_member(object, "host"));
+    config_data.udp.multicast = json_object_get_boolean_member(object, "multicast");
+    config_data.udp.enable = json_object_get_boolean_member(object, "enable");
 
     object = json_object_get_object_member(root_obj, "hls");
-    config_data.hls.duration = json_object_get_int_member_with_default(object, "duration", 10);
-    config_data.hls.files = json_object_get_int_member_with_default(object, "files", 10);
-    config_data.hls.showtext = json_object_get_int_member_with_default(object, "files", 10);
-    config_data.hls.showtext = json_object_get_boolean_member_with_default(object, "showtext", FALSE);
+    config_data.hls.duration = json_object_get_int_member(object, "duration");
+    config_data.hls.files = json_object_get_int_member(object, "files");
+    config_data.hls.showtext = json_object_get_boolean_member(object, "showtext");
 
-    config_data.webrtc.stun = json_object_get_string_member_with_default(root_obj, "stun", "stun://stun.l.google.com:19302");
+
     object = json_object_get_object_member(root_obj, "webrtc");
-    if(object)
-    {
-        config_data.webrtc.enable = json_object_get_boolean_member_with_default(object, "enable", TRUE);
+    if (object) {
+        // "stun://stun.l.google.com:19302"
+        config_data.webrtc.stun = g_strdup(json_object_get_string_member(object, "stun"));
+        config_data.webrtc.enable = json_object_get_boolean_member(object, "enable");
         JsonObject *turn_obj = json_object_get_object_member(object, "turn");
-        tmpstr = json_object_get_string_member(turn_obj, "url");
-        config_data.webrtc.turn.url = g_strdup(tmpstr);
-        tmpstr = json_object_get_string_member(turn_obj, "user");
-        config_data.webrtc.turn.user = g_strdup(tmpstr);
-        tmpstr = json_object_get_string_member(turn_obj, "pwd");
-        config_data.webrtc.turn.pwd = g_strdup(tmpstr);
+        config_data.webrtc.turn.url = g_strdup(json_object_get_string_member(turn_obj, "url"));
+        config_data.webrtc.turn.user = g_strdup(json_object_get_string_member(turn_obj, "user"));
+        config_data.webrtc.turn.pwd = g_strdup(json_object_get_string_member(turn_obj, "pwd"));
 
         turn_obj = json_object_get_object_member(object, "udpsink");
-        config_data.webrtc.udpsink.port = json_object_get_int_member_with_default(turn_obj, "port", 6000);
-        tmpstr = json_object_get_string_member(turn_obj, "addr");
-        config_data.webrtc.udpsink.addr = g_strdup(tmpstr);
-        config_data.webrtc.udpsink.multicast = json_object_get_boolean_member_with_default(turn_obj, "multicast", TRUE);
+        config_data.webrtc.udpsink.port = json_object_get_int_member(turn_obj, "port");
+        config_data.webrtc.udpsink.addr = g_strdup(json_object_get_string_member(turn_obj, "addr"));
+        config_data.webrtc.udpsink.multicast = json_object_get_boolean_member(turn_obj, "multicast");
     }
     g_object_unref(parser);
 }
@@ -291,7 +289,7 @@ static gchar *_get_config_path() {
 
 int main(int argc, char *argv[]) {
     gchar *fullpath = _get_config_path();
-    if (fullpath != NULL){
+    if (fullpath != NULL) {
         read_config_json(fullpath);
         g_free(fullpath);
     }
@@ -330,8 +328,7 @@ int main(int argc, char *argv[]) {
     g_print("Starting loop.\n");
 
     // webrtcbin priority use appsink.
-    if(config_data.app_sink)
-    {
+    if (config_data.app_sink) {
         start_http(&start_appsrc_webrtcbin, config_data.http.port);
     } else {
         start_http(&start_udpsrc_webrtcbin, config_data.http.port);
