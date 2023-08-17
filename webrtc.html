@@ -16,7 +16,7 @@
 
   <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.2.3/js/bootstrap.min.js"
     crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
+  <!-- <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script> -->
   <style>
     * {
       margin: 0;
@@ -84,7 +84,7 @@
     let mediaRecorder;
     let elapseTimer;
 
-    var vConsole = new window.VConsole();
+    // var vConsole = new window.VConsole();
     const turn_config = {
       'iceServers': [{
         urls: 'turn:192.168.1.100:3478',
@@ -281,7 +281,7 @@
 
         localdc.onopen = () => {
           console.log("datachannel open");
-          // localdc.send("Hi, I'm browser!!!");
+          localdc.send("Hi, I'm browser!!!");
         };
 
         localdc.onclose = () => {

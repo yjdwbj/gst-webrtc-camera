@@ -1,3 +1,25 @@
+/* gst-webrtc-camera
+ * Copyright (C) 2023 chunyang liu <yjdwbj@gmail.com>
+ *
+ *
+ * gst-app.c:  gstreamer pipeline
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+ */
+
 #include "gst-app.h"
 #include "data_struct.h"
 #include "soup.h"
@@ -263,7 +285,7 @@ static GstElement *encoder_h264() {
     GstPad *src_pad, *queue_pad;
     GstCaps *srcCaps;
     GstPadLinkReturn lret;
-    clock = gst_element_factory_make("clockoverlay", NULL);
+
     teeh264 = gst_element_factory_make("tee", NULL);
     queue = gst_element_factory_make("queue", NULL);
     capsfilter = gst_element_factory_make("capsfilter", NULL);
@@ -284,12 +306,11 @@ static GstElement *encoder_h264() {
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
     gst_caps_unref(srcCaps);
 
-    if (!encoder || !clock || !teeh264 || !queue || !capsfilter) {
+    if (!encoder || !teeh264 || !queue || !capsfilter) {
         g_printerr("encoder_h264 all elements could not be created.\n");
         // g_printerr("encoder %x ; clock %x.\n", encoder, clock);
         return NULL;
     }
-
 
 #if defined(__aarch64__) || defined(_M_ARM64)
     GstElement *clockbin;
@@ -303,6 +324,8 @@ static GstElement *encoder_h264() {
         return NULL;
     }
 #else
+    // jetson nano don't have clockoverylay , owner by libgstpango.so
+    clock = gst_element_factory_make("clockoverlay", NULL);
     gst_bin_add_many(GST_BIN(pipeline), clock, encoder, teeh264, queue, capsfilter, NULL);
     if (!gst_element_link_many(queue, clock, encoder, capsfilter, teeh264, NULL)) {
         g_print("Failed to link elements encoder \n");
@@ -314,8 +337,8 @@ static GstElement *encoder_h264() {
     src_pad = gst_element_request_pad_simple(video_source, "src_%u");
     g_print("Obtained request pad %s for from device source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
-    if ((lret=gst_pad_link(src_pad, queue_pad)) != GST_PAD_LINK_OK) {
-        g_error("Tee source could not be linked, return :%d.\n",lret);
+    if ((lret = gst_pad_link(src_pad, queue_pad)) != GST_PAD_LINK_OK) {
+        g_error("Tee source could not be linked, return :%d.\n", lret);
         return NULL;
     }
     gst_object_unref(src_pad);
@@ -1040,6 +1063,7 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     GstCaps *caps;
     const gchar *name;
     const gchar *encode_name;
+    int payload = 97;
     GstPadLinkReturn ret;
     GstElement *playbin;
     gchar *desc;
@@ -1063,7 +1087,7 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
      */
     name = gst_structure_get_string(structure, "media");
     encode_name = gst_structure_get_string(structure, "encoding-name");
-
+    gst_structure_get_int(structure, "payload", &payload);
 #if 0
     gchar *caps_str = gst_caps_to_string(caps);
     GST_DEBUG("name: %s, caps size: %d, caps : %s \n", name, gst_caps_get_size(caps), caps_str);
@@ -1073,6 +1097,8 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     if (g_strcmp0(name, "audio") == 0) {
         if (g_strcmp0(encode_name, "OPUS") == 0) {
             desc = g_strdup_printf(" rtpopusdepay ! opusdec ! queue !  audioconvert  ! webrtcechoprobe ! autoaudiosink");
+        } else if (g_strcmp0(encode_name, "RED") == 0) {
+            desc = g_strdup_printf(" rtpreddec pt=%d ! opusdec ! queue !  audioconvert  ! webrtcechoprobe ! autoaudiosink", payload);
         } else {
             desc = g_strdup_printf(" decodebin ! queue ! audioconvert  ! webrtcechoprobe  ! autoaudiosink");
         }
@@ -1081,7 +1107,8 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
         gst_bin_add(GST_BIN(pipe), playbin);
     } else if (g_strcmp0(name, "video") == 0) {
         if (!has_running_xwindow()) {
-            g_signal_emit_by_name(receive_channel, "send-string", "{\"notify\":\"The remote peer cannot view your video\"}");
+            if (receive_channel)
+                g_signal_emit_by_name(receive_channel, "send-string", "{\"notify\":\"The remote peer cannot view your video\"}");
             gst_printerr("Current system not running on Xwindow. \n");
             return;
         }
@@ -1437,8 +1464,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " queue ! %s. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, webrtc_name);
-    if(audio_source != NULL)
-    {
+    if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                            " rtpopusdepay ! rtpopuspay ! queue ! "
@@ -1453,10 +1479,9 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
 
         // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
         // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
-        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s", webrtc_name, config_data.webrtc.stun,video_src);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s", webrtc_name, config_data.webrtc.stun, video_src);
         // g_free(turn_srv);
     }
-
 
     item->sendpipe = gst_parse_launch(cmdline, &error);
     gst_element_set_state(item->sendpipe, GST_STATE_READY);
@@ -1579,26 +1604,31 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     gchar *webrtc_name = g_strdup_printf("webrtc_appsrc_%ld", item->hash_id);
     // vcaps = gst_caps_from_string("video/x-h264,stream-format=(string)avc,alignment=(string)au,width=(int)1280,height=(int)720,framerate=(fraction)30/1,profile=(string)main");
     // acaps = gst_caps_from_string("audio/x-opus, channels=(int)1,channel-mapping-family=(int)1");
-    gchar *audio_src = g_strdup_printf("appsrc name=audio_%ld  format=3 ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay ! rtpopuspay ! queue ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " queue ! %s.",
-                                       item->hash_id, webrtc_name);
+
     gchar *video_src = g_strdup_printf("appsrc  name=video_%ld format=3 ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " queue ! %s. ",
                                        item->hash_id, webrtc_name);
-    // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
-    // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
-    cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
 
-    // g_free(turn_srv);
+    if (audio_source != NULL) {
+        gchar *audio_src = g_strdup_printf("appsrc name=audio_%ld  format=3 ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " rtpopusdepay ! rtpopuspay ! queue ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " queue ! %s.",
+                                           item->hash_id, webrtc_name);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
+        g_free(audio_src);
+    } else {
+        // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
+        // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s", webrtc_name, config_data.webrtc.stun, video_src);
+        // g_free(turn_srv);
+    }
 
     g_print("webrtc cmdline: %s \n", cmdline);
-    g_free(audio_src);
     g_free(video_src);
 
     item->sendpipe = gst_parse_launch(cmdline, &error);
@@ -1612,7 +1642,6 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     g_free(webrtc_name);
 
     // g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
-
     webrtc_name = g_strdup_printf("audio_%ld", item->hash_id);
     item->send_avpair.audio_src = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     g_free(webrtc_name);
@@ -2012,7 +2041,6 @@ int udp_multicastsink() {
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
     GST_DEBUG("udp obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     sub_sink_vpad = gst_element_get_static_pad(bin, "videosink");
-
 
     if (audio_source != NULL) {
         SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, aqueue, "queue");
