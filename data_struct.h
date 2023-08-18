@@ -23,6 +23,10 @@
 #define _DATA_STRUCT_H
 #include <glib.h>
 
+#if !defined(JETSON_NANO) || (JETSON_NANO == 1)
+#define HAS_JETSON_NANO
+#endif
+
 struct _webrtc {
     gboolean enable;
     struct _turnserver {
@@ -79,6 +83,7 @@ struct _GstConfigData {
         gboolean showtext; // show some custom text overlay video;
     } hls;
     struct _audio_data {
+        gboolean enable;
         int path;
         int buf_time;
     } audio;

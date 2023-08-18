@@ -45,7 +45,8 @@ static void _get_cpuid() {
         return 1;
     }
     unsigned long arm_cpuid = 0;
-    asm("mrs %0, MIDR_EL1" : "=r"(arm_cpuid));
+    asm("mrs %0, MIDR_EL1"
+        : "=r"(arm_cpuid));
     g_print("arm64 cpuid is: 0x%016lx \n", arm_cpuid);
 #elif defined(__x86_64__) || defined(_M_X64)
     char str[9] = {0};
@@ -250,6 +251,7 @@ static void read_config_json(gchar *fullpath) {
 
     object = json_object_get_object_member(root_obj, "audio");
     config_data.audio.path = json_object_get_int_member(object, "path");
+    config_data.audio.enable = json_object_get_boolean_member(object, "enable");
     config_data.audio.buf_time = json_object_get_int_member(object, "buf_time");
 
     object = json_object_get_object_member(root_obj, "http");
@@ -270,7 +272,6 @@ static void read_config_json(gchar *fullpath) {
     config_data.hls.duration = json_object_get_int_member(object, "duration");
     config_data.hls.files = json_object_get_int_member(object, "files");
     config_data.hls.showtext = json_object_get_boolean_member(object, "showtext");
-
 
     object = json_object_get_object_member(root_obj, "webrtc");
     if (object) {
@@ -304,6 +305,35 @@ static gchar *_get_config_path() {
     return NULL;
 }
 
+#if defined(HAS_JETSON_NANO)
+static void
+load_plugin_func(const gchar *name) {
+    GstPlugin *plugin;
+    gchar *filename;
+    GError *err = NULL;
+
+    filename = g_strdup_printf("/usr/lib/aarch64-linux-gnu/gstreamer-1.0/libgst%s.so", name);
+    GST_DEBUG("Pre-loading plugin %s", filename);
+
+    plugin = gst_plugin_load_file(filename, &err);
+
+    if (plugin) {
+        GST_INFO("Loaded plugin: \"%s\"", filename);
+
+        gst_registry_add_plugin(gst_registry_get(), plugin);
+    } else {
+        if (err) {
+            /* Report error to user, and free error */
+            GST_ERROR("Failed to load plugin: %s", err->message);
+            g_error_free(err);
+        } else {
+            GST_WARNING("Failed to load plugin: \"%s\"", filename);
+        }
+    }
+    g_free(filename);
+}
+#endif
+
 int main(int argc, char *argv[]) {
     gchar *fullpath = _get_config_path();
     if (fullpath != NULL) {
@@ -325,7 +355,26 @@ int main(int argc, char *argv[]) {
         g_printerr("gst initialize failed.\n");
         return -1;
     }
-
+#if defined(HAS_JETSON_NANO)
+    g_print("You defined running on Jetson nano\n");
+    const gchar *nvlibs[] = {
+        "nvarguscamerasrc",
+        "nvvideosinks",
+        "nvvidconv",
+        "nvvideo4linux2",
+        "nvtee",
+        "nvvideocuda",
+        "nvegltransform",
+        "nvcompositor",
+        "omx",
+        "nvcompositor"};
+    int len = sizeof(nvlibs) / sizeof(gchar *);
+    for (int i = 0; i < len; i++) {
+        load_plugin_func(nvlibs[i]);
+    }
+    g_print("nvlibs size: %d\n", sizeof(nvlibs) / sizeof(gchar *));
+    // load_plugin_func("/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdv.so");
+#endif
     gst_segtrap_set_enabled(TRUE);
     loop = g_main_loop_new(NULL, FALSE);
 
@@ -343,7 +392,7 @@ int main(int argc, char *argv[]) {
     }
 
     char *version_utf8 = gst_version_string();
-    g_print("Starting loop on gstreamer :%s.\n",version_utf8);
+    g_print("Starting loop on gstreamer :%s.\n", version_utf8);
     g_free(version_utf8);
 
     // webrtcbin priority use appsink.

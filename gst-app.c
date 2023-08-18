@@ -222,7 +222,8 @@ static GstElement *video_src() {
 
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
     gst_caps_unref(srcCaps);
-#if defined(__aarch64__) || defined(_M_ARM64)
+
+#if defined(HAS_JETSON_NANO)
     // for jetson nano caps 'video/x-raw(memory:NVMM),width=3820, height=2464, framerate=21/1, format=NV12'
     source = gst_element_factory_make("nvarguscamerasrc", NULL);
     g_object_set(source, "sensor_id", 0, NULL);
@@ -326,7 +327,7 @@ static GstElement *encoder_h264() {
         return NULL;
     }
 
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(HAS_JETSON_NANO)
     GstElement *clockbin;
     const static gchar *tmp = " nvvidconv ! video/x-raw ! clockoverlay time-format=\"%D %H:%M:%S\" ! video/x-raw ! nvvidconv";
     clockbin = gst_parse_bin_from_description(tmp, TRUE, NULL);
@@ -610,6 +611,7 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     gchar *timestr = NULL;
     gchar *cmdline = NULL;
     GstBus *bus = NULL;
+    GError *error = NULL;
     gchar *today = get_today_str();
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
@@ -626,26 +628,42 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     g_free(filename);
     g_free(timestr);
 
-    gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay ! opusparse ! queue ! mux.",
-                                       config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  name=video_save ! "
+
+    gchar *video_src = g_strdup_printf("udpsrc port=%d address=%s  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! queue ! mux. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr);
-    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+    if(config_data.audio.enable)
+    {
+        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " rtpopusdepay ! opusparse ! queue ! mux.",
+                                           config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
+        cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+        g_free(audio_src);
+    } else {
+        cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s ", fullpath, video_src);
+    }
+
     g_free(fullpath);
     g_free(outdir);
     g_print("record cmdline: %s \n", cmdline);
-    g_free(audio_src);
     g_free(video_src);
 
-    item->pipeline = gst_parse_launch(cmdline, NULL);
+    item->pipeline = gst_parse_launch(cmdline, &error);
+    if (error) {
+        gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
+        g_print(message);
+        g_free(message);
+    }
+
     bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
     gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
     gst_object_unref(bus);
     g_free(cmdline);
+    gst_element_set_state(item->pipeline, GST_STATE_READY);
+
+
     gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
 }
 
@@ -721,18 +739,25 @@ static int start_udpsrc_rec(gpointer user_data) {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(outdir);
 
-    gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay ! opusparse ! queue ! mux.",
-                                       config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  name=video_save ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! queue ! mux. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr);
-    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+
+    if (audio_source != NULL) {
+        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " rtpopusdepay ! opusparse ! queue ! mux.",
+                                           config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
+        cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+        g_free(audio_src);
+    } else {
+        cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\"  %s ", fullpath, video_src);
+    }
+
     g_free(fullpath);
     g_print("record cmdline: %s \n", cmdline);
-    g_free(audio_src);
+
     g_free(video_src);
 
     rec_pipeline = gst_parse_launch(cmdline, NULL);
@@ -879,7 +904,8 @@ void appsrc_cmd_rec_stop(gpointer user_data) {
     g_mutex_lock(&G_appsrc_lock);
     G_AppsrcList = g_list_remove(G_AppsrcList, &item->rec_avpair);
     g_mutex_unlock(&G_appsrc_lock);
-    gst_object_unref(item->rec_avpair.audio_src);
+    if (item->rec_avpair.audio_src)
+        gst_object_unref(item->rec_avpair.audio_src);
     gst_object_unref(item->rec_avpair.video_src);
     item->pipeline = NULL;
 }
@@ -925,19 +951,26 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(outdir);
 
-    gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay  ! opusparse ! queue  ! mux.",
-                                       aid_str);
     gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse !  queue ! mux. ",
                                        vid_str);
-    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+
+    if (config_data.audio.enable) {
+        gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " rtpopusdepay  ! opusparse ! queue  ! mux.",
+                                           aid_str);
+        cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+        g_free(audio_src);
+    } else {
+        cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s ", fullpath, video_src);
+    }
+
     g_free(fullpath);
     g_free(filename);
     g_print("webrtc cmdline: %s \n", cmdline);
-    g_free(audio_src);
+
     g_free(video_src);
 
     item->pipeline = gst_parse_launch(cmdline, NULL);
@@ -950,8 +983,8 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
     gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
     item->rec_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->pipeline), vid_str);
     // g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
+    item->rec_avpair.audio_src = config_data.audio.enable ? gst_bin_get_by_name(GST_BIN(item->pipeline), aid_str) : NULL;
 
-    item->rec_avpair.audio_src = gst_bin_get_by_name(GST_BIN(item->pipeline), aid_str);
     // g_signal_connect(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
     g_mutex_lock(&G_appsrc_lock);
     G_AppsrcList = g_list_append(G_AppsrcList, &item->rec_avpair);
@@ -989,7 +1022,8 @@ static gboolean stop_appsrc_rec(gpointer user_data) {
     g_mutex_lock(&G_appsrc_lock);
     G_AppsrcList = g_list_remove(G_AppsrcList, &item->rec_avpair);
     g_mutex_unlock(&G_appsrc_lock);
-    gst_object_unref(item->rec_avpair.audio_src);
+    if (item->rec_avpair.audio_src)
+        gst_object_unref(item->rec_avpair.audio_src);
     gst_object_unref(item->rec_avpair.video_src);
 
     gst_object_unref(item->pipeline);
@@ -1024,19 +1058,27 @@ static void start_appsrc_record() {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(outdir);
 
-    gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay  ! opusparse ! queue  ! mux.",
-                                       aid_str);
+
     gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse !  queue ! mux. ",
                                        vid_str);
-    cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+
+    if(config_data.audio.enable)
+    {
+        gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " rtpopusdepay  ! opusparse ! queue  ! mux.",
+                                           aid_str);
+        cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
+        g_free(audio_src);
+    } else {
+        cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s ", fullpath, video_src);
+    }
+
     g_free(fullpath);
     g_free(filename);
     g_print("webrtc cmdline: %s \n", cmdline);
-    g_free(audio_src);
     g_free(video_src);
 
     item->pipeline = gst_parse_launch(cmdline, NULL);
@@ -1045,7 +1087,7 @@ static void start_appsrc_record() {
     item->rec_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->pipeline), vid_str);
     // g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
 
-    item->rec_avpair.audio_src = gst_bin_get_by_name(GST_BIN(item->pipeline), aid_str);
+    item->rec_avpair.audio_src = config_data.audio.enable ? gst_bin_get_by_name(GST_BIN(item->pipeline), aid_str) : NULL;
     // g_signal_connect(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
 
     bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
@@ -2428,16 +2470,17 @@ static void _initial_device() {
         return;
     }
 
-#if defined(__x86_64__) || defined(_M_X64)
-    audio_source = audio_src();
-    if (audio_source == NULL) {
-        g_printerr("unable to open audio device.\n");
+    if (config_data.audio.enable) {
+        audio_source = audio_src();
+        if (audio_source == NULL) {
+            g_printerr("unable to open audio device.\n");
+        }
     }
+
     va_pp = vaapi_postproc();
     if (va_pp == NULL) {
         g_printerr("unable to open vaapi post proc.\n");
     }
-#endif
 
     // mkv_mux = get_mkv_mux();
     is_initial = TRUE;

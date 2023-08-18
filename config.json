@@ -16,6 +16,7 @@
   },
 
   "audio": {
+    "enable": false,
     "path": 40,
     "buf_time": 5000000
   },
