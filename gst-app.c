@@ -187,6 +187,22 @@ static gchar *get_today_str() {
     return g_strdup(time_str);
 }
 
+static GstElement *get_hardware_h264_encoder() {
+    GstElement *encoder;
+    if (gst_element_factory_find("vaapih264enc")) {
+        encoder = gst_element_factory_make("vaapih264enc", NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", 8000, NULL);
+    } else if (gst_element_factory_find("nvv4l2h264enc")) {
+        encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
+    } else {
+        encoder = gst_element_factory_make("x264enc", NULL);
+        // g_object_set(G_OBJECT(encoder), "key-int-max", 2, NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", 8000, "speed-preset", 1, "tune", 4, "key-int-max", 30, NULL);
+    }
+    gst_bin_add(GST_BIN(pipeline), encoder);
+    return encoder;
+}
+
 static GstElement *video_src() {
     GstCaps *srcCaps;
     gchar *capBuf;
@@ -259,20 +275,27 @@ static GstElement *video_src() {
 }
 
 static GstElement *audio_src() {
-    GstElement *teesrc, *source, *srcvconvert, *enc, *resample;
+    GstElement *teesrc, *source, *srcvconvert, *enc, *postconv, *audioecho;
     teesrc = gst_element_factory_make("tee", NULL);
     source = gst_element_factory_make("pipewiresrc", NULL);
     srcvconvert = gst_element_factory_make("audioconvert", NULL);
-    resample = gst_element_factory_make("audioresample", NULL);
+    postconv = gst_element_factory_make("audioconvert", NULL);
     enc = gst_element_factory_make("opusenc", NULL);
+    audioecho = gst_element_factory_make("audioecho", NULL);
 
-    if (!teesrc || !source || !srcvconvert || !resample || !enc) {
+    if (!teesrc || !source || !srcvconvert || !postconv || !enc || !audioecho) {
         g_printerr("audio source all elements could be created.\n");
         return NULL;
     }
 
-    gst_bin_add_many(GST_BIN(pipeline), source, teesrc, srcvconvert, enc, resample, NULL);
-    if (!gst_element_link_many(source, srcvconvert, resample, enc, teesrc, NULL)) {
+    if (config_data.audio.path > 0) {
+        gchar *tmp = g_strdup_printf("%d", config_data.audio.path);
+        g_object_set(G_OBJECT(source), "path", tmp, NULL);
+        g_free(tmp);
+    }
+    g_object_set(G_OBJECT(audioecho), "delay", 50000000, "intensity", 0.6, "feedback", 0.4, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), source, teesrc, srcvconvert, enc, postconv, audioecho, NULL);
+    if (!gst_element_link_many(source, srcvconvert, audioecho, postconv, enc, teesrc, NULL)) {
         g_error("Failed to link elements audio src.\n");
         return NULL;
     }
@@ -291,16 +314,7 @@ static GstElement *encoder_h264() {
     capsfilter = gst_element_factory_make("capsfilter", NULL);
     g_object_set(G_OBJECT(queue), "max-size-buffers", 1, NULL);
 
-    if (gst_element_factory_find("vaapih264enc")) {
-        encoder = gst_element_factory_make("vaapih264enc", NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", 8000, NULL);
-    } else if (gst_element_factory_find("nvv4l2h264enc")) {
-        encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
-    } else {
-        encoder = gst_element_factory_make("x264enc", NULL);
-        // g_object_set(G_OBJECT(encoder), "key-int-max", 2, NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", 8000, "speed-preset", 1, "tune", 4, "key-int-max", 30, NULL);
-    }
+    encoder = get_hardware_h264_encoder();
 
     srcCaps = gst_caps_from_string("video/x-h264,profile=constrained-baseline");
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
@@ -318,7 +332,7 @@ static GstElement *encoder_h264() {
     clockbin = gst_parse_bin_from_description(tmp, TRUE, NULL);
     gst_bin_add(GST_BIN(pipeline), clockbin);
     gst_element_sync_state_with_parent(clockbin);
-    gst_bin_add_many(GST_BIN(pipeline), clockbin, encoder, teeh264, queue, capsfilter, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), clockbin, teeh264, queue, capsfilter, NULL);
     if (!gst_element_link_many(queue, clockbin, encoder, capsfilter, teeh264, NULL)) {
         g_print("Failed to link nvv4l2h264enc elements encoder \n");
         return NULL;
@@ -326,7 +340,7 @@ static GstElement *encoder_h264() {
 #else
     // jetson nano don't have clockoverylay , owner by libgstpango.so
     clock = gst_element_factory_make("clockoverlay", NULL);
-    gst_bin_add_many(GST_BIN(pipeline), clock, encoder, teeh264, queue, capsfilter, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), clock, teeh264, queue, capsfilter, NULL);
     if (!gst_element_link_many(queue, clock, encoder, capsfilter, teeh264, NULL)) {
         g_print("Failed to link elements encoder \n");
         return NULL;
@@ -334,8 +348,12 @@ static GstElement *encoder_h264() {
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
 #endif
 
+#if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(video_source, "src_%u");
-    g_print("Obtained request pad %s for from device source.\n", gst_pad_get_name(src_pad));
+#else
+    src_pad = gst_element_get_request_pad(video_source, "src_%u");
+#endif
+    g_print("Obtained request pad %s for from video source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
     if ((lret = gst_pad_link(src_pad, queue_pad)) != GST_PAD_LINK_OK) {
         g_error("Tee source could not be linked, return :%d.\n", lret);
@@ -392,8 +410,12 @@ static GstElement *vaapi_postproc() {
 
     g_object_set(G_OBJECT(vaapipostproc), "format", 23, NULL);
 
+#if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(video_source, "src_%u");
-    g_print("Obtained request pad %s for from device source.\n", gst_pad_get_name(src_pad));
+#else
+    src_pad = gst_element_get_request_pad(video_source, "src_%u");
+#endif
+    g_print("Obtained request pad %s for from video source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(vaapipostproc, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
         g_error("Tee split file sink could not be linked.\n");
@@ -1096,9 +1118,7 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     gst_caps_unref(caps);
     if (g_strcmp0(name, "audio") == 0) {
         if (g_strcmp0(encode_name, "OPUS") == 0) {
-            desc = g_strdup_printf(" rtpopusdepay ! opusdec ! queue !  audioconvert  ! webrtcechoprobe ! autoaudiosink");
-        } else if (g_strcmp0(encode_name, "RED") == 0) {
-            desc = g_strdup_printf(" rtpreddec pt=%d ! opusdec ! queue !  audioconvert  ! webrtcechoprobe ! autoaudiosink", payload);
+            desc = g_strdup_printf(" rtpopusdepay ! opusdec ! queue !  audioconvert  ! audioecho delay=50000000 intensity=0.6 feedback=0.4 ! autoaudiosink");
         } else {
             desc = g_strdup_printf(" decodebin ! queue ! audioconvert  ! webrtcechoprobe  ! autoaudiosink");
         }
@@ -1227,7 +1247,7 @@ play_voice(gpointer user_data) {
     GstBus *bus;
     GstMessage *msg;
     GstElement *playline;
-    gchar *cmdline = g_strdup_printf("filesrc location=%s ! decodebin ! audioconvert ! autoaudiosink", item_entry->dcfile.filename);
+    gchar *cmdline = g_strdup_printf("filesrc location=%s ! decodebin ! audioconvert ! audioecho delay=50000000 intensity=0.6 feedback=0.4 ! autoaudiosink", item_entry->dcfile.filename);
     g_print("play cmdline : %s\n", cmdline);
     playline = gst_parse_launch(cmdline, NULL);
     g_free(cmdline);
@@ -1253,9 +1273,10 @@ play_voice(gpointer user_data) {
             g_print("[Debug details: %s]\n", dbg);
             g_free(dbg);
         }
+        break;
     }
     default:
-        g_print("Unexpected message of type %d", GST_MESSAGE_TYPE(msg));
+        g_print("Unexpected message of type %d\n", GST_MESSAGE_TYPE(msg));
         break;
     }
     gst_message_unref(msg);
@@ -1458,7 +1479,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     GstBus *bus = NULL;
     // gchar *turn_srv = NULL;
     const gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! queue ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
@@ -1506,10 +1527,11 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
 int start_av_udpsink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *aqueue, *vqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *h264parse;
+    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *h264parse;
     GstPad *src_vpad, *src_apad, *sink_vpad, *sink_apad;
     GstPadLinkReturn lret;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
+    MAKE_ELEMENT_AND_ADD(pqueue, "queue");
     MAKE_ELEMENT_AND_ADD(video_pay, "rtph264pay");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
     MAKE_ELEMENT_AND_ADD(video_sink, "udpsink");
@@ -1523,14 +1545,17 @@ int start_av_udpsink() {
     g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
     g_object_set(vqueue, "max-size-time", 100000000, NULL);
 
-    if (!gst_element_link_many(vqueue, h264parse, video_pay, video_sink, NULL)) {
+    if (!gst_element_link_many(vqueue, h264parse, video_pay, pqueue, video_sink, NULL)) {
         g_error("Failed to link elements audio to mpegtsmux.\n");
         return -1;
     }
 
     sink_vpad = gst_element_get_static_pad(vqueue, "sink");
+#if GST_VERSION_MINOR >= 20
     src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-
+#else
+    src_vpad = gst_element_get_request_pad(h264_encoder, "src_%u");
+#endif
     if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
         g_error("Tee udp video sink could not be linked. ret: %d \n", lret);
         return -1;
@@ -1554,7 +1579,11 @@ int start_av_udpsink() {
             return -1;
         }
 
+#if GST_VERSION_MINOR >= 20
         src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
+#else
+        src_apad = gst_element_get_request_pad(audio_source, "src_%u");
+#endif
         sink_apad = gst_element_get_static_pad(aqueue, "sink");
         if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
             gst_printerrln("Tee udp audio sink could not be linked, link return :%d .\n", lret);
@@ -1745,7 +1774,11 @@ int start_av_appsink() {
     }
 
     sink_vpad = gst_element_get_static_pad(vqueue, "sink");
+#if GST_VERSION_MINOR >= 20
     src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
+#else
+    src_vpad = gst_element_get_request_pad(h264_encoder, "src_%u");
+#endif
     if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
         g_error("Tee appsink video sink could not be linked. ret: %d \n", lret);
         return -1;
@@ -1771,7 +1804,11 @@ int start_av_appsink() {
         }
 
         sink_apad = gst_element_get_static_pad(aqueue, "sink");
+#if GST_VERSION_MINOR >= 20
         src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
+#else
+        src_apad = gst_element_get_request_pad(audio_source, "src_%u");
+#endif
 
         if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
             gst_printerrln("Tee appsink audio sink could not be linked, link return :%d .\n", lret);
@@ -1836,7 +1873,11 @@ int start_appsink() {
     gst_object_unref(bus);
 
     sink_vpad = gst_element_get_static_pad(h264parse, "sink");
+#if GST_VERSION_MINOR >= 20
     src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
+#else
+    src_vpad = gst_element_get_request_pad(h264_encoder, "src_%u");
+#endif
 
     if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
         g_error("Tee mkv file video sink could not be linked. ret: %d \n", lret);
@@ -1858,7 +1899,11 @@ int start_appsink() {
     // gst_object_unref(src_apad);
 
     // add audio to muxer.
+#if GST_VERSION_MINOR >= 20
     src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
+#else
+    src_apad = gst_element_get_request_pad(audio_source, "src_%u");
+#endif
     GST_DEBUG("mkv obtained request pad %s for from audio source.\n", gst_pad_get_name(src_apad));
     sink_apad = gst_element_get_static_pad(aqueue, "sink");
     if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
@@ -1901,7 +1946,11 @@ int splitfile_sink() {
     g_free(tmpfile);
     _mkdir(outdir, 0755);
     g_free(outdir);
+#if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
+#else
+    src_pad = gst_element_get_request_pad(h264_encoder, "src_%u");
+#endif
     g_print("split file obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(vqueue, "sink");
 
@@ -1916,9 +1965,17 @@ int splitfile_sink() {
     if (audio_source != NULL) {
         GstPad *tee_pad, *audio_pad;
 
+#if GST_VERSION_MINOR >= 20
         tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
+#else
+        tee_pad = gst_element_get_request_pad(audio_source, "src_%u");
+#endif
         g_print("split file obtained request pad %s for from audio source.\n", gst_pad_get_name(tee_pad));
-        audio_pad = gst_element_request_pad_simple(splitmuxsink, "audio_%u");
+#if GST_VERSION_MINOR >= 20
+        audio_pad = gst_element_request_pad_simple(audio_source, "src_%u");
+#else
+        audio_pad = gst_element_get_request_pad(audio_source, "src_%u");
+#endif
         if ((lret = gst_pad_link(tee_pad, audio_pad)) != GST_PAD_LINK_OK) {
             g_printerr("Split file audio sink could not be linked. return: %d .\n", lret);
             return -1;
@@ -1966,7 +2023,11 @@ int av_hlssink() {
 
     _mkdir(outdir, 0755);
     g_free(outdir);
+#if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
+#else
+    src_pad = gst_element_get_request_pad(h264_encoder, "src_%u");
+#endif
     g_print("av obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(vqueue, "sink");
     if ((lret = gst_pad_link(src_pad, queue_pad)) != GST_PAD_LINK_OK) {
@@ -1988,7 +2049,11 @@ int av_hlssink() {
             return -1;
         }
 
+#if GST_VERSION_MINOR >= 20
         tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
+#else
+        tee_pad = gst_element_get_request_pad(audio_source, "src_%u");
+#endif
         GST_DEBUG("av hlssink audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
         queue_pad = gst_element_get_static_pad(aqueue, "sink");
         if ((lret = gst_pad_link(tee_pad, queue_pad)) != GST_PAD_LINK_OK) {
@@ -2038,7 +2103,11 @@ int udp_multicastsink() {
     gst_element_set_state(bin, GST_STATE_PAUSED);
     // gst_element_set_locked_state(udpsink, TRUE);
 
+#if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(h264_encoder, "src_%u");
+#else
+    src_pad = gst_element_get_request_pad(h264_encoder, "src_%u");
+#endif
     GST_DEBUG("udp obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     sub_sink_vpad = gst_element_get_static_pad(bin, "videosink");
 
@@ -2049,8 +2118,11 @@ int udp_multicastsink() {
             return -1;
         }
 
+#if GST_VERSION_MINOR >= 20
         tee_pad = gst_element_request_pad_simple(audio_source, "src_%u");
-
+#else
+        tee_pad = gst_element_get_request_pad(audio_source, "src_%u");
+#endif
         GST_DEBUG("udp sink audio obtained request pad %s for from h264 source.\n", gst_pad_get_name(tee_pad));
 
         sub_sink_apad = gst_element_get_static_pad(aqueue, "sink");
@@ -2084,11 +2156,7 @@ int motion_hlssink() {
         return -1;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/motion", NULL);
-    if (gst_element_factory_find("vaapih264enc")) {
-        MAKE_ELEMENT_AND_ADD(encoder, "vaapih264enc");
-    } else {
-        MAKE_ELEMENT_AND_ADD(encoder, "x264enc");
-    }
+    encoder = get_hardware_h264_encoder();
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
@@ -2130,7 +2198,11 @@ int motion_hlssink() {
     g_free(tmp2);
     _mkdir(outdir, 0755);
     g_free(outdir);
+#if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
+#else
+    src_pad = gst_element_get_request_pad(va_pp, "src_%u");
+#endif
     g_print("motion obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
@@ -2150,11 +2222,7 @@ int cvtracker_hlssink() {
         return -1;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/cvtracker", NULL);
-    if (gst_element_factory_find("vaapih264enc")) {
-        MAKE_ELEMENT_AND_ADD(encoder, "vaapih264enc");
-    } else {
-        MAKE_ELEMENT_AND_ADD(encoder, "x264enc");
-    }
+    encoder = get_hardware_h264_encoder();
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
@@ -2189,7 +2257,11 @@ int cvtracker_hlssink() {
     set_hlssink_object(hlssink, outdir, "/cvtracker-%05d.ts");
     _mkdir(outdir, 0755);
     g_free(outdir);
+#if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
+#else
+    src_pad = gst_element_get_request_pad(va_pp, "src_%u");
+#endif
     g_print("cvtracker obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
@@ -2219,11 +2291,7 @@ int facedetect_hlssink() {
     MAKE_ELEMENT_AND_ADD(facedetect, "facedetect");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
 
-    if (gst_element_factory_find("vaapih264enc")) {
-        MAKE_ELEMENT_AND_ADD(encoder, "vaapih264enc");
-    } else {
-        MAKE_ELEMENT_AND_ADD(encoder, "x264enc");
-    }
+    encoder = get_hardware_h264_encoder();
 
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
@@ -2253,7 +2321,11 @@ int facedetect_hlssink() {
 
     _mkdir(outdir, 0755);
     g_free(outdir);
+#if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
+#else
+    src_pad = gst_element_get_request_pad(va_pp, "src_%u");
+#endif
     g_print("face obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(queue, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
@@ -2284,11 +2356,7 @@ int edgedect_hlssink() {
     MAKE_ELEMENT_AND_ADD(clock, "clockoverlay");
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
 
-    if (gst_element_factory_find("vaapih264enc")) {
-        MAKE_ELEMENT_AND_ADD(encoder, "vaapih264enc");
-    } else {
-        MAKE_ELEMENT_AND_ADD(encoder, "x264enc");
-    }
+    encoder = get_hardware_h264_encoder();
 
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
@@ -2317,7 +2385,12 @@ int edgedect_hlssink() {
 
     _mkdir(outdir, 0755);
     g_free(outdir);
+
+#if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(va_pp, "src_%u");
+#else
+    src_pad = gst_element_get_request_pad(va_pp, "src_%u");
+#endif
     g_print("edge obtained request pad %s for from h264 source.\n", gst_pad_get_name(src_pad));
     queue_pad = gst_element_get_static_pad(pre_convert, "sink");
     if (gst_pad_link(src_pad, queue_pad) != GST_PAD_LINK_OK) {
@@ -2360,11 +2433,11 @@ static void _initial_device() {
     if (audio_source == NULL) {
         g_printerr("unable to open audio device.\n");
     }
-#endif
     va_pp = vaapi_postproc();
     if (va_pp == NULL) {
         g_printerr("unable to open vaapi post proc.\n");
     }
+#endif
 
     // mkv_mux = get_mkv_mux();
     is_initial = TRUE;

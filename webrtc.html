@@ -210,11 +210,12 @@
       localpc.oniceconnectionstatechange = e => {
         console.log("send stream state change: " + localpc.iceConnectionState);
         if (localpc.iceConnectionState == 'disconnected') {
+          const pcShutdown = true;
           stopLocalMedia();
           isTalk = false;
-          isRecord = false;
+          isVoiceRecord = false;
           enableTalk.innerHTML = isTalk ? "Video off" : "Video on";
-          sendVoice.disabled = hasMicroPhone ? isTalk : true;
+          sendVoice.disabled = pcShutdown; //hasMicroPhone ? isTalk : true;
           sendVoice.innerHTML = isVoiceRecord ? "Send Voice" : "Start Voice";
         }
       };

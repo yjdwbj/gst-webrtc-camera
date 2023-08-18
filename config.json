@@ -14,8 +14,9 @@
     "type": "image/jpeg",
     "format": "NV12"
   },
+
   "audio": {
-    "path": 0,
+    "path": 40,
     "buf_time": 5000000
   },
   "rootdir": "/tmp/output",

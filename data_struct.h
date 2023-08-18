@@ -2,7 +2,7 @@
  * Copyright (C) 2023 chunyang liu <yjdwbj@gmail.com>
  *
  *
- * data_struct.h:  data_struct.c
+ * data_struct.h:  data_struct.h
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public

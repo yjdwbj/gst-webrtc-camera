@@ -342,7 +342,9 @@ int main(int argc, char *argv[]) {
         goto bail;
     }
 
-    g_print("Starting loop.\n");
+    char *version_utf8 = gst_version_string();
+    g_print("Starting loop on gstreamer :%s.\n",version_utf8);
+    g_free(version_utf8);
 
     // webrtcbin priority use appsink.
     if (config_data.app_sink) {
