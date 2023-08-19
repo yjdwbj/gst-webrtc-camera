@@ -1535,6 +1535,45 @@ static void start_recv_webrtcbin(gpointer user_data) {
 #endif
 }
 
+static void stop_appsrc_webrtc(gpointer user_data) {
+    GstBus *bus;
+    WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
+
+    gst_element_set_state(GST_ELEMENT(webrtc_entry->sendpipe),
+                          GST_STATE_NULL);
+
+    bus = gst_pipeline_get_bus(GST_PIPELINE(webrtc_entry->sendpipe));
+    if (bus != NULL) {
+        gst_bus_remove_watch(bus);
+        gst_object_unref(bus);
+    }
+
+    gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
+    gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
+    g_mutex_lock(&G_appsrc_lock);
+    G_AppsrcList = g_list_remove(G_AppsrcList, &webrtc_entry->send_avpair);
+    g_mutex_unlock(&G_appsrc_lock);
+    gst_object_unref(webrtc_entry->send_avpair.video_src);
+    gst_object_unref(webrtc_entry->send_avpair.audio_src);
+}
+
+static void stop_udpsrc_webrtc(gpointer user_data) {
+    GstBus *bus;
+    WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
+
+    gst_element_set_state(GST_ELEMENT(webrtc_entry->sendpipe),
+                          GST_STATE_NULL);
+
+    bus = gst_pipeline_get_bus(GST_PIPELINE(webrtc_entry->sendpipe));
+    if (bus != NULL) {
+        gst_bus_remove_watch(bus);
+        gst_object_unref(bus);
+    }
+
+    gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
+    gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
+}
+
 void start_udpsrc_webrtcbin(WebrtcItem *item) {
     GError *error = NULL;
     gchar *cmdline = NULL;
@@ -1579,6 +1618,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     item->record.start = &udpsrc_cmd_rec_start;
     item->record.stop = &udpsrc_cmd_rec_stop;
     item->recv.addremote = &start_recv_webrtcbin;
+    item->stop_webrtc = &stop_udpsrc_webrtc;
 
     create_data_channel((gpointer)item);
 #if 0
@@ -1656,28 +1696,6 @@ int start_av_udpsink() {
     }
 
     return 0;
-}
-
-static void stop_appsrc_webrtc(gpointer user_data) {
-    GstBus *bus;
-    WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
-
-    gst_element_set_state(GST_ELEMENT(webrtc_entry->sendpipe),
-                          GST_STATE_NULL);
-
-    bus = gst_pipeline_get_bus(GST_PIPELINE(webrtc_entry->sendpipe));
-    if (bus != NULL) {
-        gst_bus_remove_watch(bus);
-        gst_object_unref(bus);
-    }
-
-    gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
-    gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
-    g_mutex_lock(&G_appsrc_lock);
-    G_AppsrcList = g_list_remove(G_AppsrcList, &webrtc_entry->send_avpair);
-    g_mutex_unlock(&G_appsrc_lock);
-    gst_object_unref(webrtc_entry->send_avpair.video_src);
-    gst_object_unref(webrtc_entry->send_avpair.audio_src);
 }
 
 static void

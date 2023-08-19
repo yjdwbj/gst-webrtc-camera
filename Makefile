@@ -1,6 +1,6 @@
 
 CC=gcc
-CFLAGS :=-g -DJETSON_NANO=$$(bash -c 'if  [ -f /etc/nv_tegra_release ]; then  echo 1; else echo 0; fi')
+CFLAGS :=-g -Wall -fno-omit-frame-pointer -fsanitize=address -DJETSON_NANO=$$(bash -c 'if  [ -f /etc/nv_tegra_release ]; then  echo 1; else echo 0; fi')
 EXE=gst-webrtc-camera
 
 # https://makefiletutorial.com/#makefile-cookbook

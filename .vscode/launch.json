@@ -11,7 +11,15 @@
             "environment": [
                 {
                     "name": "GST_DEBUG",
-                    "value": "4,*webrtc*:7"
+                    "value": "4,*webrtc*:7",
+                },
+                {
+                    "name": "ASAN_OPTIONS",
+                    "value": "sleep_before_dying=10"
+                },
+                {
+                    "name": "LSAN_OPTIONS",
+                    "value": "verbosity=1:log_threads=1"
                 }
             ],
             "externalConsole": false,

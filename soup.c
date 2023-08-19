@@ -210,7 +210,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
 
     switch (data_type) {
     case SOUP_WEBSOCKET_DATA_BINARY:
-        g_error("Received unknown binary message, ignoring\n");
+        g_print("Received unknown binary message, ignoring\n");
         return;
 
     case SOUP_WEBSOCKET_DATA_TEXT:
@@ -234,7 +234,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
     root_json_object = json_node_get_object(root_json);
 
     if (!json_object_has_member(root_json_object, "type")) {
-        g_error("Received message without type field\n");
+        g_print("Received message without type field\n");
         goto cleanup;
     }
     type_string = json_object_get_string_member(root_json_object, "type");
@@ -278,7 +278,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
             goto cleanup;
         }
     } else if (!json_object_has_member(root_json_object, "data")) {
-        g_error("Received message without data field\n");
+        g_print("Received message without data field\n");
         goto cleanup;
     }
     data_json_object = json_object_get_object_member(root_json_object, "data");
@@ -292,7 +292,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         int ret;
 
         if (!json_object_has_member(data_json_object, "type")) {
-            g_error("Received SDP message without type field\n");
+            g_print("Received SDP message without type field\n");
             goto cleanup;
         }
         sdp_type_string = json_object_get_string_member(data_json_object, "type");
@@ -304,12 +304,10 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
 
             webrtc_entry->recv.addremote(webrtc_entry);
 
-
             gst_element_set_state(webrtc_entry->recv.recvpipe, GST_STATE_PLAYING);
 
             g_signal_connect(webrtc_entry->recv.recvbin, "on-ice-candidate",
                              G_CALLBACK(on_ice_candidate_cb), (gpointer)webrtc_entry);
-
 
             sdp_string = json_object_get_string_member(data_json_object, "sdp");
             // g_print("sdp:  %s", sdp_string);
@@ -318,7 +316,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         }
 
         if (!json_object_has_member(data_json_object, "sdp")) {
-            g_error("Received SDP message without SDP string\n");
+            g_print("Received SDP message without SDP string\n");
             goto cleanup;
         }
         sdp_string = json_object_get_string_member(data_json_object, "sdp");
@@ -333,7 +331,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
             gst_sdp_message_parse_buffer((guint8 *)sdp_string,
                                          strlen(sdp_string), sdp);
         if (ret != GST_SDP_OK) {
-            g_error("Could not parse SDP string\n");
+            g_print("Could not parse SDP string\n");
             goto cleanup;
         }
 
@@ -355,14 +353,14 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         const gchar *candidate_string;
 
         if (!json_object_has_member(data_json_object, "sdpMLineIndex")) {
-            g_error("Received ICE message without mline index\n");
+            g_print("Received ICE message without mline index\n");
             goto cleanup;
         }
         mline_index =
             json_object_get_int_member(data_json_object, "sdpMLineIndex");
 
         if (!json_object_has_member(data_json_object, "candidate")) {
-            g_error("Received ICE message without ICE candidate string\n");
+            g_print("Received ICE message without ICE candidate string\n");
             goto cleanup;
         }
         candidate_string = json_object_get_string_member(data_json_object,
@@ -389,7 +387,7 @@ cleanup:
     return;
 
 unknown_message:
-    g_error("Unknown message \"%s\", ignoring", data_string);
+    g_print("Unknown message \"%s\", ignoring", data_string);
     goto cleanup;
 }
 
@@ -400,33 +398,70 @@ static void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
     GST_DEBUG("Closed websocket connection %p, connected size: %d\n", (gpointer)connection, g_hash_table_size(webrtc_connected_table));
 }
 
-static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
-                              SoupMessage *message, const char *path, G_GNUC_UNUSED GHashTable *query,
-                              G_GNUC_UNUSED SoupClientContext *client_context,
-                              G_GNUC_UNUSED gpointer user_data) {
-    if ((g_strcmp0(path, "/") != 0) && (g_strcmp0(path, "/index.html") != 0)) {
-        soup_message_set_status(message, SOUP_STATUS_NOT_FOUND);
+static void
+do_get(SoupServer *server, SoupMessage *msg, const char *path) {
+    char *slash;
+    struct stat st;
+
+    if (stat(path, &st) == -1) {
+        if (errno == EPERM)
+            soup_message_set_status(msg, SOUP_STATUS_FORBIDDEN);
+        else if (errno == ENOENT)
+            soup_message_set_status(msg, SOUP_STATUS_NOT_FOUND);
+        else
+            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
         return;
     }
 
-    if (message->method == SOUP_METHOD_GET) {
+    if (msg->method == SOUP_METHOD_GET) {
         GMappedFile *mapping;
         SoupBuffer *buffer;
 
-        mapping = g_mapped_file_new("webrtc.html", FALSE, NULL);
+        mapping = g_mapped_file_new(path, FALSE, NULL);
         if (!mapping) {
-            soup_message_set_status(message, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
             return;
         }
 
         buffer = soup_buffer_new_with_owner(g_mapped_file_get_contents(mapping),
                                             g_mapped_file_get_length(mapping),
                                             mapping, (GDestroyNotify)g_mapped_file_unref);
-        soup_message_body_append_buffer(message->response_body, buffer);
+        soup_message_body_append_buffer(msg->response_body, buffer);
         soup_buffer_free(buffer);
+    } else /* msg->method == SOUP_METHOD_HEAD */ {
+        char *length;
+
+        /* We could just use the same code for both GET and
+         * HEAD (soup-message-server-io.c will fix things up).
+         * But we'll optimize and avoid the extra I/O.
+         */
+        length = g_strdup_printf("%lu", (gulong)st.st_size);
+        soup_message_headers_append(msg->response_headers,
+                                    "Content-Length", length);
+        g_free(length);
     }
 
-    soup_message_set_status(message, SOUP_STATUS_OK);
+    soup_message_set_status(msg, SOUP_STATUS_OK);
+}
+
+static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
+                              SoupMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
+                              G_GNUC_UNUSED SoupClientContext *client_context,
+                              G_GNUC_UNUSED gpointer user_data) {
+    char *file_path;
+
+    if (msg->method == SOUP_METHOD_GET || msg->method == SOUP_METHOD_HEAD) {
+        if (g_strcmp0(path, "/") == 0) {
+            soup_message_set_redirect(msg, SOUP_STATUS_MOVED_PERMANENTLY,
+                                      "/webroot/index.html");
+            return;
+        }
+        file_path = g_strdup_printf(".%s", path);
+
+        do_get(soup_server, msg, file_path);
+    } else
+        soup_message_set_status(msg, SOUP_STATUS_NOT_IMPLEMENTED);
+    g_free(file_path);
 }
 
 typedef struct {
@@ -471,25 +506,17 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
 
 static void destroy_webrtc_table(gpointer entry_ptr) {
     WebrtcItem *webrtc_entry = (WebrtcItem *)entry_ptr;
-    GstBus *bus;
     g_assert(webrtc_entry != NULL);
 
-    if (webrtc_entry->sendpipe != NULL && webrtc_entry->stop_webrtc != NULL) {
+    if (webrtc_entry->stop_webrtc != NULL) {
         webrtc_entry->stop_webrtc(webrtc_entry);
     }
 
     if (webrtc_entry->record.pipeline != NULL) {
         webrtc_entry->record.stop((gpointer)&webrtc_entry->record);
-
-        bus = gst_pipeline_get_bus(GST_PIPELINE(webrtc_entry->record.pipeline));
-        if (bus != NULL) {
-            gst_bus_remove_watch(bus);
-            gst_object_unref(bus);
-        }
-        gst_object_unref(GST_OBJECT(webrtc_entry->record.pipeline));
     }
 
-    if (webrtc_entry->recv.recvpipe != NULL ) {
+    if (webrtc_entry->recv.recvpipe != NULL) {
         webrtc_entry->recv.stop_recv(&webrtc_entry->recv);
     }
 
@@ -635,12 +662,13 @@ void start_http(webrtc_callback fn, int port) {
     data->fn = fn;
     data->webrtc_connected_table = webrtc_connected_table;
     soup_server =
-        soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server", SOUP_SERVER_TLS_CERTIFICATE, cert,
+        soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server",
+                        SOUP_SERVER_TLS_CERTIFICATE, cert,
                         NULL);
     g_object_unref(cert);
     g_signal_connect(soup_server, "request_started",
                      G_CALLBACK(request_started_callback), webrtc_connected_table);
-    soup_server_add_handler(soup_server, "/", soup_http_handler, NULL, NULL);
+    soup_server_add_handler(soup_server, NULL, soup_http_handler, NULL, NULL);
     soup_server_add_websocket_handler(soup_server, "/ws", NULL, NULL,
                                       soup_websocket_handler, (gpointer)data, NULL);
 

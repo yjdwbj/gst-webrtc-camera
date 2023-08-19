@@ -408,6 +408,15 @@ int main(int argc, char *argv[]) {
     g_main_loop_run(loop);
     gst_element_set_state(pipeline, GST_STATE_NULL);
 
+    g_free(config_data.udp.host);
+    g_free(config_data.root_dir);
+    g_free(config_data.http.host);
+    g_free(config_data.http.user);
+    g_free(config_data.http.password);
+    g_free(config_data.webrtc.turn.pwd);
+    g_free(config_data.webrtc.turn.url);
+    g_free(config_data.webrtc.turn.user);
+
 bail:
     g_object_unref(pipeline);
     return 0;
