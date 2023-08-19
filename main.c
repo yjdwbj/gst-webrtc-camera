@@ -24,6 +24,7 @@
 #include "soup.h"
 #include <json-glib/json-glib.h>
 #include <stdio.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static GMainLoop *loop;
@@ -355,6 +356,8 @@ int main(int argc, char *argv[]) {
         g_printerr("gst initialize failed.\n");
         return -1;
     }
+
+
 #if defined(HAS_JETSON_NANO)
     g_print("You defined running on Jetson nano\n");
     const gchar *nvlibs[] = {

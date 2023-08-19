@@ -51,8 +51,6 @@ static GList *G_AppsrcList;
 
 GstConfigData config_data;
 
-static CustomAppData app_data;
-
 static GObject *send_channel, *receive_channel;
 
 #define MAKE_ELEMENT_AND_ADD(elem, name)                          \
@@ -240,10 +238,11 @@ static GstElement *video_src() {
                  "device", config_data.v4l2src_data.device,
                  "io-mode", config_data.v4l2src_data.io_mode,
                  NULL);
+
     srcvconvert = gst_element_factory_make("videoconvert", NULL);
 
     queue = gst_element_factory_make("queue", NULL);
-
+    g_object_set(G_OBJECT(queue), "leaky", 1, NULL);
     if (!teesrc || !source || !srcvconvert || !capsfilter || !queue) {
         g_printerr("video_src all elements could be created.\n");
         return NULL;
@@ -265,6 +264,7 @@ static GstElement *video_src() {
             g_error("Failed to link elements video mjpg src\n");
             return NULL;
         }
+
     } else {
         if (!gst_element_link_many(source, queue, srcvconvert, teesrc, NULL)) {
             g_error("Failed to link elements video src\n");
@@ -273,6 +273,30 @@ static GstElement *video_src() {
     }
 #endif
     return teesrc;
+}
+
+static gchar* get_pipewire_path()
+{
+    const gchar *cmdstr = "wpctl status | grep Ncs | head -n1 | awk  '{print $2}' | awk -F. '{print $1}'";
+    FILE *fp;
+    gchar *val;
+    char path[4];
+
+    /* Open the command for reading. */
+    fp = popen(cmdstr, "r");
+    if (fp == NULL) {
+        printf("Failed to run command\n");
+        exit(1);
+    }
+
+    /* Read the output a line at a time - output it. */
+    while (fgets(path, sizeof(path), fp) != NULL) {
+        val = g_strdup(path);
+    }
+
+    /* close */
+    pclose(fp);
+    return val;
 }
 
 static GstElement *audio_src() {
@@ -289,11 +313,16 @@ static GstElement *audio_src() {
         return NULL;
     }
 
-    if (config_data.audio.path > 0) {
+    if (config_data.audio.path != 0) {
         gchar *tmp = g_strdup_printf("%d", config_data.audio.path);
         g_object_set(G_OBJECT(source), "path", tmp, NULL);
         g_free(tmp);
+    } else {
+        gchar *path = get_pipewire_path();
+        g_object_set(G_OBJECT(source), "path", path, NULL);
+        g_free(path);
     }
+
     g_object_set(G_OBJECT(audioecho), "delay", 50000000, "intensity", 0.6, "feedback", 0.4, NULL);
     gst_bin_add_many(GST_BIN(pipeline), source, teesrc, srcvconvert, enc, postconv, audioecho, NULL);
     if (!gst_element_link_many(source, srcvconvert, audioecho, postconv, enc, teesrc, NULL)) {
@@ -313,7 +342,7 @@ static GstElement *encoder_h264() {
     teeh264 = gst_element_factory_make("tee", NULL);
     queue = gst_element_factory_make("queue", NULL);
     capsfilter = gst_element_factory_make("capsfilter", NULL);
-    g_object_set(G_OBJECT(queue), "max-size-buffers", 1, NULL);
+    g_object_set(G_OBJECT(queue), "leaky", 1, NULL);
 
     encoder = get_hardware_h264_encoder();
 
@@ -526,26 +555,6 @@ on_new_sample_from_sink(GstElement *elt, CustomAppData *data) {
 
 #endif
 
-/* called when we get a GstMessage from the sink pipeline when we get EOS, we
- * exit the mainloop and this testapp. */
-static gboolean
-on_sink_message(GstBus *bus, GstMessage *message, CustomAppData *data) {
-    gchar *name;
-    name = gst_object_get_path_string(message->src);
-    switch (GST_MESSAGE_TYPE(message)) {
-    case GST_MESSAGE_EOS:
-        g_print("Finished playback, src: %s\n", name);
-        break;
-    case GST_MESSAGE_ERROR:
-        g_print("Received error, src: %s\n", name);
-        break;
-    default:
-        break;
-    }
-    g_free(name);
-    return TRUE;
-}
-
 static gboolean
 on_source_message(GstBus *bus, GstMessage *message, CustomAppData *data) {
     gchar *name;
@@ -628,16 +637,14 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     g_free(filename);
     g_free(timestr);
 
-
     gchar *video_src = g_strdup_printf("udpsrc port=%d address=%s  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! queue ! mux. ",
+                                       " rtph264depay ! h264parse ! queue leaky=1 ! mux. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr);
-    if(config_data.audio.enable)
-    {
+    if (config_data.audio.enable) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay ! opusparse ! queue ! mux.",
+                                           " rtpopusdepay ! opusparse ! queue leaky=1 ! mux.",
                                            config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
         cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
         g_free(audio_src);
@@ -662,7 +669,6 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     gst_object_unref(bus);
     g_free(cmdline);
     gst_element_set_state(item->pipeline, GST_STATE_READY);
-
 
     gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
 }
@@ -741,13 +747,13 @@ static int start_udpsrc_rec(gpointer user_data) {
 
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  name=video_save ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! queue ! mux. ",
+                                       " rtph264depay ! h264parse ! queue leaky=1 ! mux. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr);
 
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay ! opusparse ! queue ! mux.",
+                                           " rtpopusdepay ! opusparse ! queue leaky=1 ! mux.",
                                            config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
         cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
         g_free(audio_src);
@@ -910,6 +916,18 @@ void appsrc_cmd_rec_stop(gpointer user_data) {
     item->pipeline = NULL;
 }
 
+static void on_enough_data(GstElement *appsrc, gpointer user_data) {
+    gchar *name = gst_element_get_name(appsrc);
+    g_print("appsrc %s have enough data\n", name);
+    g_free(name);
+}
+
+static void need_data(GstElement *appsrc, gpointer user_data) {
+    gchar *name = gst_element_get_name(appsrc);
+    g_print("appsrc %s need data\n", name);
+    g_free(name);
+}
+
 static void appsrc_cmd_rec_start(gpointer user_data) {
     /**
      * @brief I want to create a module for recording, but it cannot be dynamically added and deleted while the pipeline is running。
@@ -951,15 +969,15 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(outdir);
 
-    gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 ! "
+    gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 leaky-type=1  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse !  queue ! mux. ",
+                                       " rtph264depay ! h264parse !  queue leaky=1 ! mux. ",
                                        vid_str);
 
     if (config_data.audio.enable) {
-        gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 ! "
+        gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3  leaky-type=1  ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay  ! opusparse ! queue  ! mux.",
+                                           " rtpopusdepay  ! opusparse ! queue leaky=1 ! mux.",
                                            aid_str);
         cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
         g_free(audio_src);
@@ -983,6 +1001,7 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
     gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
     item->rec_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->pipeline), vid_str);
     // g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
+    g_signal_connect(item->rec_avpair.video_src, "enough-data", (GCallback)on_enough_data, NULL);
     item->rec_avpair.audio_src = config_data.audio.enable ? gst_bin_get_by_name(GST_BIN(item->pipeline), aid_str) : NULL;
 
     // g_signal_connect(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
@@ -1031,7 +1050,8 @@ static gboolean stop_appsrc_rec(gpointer user_data) {
     return TRUE;
 }
 
-static void start_appsrc_record() {
+static void
+start_appsrc_record() {
     RecordItem *item;
     gchar *fullpath;
     gchar *cmdline;
@@ -1058,17 +1078,15 @@ static void start_appsrc_record() {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(outdir);
 
-
-    gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 ! "
+    gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 leaky-type=1  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse !  queue ! mux. ",
+                                       " rtph264depay ! h264parse !  queue leaky=1 ! mux. ",
                                        vid_str);
 
-    if(config_data.audio.enable)
-    {
-        gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 ! "
+    if (config_data.audio.enable) {
+        gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 leaky-type=1 ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay  ! opusparse ! queue  ! mux.",
+                                           " rtpopusdepay  ! opusparse ! queue leaky=1 ! mux.",
                                            aid_str);
         cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
         g_free(audio_src);
@@ -1086,9 +1104,11 @@ static void start_appsrc_record() {
 
     item->rec_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->pipeline), vid_str);
     // g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
+    g_signal_connect(item->rec_avpair.video_src, "enough-data", (GCallback)on_enough_data, NULL);
 
     item->rec_avpair.audio_src = config_data.audio.enable ? gst_bin_get_by_name(GST_BIN(item->pipeline), aid_str) : NULL;
     // g_signal_connect(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
+    g_signal_connect(item->rec_avpair.audio_src, "enough-data", (GCallback)on_enough_data, NULL);
 
     bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
     gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
@@ -1160,9 +1180,9 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     gst_caps_unref(caps);
     if (g_strcmp0(name, "audio") == 0) {
         if (g_strcmp0(encode_name, "OPUS") == 0) {
-            desc = g_strdup_printf(" rtpopusdepay ! opusdec ! queue !  audioconvert  ! audioecho delay=50000000 intensity=0.6 feedback=0.4 ! autoaudiosink");
+            desc = g_strdup_printf(" rtpopusdepay ! opusdec ! queue leaky=1 !  audioconvert  ! audioecho delay=50000000 intensity=0.6 feedback=0.4 ! autoaudiosink");
         } else {
-            desc = g_strdup_printf(" decodebin ! queue ! audioconvert  ! webrtcechoprobe  ! autoaudiosink");
+            desc = g_strdup_printf(" decodebin ! queue leaky=1 ! audioconvert  ! webrtcechoprobe  ! autoaudiosink");
         }
         playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
         g_free(desc);
@@ -1176,16 +1196,16 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
         }
 
         if (g_strcmp0(encode_name, "VP8") == 0) {
-            desc = g_strdup_printf(" rtpvp8depay ! vp8dec ! queue ! videoconvert ! autovideosink");
+            desc = g_strdup_printf(" rtpvp8depay ! vp8dec ! queue leaky=1 ! videoconvert ! autovideosink");
             g_print("recv vp8 stream from remote.\n");
         } else if (g_strcmp0(encode_name, "H264") == 0) {
             const gchar *vah264 = "vaapih264dec";
             const gchar *nvh264 = "nvh264dec";
-            desc = g_strdup_printf(" rtph264depay ! h264parse ! %s ! queue ! videoconvert ! autovideosink",
+            desc = g_strdup_printf(" rtph264depay ! h264parse ! %s ! queue leaky=1 ! videoconvert ! autovideosink",
                                    gst_element_factory_find(vah264) ? vah264 : gst_element_factory_find(nvh264) ? nvh264
                                                                                                                 : "avdec_h264");
         } else {
-            desc = g_strdup_printf(" decodebin ! queue ! videoconvert ! autovideosink");
+            desc = g_strdup_printf(" decodebin ! queue leaky=1 ! videoconvert ! autovideosink");
         }
 
         playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
@@ -1239,7 +1259,7 @@ static void stop_recv_webrtc(gpointer user_data) {
         switch (gst_iterator_next(iter, &data)) {
         case GST_ITERATOR_OK: {
             GstElement *child = g_value_get_object(&data);
-            g_print("remove bin: %s \n", gst_element_get_name(child));
+            // g_print("remove bin: %s \n", gst_element_get_name(child));
             gst_bin_remove(GST_BIN(recv_entry->recvpipe), child);
             gst_element_set_state(child, GST_STATE_NULL);
             // gst_object_unref(child);
@@ -1521,18 +1541,18 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     GstBus *bus = NULL;
     // gchar *turn_srv = NULL;
     const gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! queue ! "
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue ! "
+                                       " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue leaky=1 ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " queue ! %s. ",
+                                       " queue leaky=1 ! %s. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, webrtc_name);
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay ! rtpopuspay ! queue ! "
+                                           " rtpopusdepay ! rtpopuspay ! queue leaky=1 ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " queue ! %s.",
+                                           " queue leaky=1 ! %s.",
                                            config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr, webrtc_name);
         cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
         GST_DEBUG("webrtc cmdline: %s \n", cmdline);
@@ -1676,19 +1696,19 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     // vcaps = gst_caps_from_string("video/x-h264,stream-format=(string)avc,alignment=(string)au,width=(int)1280,height=(int)720,framerate=(fraction)30/1,profile=(string)main");
     // acaps = gst_caps_from_string("audio/x-opus, channels=(int)1,channel-mapping-family=(int)1");
 
-    gchar *video_src = g_strdup_printf("appsrc  name=video_%ld format=3 ! "
+    gchar *video_src = g_strdup_printf("appsrc  name=video_%ld format=3 leaky-type=2 ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue ! "
+                                       " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue leaky=2 !"
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " queue ! %s. ",
+                                       " queue leaky=2 ! %s. ",
                                        item->hash_id, webrtc_name);
 
     if (audio_source != NULL) {
-        gchar *audio_src = g_strdup_printf("appsrc name=audio_%ld  format=3 ! "
+        gchar *audio_src = g_strdup_printf("appsrc name=audio_%ld  format=3 leaky-type=2 ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay ! rtpopuspay ! queue ! "
+                                           " rtpopusdepay ! rtpopuspay ! queue leaky=2 ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " queue ! %s.",
+                                           " queue leaky=2 ! %s.",
                                            item->hash_id, webrtc_name);
         cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
         g_free(audio_src);
@@ -1711,13 +1731,14 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     webrtc_name = g_strdup_printf("video_%ld", item->hash_id);
     item->send_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     g_free(webrtc_name);
-
-    // g_signal_connect(appsrc_vid, "need-data", (GCallback)need_data, video_sink);
+    // g_signal_connect(item->send_avpair.video_src, "enough-data", (GCallback)on_enough_data, NULL);
+    // g_signal_connect(item->send_avpair.video_src, "need-data", (GCallback)need_data, NULL);
     webrtc_name = g_strdup_printf("audio_%ld", item->hash_id);
     item->send_avpair.audio_src = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     g_free(webrtc_name);
 
-    // g_signal_conne/ct(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
+    // g_signal_connect(item->send_avpair.audio_src, "enough-data", (GCallback)on_enough_data, NULL);
+    // g_signal_connect(item->send_avpair.audio_src, "need-data", (GCallback)need_data, NULL);
     g_mutex_lock(&G_appsrc_lock);
     G_AppsrcList = g_list_append(G_AppsrcList, &item->send_avpair);
     g_mutex_unlock(&G_appsrc_lock);
@@ -1776,7 +1797,6 @@ on_new_sample_from_sink(GstElement *elt, gpointer user_data) {
             GST_BUFFER_PTS(buffer) = pts;
             GST_BUFFER_DTS(buffer) = dts;
             GList *item;
-
             g_mutex_lock(&G_appsrc_lock);
             for (item = G_AppsrcList; item; item = item->next) {
                 AppSrcAVPair *pair = item->data;
@@ -1805,9 +1825,10 @@ int start_av_appsink() {
     video_sink = gst_element_factory_make("appsink", "video_sink");
 
     /* Configure udpsink */
-    g_object_set(video_sink, "sync", FALSE, "async", FALSE, "emit-signals", TRUE, NULL);
+    g_object_set(video_sink, "sync", FALSE, "async", FALSE,
+                 "emit-signals", TRUE, "drop", TRUE, "max-buffers", 100, NULL);
     g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
-    g_object_set(vqueue, "max-size-time", 100000000, NULL);
+    g_object_set(vqueue, "leaky", 1, NULL);
     gst_bin_add(GST_BIN(pipeline), video_sink);
 
     if (!gst_element_link_many(vqueue, h264parse, video_pay, video_sink, NULL)) {
@@ -1837,7 +1858,10 @@ int start_av_appsink() {
         gst_bin_add(GST_BIN(pipeline), audio_sink);
         MAKE_ELEMENT_AND_ADD(audio_pay, "rtpopuspay");
         MAKE_ELEMENT_AND_ADD(aqueue, "queue");
-        g_object_set(audio_sink, "sync", FALSE, "async", FALSE, "emit-signals", TRUE, NULL);
+        g_object_set(aqueue, "leaky", 1, NULL);
+        g_object_set(audio_sink, "sync", FALSE, "async", FALSE,
+                     "emit-signals", TRUE, "drop", TRUE,
+                     "max-buffers", 200, NULL);
         g_object_set(audio_pay, "pt", 97, NULL);
         /* link to upstream. */
         if (!gst_element_link_many(aqueue, audio_pay, audio_sink, NULL)) {
@@ -1868,96 +1892,6 @@ int start_av_appsink() {
     return 0;
 }
 
-int start_appsink() {
-    if (!_check_initial_status())
-        return -1;
-    GstElement *muxer, *h264parse, *aqueue, *vqueue, *appsink;
-    GstPad *src_vpad, *src_apad, *sink_vpad, *sink_apad;
-    GstPadLinkReturn lret;
-    GstBus *bus = NULL;
-    MAKE_ELEMENT_AND_ADD(vqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(aqueue, "queue");
-    /**
-     * @brief matroskamux have a lot of problem.
-     *
-     * It is normal for the first file to appear in the combination of
-     * appsink and appsrc when using matroskamux, but the following files
-     * are rawdata of matroska without ebml header, can not play and identify.
-     *
-     * But I use the mpegtsmux test is no problem.
-     */
-    MAKE_ELEMENT_AND_ADD(muxer, "mpegtsmux");
-    MAKE_ELEMENT_AND_ADD(appsink, "appsink");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
-
-    app_data.appsink = appsink;
-    app_data.muxer = muxer;
-
-    if (!gst_element_link_many(h264parse, vqueue, muxer, appsink, NULL)) {
-        g_error("Failed to link elements to video queue.\n");
-        return -1;
-    }
-    if (!gst_element_link(aqueue, muxer)) {
-        g_error("Failed to link elements audio to mpegtsmux.\n");
-        return -1;
-    }
-
-    // g_object_set(muxer,
-    //              //  "streamable", TRUE,
-    //              "fragment-duration", record_time * 1000,
-    //              "fragment-mode",1, NULL);
-
-    /* Configure appsink */
-    g_object_set(appsink, "sync", FALSE, "emit-signals", TRUE, NULL);
-
-    bus = gst_element_get_bus(appsink);
-    gst_bus_add_watch(bus, (GstBusFunc)on_sink_message, &app_data);
-    gst_object_unref(bus);
-
-    sink_vpad = gst_element_get_static_pad(h264parse, "sink");
-#if GST_VERSION_MINOR >= 20
-    src_vpad = gst_element_request_pad_simple(h264_encoder, "src_%u");
-#else
-    src_vpad = gst_element_get_request_pad(h264_encoder, "src_%u");
-#endif
-
-    if ((lret = gst_pad_link(src_vpad, sink_vpad)) != GST_PAD_LINK_OK) {
-        g_error("Tee mkv file video sink could not be linked. ret: %d \n", lret);
-        return -1;
-    }
-
-    gst_object_unref(sink_vpad);
-    gst_object_unref(src_vpad);
-
-    // link second queue to matroskamux, element link not working because the queue default link to the video_%u.
-    // src_apad = gst_element_get_static_pad(aqueue, "src");
-    // sink_apad = gst_element_request_pad_simple(muxer, "audio_%u");
-    // if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
-    //     g_error("Tee mkv file audio sink could not be linked. ret: %d \n", lret);
-    //     return -1;
-    // }
-
-    // gst_object_unref(sink_apad);
-    // gst_object_unref(src_apad);
-
-    // add audio to muxer.
-#if GST_VERSION_MINOR >= 20
-    src_apad = gst_element_request_pad_simple(audio_source, "src_%u");
-#else
-    src_apad = gst_element_get_request_pad(audio_source, "src_%u");
-#endif
-    GST_DEBUG("mkv obtained request pad %s for from audio source.\n", gst_pad_get_name(src_apad));
-    sink_apad = gst_element_get_static_pad(aqueue, "sink");
-    if ((lret = gst_pad_link(src_apad, sink_apad)) != GST_PAD_LINK_OK) {
-        // May be the src and sink are not match the format. ex: aac could not link to matroskamux.
-        gst_printerrln("Tee mkv file audio sink could not be linked, link return :%d .\n", lret);
-        return -1;
-    }
-    gst_object_unref(GST_OBJECT(sink_apad));
-    gst_object_unref(src_apad);
-    return 0;
-}
-
 int splitfile_sink() {
     if (!_check_initial_status())
         return -1;
@@ -1971,7 +1905,7 @@ int splitfile_sink() {
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
 
-    g_object_set(vqueue, "max-size-time", 100000000, NULL);
+    g_object_set(vqueue,"leaky", 1, NULL);
     if (!gst_element_link_many(vqueue, h264parse, splitmuxsink, NULL)) {
         g_error("Failed to link elements splitmuxsink.\n");
         return -1;
@@ -2055,12 +1989,12 @@ int av_hlssink() {
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
-
+    g_object_set(vqueue, "leaky", 1, NULL);
     if (!gst_element_link_many(vqueue, h264parse, mpegtsmux, hlssink, NULL)) {
         g_error("Failed to link elements av hlssink\n");
         return -1;
     }
-    g_object_set(vqueue, "max-size-time", 100000000, NULL);
+    g_object_set(vqueue, "leaky", 1, NULL);
     set_hlssink_object(hlssink, outdir, "/segment%05d.ts");
 
     _mkdir(outdir, 0755);
@@ -2085,7 +2019,7 @@ int av_hlssink() {
 
         MAKE_ELEMENT_AND_ADD(aqueue, "queue");
         MAKE_ELEMENT_AND_ADD(opusparse, "opusparse");
-
+        g_object_set(aqueue, "leaky", 1, NULL);
         if (!gst_element_link_many(aqueue, opusparse, mpegtsmux, NULL)) {
             g_error("Failed to link elements audio to mpegtsmux.\n");
             return -1;
@@ -2122,7 +2056,6 @@ int udp_multicastsink() {
     SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, rtpmp2tpay, "rtpmp2tpay");
     SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, vqueue, "queue");
     SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, mpegtsmux, "mpegtsmux");
-
     if (!gst_element_link_many(vqueue, mpegtsmux, rtpmp2tpay, udpsink, NULL)) {
         g_error("Failed to link elements udpsink\n");
         return -1;
@@ -2134,7 +2067,7 @@ int udp_multicastsink() {
                  "auto-multicast", config_data.udp.multicast, NULL);
 
     g_object_set(mpegtsmux, "alignment", 7, NULL);
-    g_object_set(vqueue, "max-size-time", 100000000, NULL);
+    g_object_set(vqueue, "leaky", 1, NULL);
 
     // create ghost pads for sub bin.
     sub_sink_vpad = gst_element_get_static_pad(vqueue, "sink");
@@ -2155,6 +2088,7 @@ int udp_multicastsink() {
 
     if (audio_source != NULL) {
         SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, aqueue, "queue");
+        g_object_set(aqueue, "leaky", 1, NULL);
         if (!gst_element_link(aqueue, mpegtsmux)) {
             g_error("Failed to link elements audio to mpegtsmux.\n");
             return -1;
@@ -2207,7 +2141,7 @@ int motion_hlssink() {
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(motioncells, "motioncells");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
-
+    g_object_set(queue, "leaky", 1, NULL);
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
         MAKE_ELEMENT_AND_ADD(textoverlay, "textoverlay");
@@ -2273,7 +2207,7 @@ int cvtracker_hlssink() {
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(cvtracker, "cvtracker");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
-
+    g_object_set(queue, "leaky", 1, NULL);
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
         MAKE_ELEMENT_AND_ADD(textoverlay, "textoverlay");
@@ -2332,7 +2266,7 @@ int facedetect_hlssink() {
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(facedetect, "facedetect");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
-
+    g_object_set(queue, "leaky", 1, NULL);
     encoder = get_hardware_h264_encoder();
 
     if (config_data.hls.showtext) {
@@ -2344,7 +2278,7 @@ int facedetect_hlssink() {
             g_error("Failed to link elements facedetect sink.\n");
             return -1;
         }
-        g_object_set(textoverlay, "text", "queue ! videoconvert ! facedetect min-stddev=24 scale-factor=2.8 ! videoconvert",
+        g_object_set(textoverlay, "text", "queue leaky=1 ! videoconvert ! facedetect min-stddev=24 scale-factor=2.8 ! videoconvert",
                      "valignment", 1, // bottom
                      "halignment", 0, // left
                      NULL);
@@ -2397,7 +2331,7 @@ int edgedect_hlssink() {
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
     MAKE_ELEMENT_AND_ADD(clock, "clockoverlay");
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
-
+    g_object_set(post_queue, "leaky", 1, NULL);
     encoder = get_hardware_h264_encoder();
 
     if (config_data.hls.showtext) {
@@ -2528,7 +2462,6 @@ GstElement *create_instance() {
     }
 
     if (config_data.app_sink) {
-        // start_appsink();
         start_av_appsink();
     }
 

@@ -16,11 +16,11 @@
   },
 
   "audio": {
-    "enable": false,
-    "path": 40,
+    "enable": true,
+    "path": 0,
     "buf_time": 5000000
   },
-  "rootdir": "/tmp/output",
+  "rootdir": "./",
   "showdot": true,
   "udp": {
     "enable": false,
@@ -47,7 +47,7 @@
   "motion_rec": false,
   "rec_len": 20,
   "hls_onoff": {
-    "av_hlssink": false,
+    "av_hlssink": true,
     "motion_hlssink": true,
     "edge_hlssink": true,
     "cvtracker_hlssink": true,
