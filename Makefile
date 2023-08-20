@@ -13,5 +13,9 @@ all:
 
 
 clean:
+# ifeq must be at the same indentation level in the makefile as the name of the target
+ifneq (,$(wildcard $(EXE)))
 	rm ${EXE}
+endif
+
 

@@ -275,8 +275,7 @@ static GstElement *video_src() {
     return teesrc;
 }
 
-static gchar* get_pipewire_path()
-{
+static gchar *get_pipewire_path() {
     const gchar *cmdstr = "wpctl status | grep Ncs | head -n1 | awk  '{print $2}' | awk -F. '{print $1}'";
     FILE *fp;
     gchar *val;
@@ -922,11 +921,13 @@ static void on_enough_data(GstElement *appsrc, gpointer user_data) {
     g_free(name);
 }
 
+#if 0
 static void need_data(GstElement *appsrc, gpointer user_data) {
     gchar *name = gst_element_get_name(appsrc);
     g_print("appsrc %s need data\n", name);
     g_free(name);
 }
+#endif
 
 static void appsrc_cmd_rec_start(gpointer user_data) {
     /**
@@ -1749,14 +1750,18 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     webrtc_name = g_strdup_printf("video_%ld", item->hash_id);
     item->send_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     g_free(webrtc_name);
-    // g_signal_connect(item->send_avpair.video_src, "enough-data", (GCallback)on_enough_data, NULL);
-    // g_signal_connect(item->send_avpair.video_src, "need-data", (GCallback)need_data, NULL);
+#if 0
+    g_signal_connect(item->send_avpair.video_src, "enough-data", (GCallback)on_enough_data, NULL);
+    g_signal_connect(item->send_avpair.video_src, "need-data", (GCallback)need_data, NULL);
+#endif
+
     webrtc_name = g_strdup_printf("audio_%ld", item->hash_id);
     item->send_avpair.audio_src = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     g_free(webrtc_name);
-
-    // g_signal_connect(item->send_avpair.audio_src, "enough-data", (GCallback)on_enough_data, NULL);
-    // g_signal_connect(item->send_avpair.audio_src, "need-data", (GCallback)need_data, NULL);
+#if 0
+    g_signal_connect(item->send_avpair.audio_src, "enough-data", (GCallback)on_enough_data, NULL);
+    g_signal_connect(item->send_avpair.audio_src, "need-data", (GCallback)need_data, NULL);
+#endif
     g_mutex_lock(&G_appsrc_lock);
     G_AppsrcList = g_list_append(G_AppsrcList, &item->send_avpair);
     g_mutex_unlock(&G_appsrc_lock);
@@ -1923,7 +1928,7 @@ int splitfile_sink() {
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
 
-    g_object_set(vqueue,"leaky", 1, NULL);
+    g_object_set(vqueue, "leaky", 1, NULL);
     if (!gst_element_link_many(vqueue, h264parse, splitmuxsink, NULL)) {
         g_error("Failed to link elements splitmuxsink.\n");
         return -1;

@@ -6,76 +6,180 @@
   <meta itemprop="name" content="WebRTC code samples">
   <meta name="mobile-web-app-capable" content="yes">
   <meta id="theme-color" name="theme-color" content="#ffffff">
+
   <script src="hls.js"></script>
   <script src="dash.all.min.js"></script>
   <link href="bootstrap.min.css" rel="stylesheet">
-  <script src="bootstrap.bundle.min.js" ></script>
-
+  <script src="bootstrap.bundle.min.js"></script>
 </head>
-<body>
-<style>
-body {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-}
-.flex-container {
-  display: flex;
-  flex-wrap: wrap;
-  min-height: 100vh;
-}
 
-.flex-item {
-  min-width: 50%;
-  min-height: 50%;
-  max-height: inherit;
-}
-.video-block {
- object-fit: contain;
- max-width: 100%;
- height: 100%;
-}
-</style>
+<body>
+  <style>
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    .flex-container {
+      display: flex;
+      flex-wrap: wrap;
+      min-height: 100vh;
+    }
+
+    .flex-item {
+      min-width: 50%;
+      min-height: 50%;
+      max-height: inherit;
+    }
+
+    .video-block {
+      object-fit: contain;
+      max-width: 100%;
+      height: 100%;
+    }
+  </style>
   <h2 class="text-center">Gsteramer HLS 直播流服务</h2>
   <div class="container-fluid p-0 m-0">
-  <div class="row row-cols-2">
-	<div class="card col p-1 m-0"><div class="card-header text-center">音视频流</div><div class="card-body p-0 m-0"><video class="video-block w-100 h-100" id="video"  autoplay controls  ></video></div></div>
-	<div class="card col p-1 m-0"><div class="card-header text-center">人脸检测</div><div class="card-body p-0 m-0"><video class="video-block w-100 h-100" id="face"   autoplay controls  ></video></div></div>
-	<div class="card col p-1 m-0"><div class="card-header text-center">边缘检测</div><div class="card-body p-0 m-0"><video class="video-block w-100 h-100" id="edge"   autoplay controls  ></video></div></div>
-	<div class="card col p-1 m-0"><div class="card-header text-center">运动检测</div><div class="card-body p-0 m-0"><video class="video-block w-100 h-100" id="motion" autoplay controls  ></video></div></div>
-  </div>
+    <div class="row row-cols-2">
+      <div class="card col p-1 m-0">
+        <div class="card-header text-center">WebRTC</div>
+        <div class="card-body p-0 m-0"><video class="video-block w-100 h-100" id="webrtc" autoplay controls></video>
+        </div>
+      </div>
+      <div class="card col p-1 m-0">
+        <div class="card-header text-center">人脸检测</div>
+        <div class="card-body p-0 m-0"><video class="video-block w-100 h-100" id="face" autoplay controls></video></div>
+      </div>
+      <div class="card col p-1 m-0">
+        <div class="card-header text-center">边缘检测</div>
+        <div class="card-body p-0 m-0"><video class="video-block w-100 h-100" id="edge" autoplay controls></video></div>
+      </div>
+      <div class="card col p-1 m-0">
+        <div class="card-header text-center">运动检测</div>
+        <div class="card-body p-0 m-0"><video class="video-block w-100 h-100" id="motion" autoplay controls></video>
+        </div>
+      </div>
+    </div>
   </div>
   <script>
-    if(Hls.isSupported()) {
+
+    if (Hls.isSupported()) {
       var video = document.getElementById('video');
       var hls = new Hls();
       hls.loadSource('../hls/playlist.m3u8');
       hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED,function() {
+      hls.on(Hls.Events.MANIFEST_PARSED, function () {
         video.play();
       });
       var edge = document.getElementById('edge');
       var ehls = new Hls();
       ehls.loadSource('../hls/edge/playlist.m3u8');
       ehls.attachMedia(edge);
-      ehls.on(Hls.Events.MANIFEST_PARSED,function() {
+      ehls.on(Hls.Events.MANIFEST_PARSED, function () {
         edge.play();
       });
       var motion = document.getElementById('motion');
       var mhls = new Hls();
       mhls.loadSource('../hls/motion/playlist.m3u8');
       mhls.attachMedia(motion);
-      mhls.on(Hls.Events.MANIFEST_PARSED,function() {
+      mhls.on(Hls.Events.MANIFEST_PARSED, function () {
         motion.play();
       });
       var face = document.getElementById('face');
       var fhls = new Hls();
       fhls.loadSource('../hls/face/playlist.m3u8');
       fhls.attachMedia(face);
-      fhls.on(Hls.Events.MANIFEST_PARSED,function() {
+      fhls.on(Hls.Events.MANIFEST_PARSED, function () {
         face.play();
       });
-   }
+    }
+
+    window.addEventListener('load', (event) => {
+      console.log("page is fully loaded!");
+      const stun_config = {
+        'iceServers': [{
+          urls: 'stun:stunserver.stunprotocol.org:3478'
+        }]
+      };
+      let websocketConnection;
+
+      function playStream(hostname, port, path) {
+        var l = window.location;
+        var wsHost = (hostname != undefined) ? hostname : l.hostname;
+        var wsPort = (port != undefined) ? port : l.port;
+        var wsPath = (path != undefined) ? path : "ws";
+        if (wsPort)
+          wsPort = ":" + wsPort;
+        var wsUrl = "wss://" + wsHost + wsPort + "/" + wsPath;
+        websocketConnection = new WebSocket(wsUrl);
+        websocketConnection.addEventListener("message", onServerMessage);
+      }
+
+      function onServerMessage(event) {
+        var msg;
+
+        try {
+          msg = JSON.parse(event.data);
+        } catch (e) {
+          console.log("parse json error: " + e);
+          return;
+        }
+
+        switch (msg.type) {
+          case "sdp": onIncomingSDP(msg.data); break;
+          case "ice": onIncomingICE(msg.data); break;
+          default: break;
+        }
+      }
+
+      async function onIceCandidate(event) {
+        if (event.candidate == null)
+          return;
+
+        // console.log("Sending ICE candidate out: " + JSON.stringify(event.candidate));
+        await websocketConnection.send(JSON.stringify({ "type": "ice", "data": event.candidate }));
+      }
+
+      function onAddRemoteStream(event) {
+        // var el = document.createElement(event.track.kind)
+        const el = document.getElementById('webrtc');
+        el.srcObject = event.streams[0]
+        el.autoplay = true
+        el.controls = true
+      }
+
+      // recvonly webrtc
+      async function onLocalDescription(desc) {
+        console.log("Local description: " + JSON.stringify(desc));
+        await remotepc.setLocalDescription(desc).then(function () {
+          websocketConnection.send(JSON.stringify({ type: "sdp", "data": remotepc.localDescription }));
+        }).catch(console.error);
+      }
+
+
+      async function onIncomingSDP(sdp) {
+        console.log("Incoming SDP: " + JSON.stringify(sdp));
+        if (sdp.type === "offer") {
+          await remotepc.setRemoteDescription(sdp).catch(console.error);
+          remotepc.createAnswer().then(onLocalDescription).catch(console.error);
+        }
+      }
+
+      async function onIncomingICE(ice) {
+        var candidate = new RTCIceCandidate(ice);
+        await remotepc.addIceCandidate(candidate).catch(console.error);
+      }
+
+      let remotepc = new RTCPeerConnection(stun_config);
+      remotepc.ontrack = onAddRemoteStream;
+      remotepc.onicecandidate = onIceCandidate;
+      remotepc.addTransceiver('video', { 'direction': 'sendrecv' });
+      remotepc.addTransceiver('audio', { 'direction': 'sendrecv' });
+
+      playStream(null, null, null);
+    });
   </script>
 </body>
+
 </html>

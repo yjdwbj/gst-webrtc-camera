@@ -398,9 +398,9 @@ static void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
     GST_DEBUG("Closed websocket connection %p, connected size: %d\n", (gpointer)connection, g_hash_table_size(webrtc_connected_table));
 }
 
+#include <sys/stat.h>
 static void
 do_get(SoupServer *server, SoupMessage *msg, const char *path) {
-    char *slash;
     struct stat st;
 
     if (stat(path, &st) == -1) {
