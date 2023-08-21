@@ -43,7 +43,7 @@ static void _get_cpuid() {
 
     if (!(getauxval(AT_HWCAP) & HWCAP_CPUID)) {
         g_print("CPUID registers unavailable\n");
-        return 1;
+        return;
     }
     unsigned long arm_cpuid = 0;
     asm("mrs %0, MIDR_EL1"
@@ -325,10 +325,10 @@ load_plugin_func(const gchar *name) {
     } else {
         if (err) {
             /* Report error to user, and free error */
-            GST_ERROR("Failed to load plugin: %s", err->message);
+            GST_ERROR("Failed to load plugin: %s \n", err->message);
             g_error_free(err);
         } else {
-            GST_WARNING("Failed to load plugin: \"%s\"", filename);
+            GST_WARNING("Failed to load plugin: \"%s\" \n", filename);
         }
     }
     g_free(filename);
@@ -363,6 +363,7 @@ int main(int argc, char *argv[]) {
     const gchar *nvlibs[] = {
         "nvarguscamerasrc",
         "nvvideosinks",
+        "nvvideosink",
         "nvvidconv",
         "nvvideo4linux2",
         "nvtee",
@@ -370,12 +371,12 @@ int main(int argc, char *argv[]) {
         "nvegltransform",
         "nvcompositor",
         "omx",
-        "nvcompositor"};
+        "nvivafilter"};
     int len = sizeof(nvlibs) / sizeof(gchar *);
     for (int i = 0; i < len; i++) {
         load_plugin_func(nvlibs[i]);
     }
-    g_print("nvlibs size: %d\n", sizeof(nvlibs) / sizeof(gchar *));
+    g_print("nvlibs size: %ld\n", sizeof(nvlibs) / sizeof(gchar *));
     // load_plugin_func("/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdv.so");
 #endif
     gst_segtrap_set_enabled(TRUE);

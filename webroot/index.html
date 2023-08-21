@@ -65,33 +65,26 @@
   <script>
 
     if (Hls.isSupported()) {
-      var video = document.getElementById('video');
-      var hls = new Hls();
-      hls.loadSource('../hls/playlist.m3u8');
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, function () {
-        video.play();
-      });
       var edge = document.getElementById('edge');
       var ehls = new Hls();
       ehls.loadSource('../hls/edge/playlist.m3u8');
       ehls.attachMedia(edge);
-      ehls.on(Hls.Events.MANIFEST_PARSED, function () {
-        edge.play();
+      ehls.on(Hls.Events.MANIFEST_PARSED, async function () {
+        await edge.play();
       });
       var motion = document.getElementById('motion');
       var mhls = new Hls();
       mhls.loadSource('../hls/motion/playlist.m3u8');
       mhls.attachMedia(motion);
-      mhls.on(Hls.Events.MANIFEST_PARSED, function () {
-        motion.play();
+      mhls.on(Hls.Events.MANIFEST_PARSED, async function () {
+        await motion.play();
       });
       var face = document.getElementById('face');
       var fhls = new Hls();
       fhls.loadSource('../hls/face/playlist.m3u8');
       fhls.attachMedia(face);
-      fhls.on(Hls.Events.MANIFEST_PARSED, function () {
-        face.play();
+      fhls.on(Hls.Events.MANIFEST_PARSED, async function () {
+        await face.play();
       });
     }
 

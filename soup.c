@@ -526,6 +526,7 @@ static void destroy_webrtc_table(gpointer entry_ptr) {
     g_free(webrtc_entry);
 }
 
+#if 0
 static void
 got_headers_callback(SoupMessage *msg, gpointer data) {
     const char *header;
@@ -563,7 +564,7 @@ request_started_callback(SoupServer *server, SoupMessage *msg,
     g_signal_connect(msg, "wrote_headers",
                      G_CALLBACK(wrote_headers_callback), data);
 }
-
+#endif
 extern GstConfigData config_data;
 
 static char *
@@ -666,8 +667,8 @@ void start_http(webrtc_callback fn, int port) {
                         SOUP_SERVER_TLS_CERTIFICATE, cert,
                         NULL);
     g_object_unref(cert);
-    g_signal_connect(soup_server, "request_started",
-                     G_CALLBACK(request_started_callback), webrtc_connected_table);
+    // g_signal_connect(soup_server, "request_started",
+    //                  G_CALLBACK(request_started_callback), webrtc_connected_table);
     soup_server_add_handler(soup_server, NULL, soup_http_handler, NULL, NULL);
     soup_server_add_websocket_handler(soup_server, "/ws", NULL, NULL,
                                       soup_websocket_handler, (gpointer)data, NULL);
