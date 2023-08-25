@@ -90,13 +90,14 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
         break;
     case GST_MESSAGE_ERROR: {
         GError *err = NULL;
-        gchar *debug = NULL;
+        gchar *debug, *strname;
         GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
                                   GST_DEBUG_GRAPH_SHOW_ALL, "error");
-        name = gst_object_get_path_string(message->src);
+        strname = gst_object_get_path_string(message->src);
         gst_message_parse_error(message, &err, &debug);
 
-        g_printerr("ERROR: from element %s: %s\n", name, err->message);
+        g_printerr("ERROR: from element %s: %s\n", strname, err->message);
+        g_free(strname);
         if (debug != NULL)
             g_printerr("Additional debug info:\n%s\n", debug);
         g_error_free(err);
@@ -106,19 +107,19 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
     }
     case GST_MESSAGE_WARNING: {
         GError *err = NULL;
-        gchar *name, *debug = NULL;
+        gchar *strname, *debug = NULL;
         GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
                                   GST_DEBUG_GRAPH_SHOW_ALL, "warning");
-        name = gst_object_get_path_string(message->src);
+        strname = gst_object_get_path_string(message->src);
         gst_message_parse_warning(message, &err, &debug);
 
-        g_printerr("ERROR: from element %s: %s\n", name, err->message);
+        g_printerr("ERROR: from element %s: %s\n", strname, err->message);
         if (debug != NULL)
             g_printerr("Additional debug info:\n%s\n", debug);
 
         g_error_free(err);
         g_free(debug);
-        g_free(name);
+        g_free(strname);
         break;
     }
     case GST_MESSAGE_EOS: {
@@ -132,12 +133,13 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
     }
     case GST_MESSAGE_ELEMENT: {
         const gchar *location;
-        const GstStructure *s = gst_message_get_structure(message);
-        if (gst_structure_has_name(s, "splitmuxsink-fragment-opened")) {
-            location = gst_structure_get_string(s, "location");
-            g_message("get message: %s\n location: %s",
-                      gst_structure_to_string(gst_message_get_structure(message)),
-                      location);
+        gchar *str;
+        const GstStructure *structure = gst_message_get_structure(message);
+        if (gst_structure_has_name(structure, "splitmuxsink-fragment-opened")) {
+            location = gst_structure_get_string(structure, "location");
+            str = gst_structure_to_string(gst_message_get_structure(message));
+            g_message("get message: %s\n location: %s",str,location);
+            g_free(str);
 
             // gst_debug_log(cat,
             //               GST_LEVEL_INFO,
@@ -146,10 +148,10 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
             //               0,
             //               NULL,
             //               location);
-        } else if (gst_structure_has_name(s, "GstBinForwarded")) {
+        } else if (gst_structure_has_name(structure, "GstBinForwarded")) {
             GstMessage *forward_msg = NULL;
 
-            gst_structure_get(s, "message", GST_TYPE_MESSAGE, &forward_msg, NULL);
+            gst_structure_get(structure, "message", GST_TYPE_MESSAGE, &forward_msg, NULL);
             g_assert(forward_msg);
             // gst_println("GstBinForwarded message source %s\n", GST_MESSAGE_SRC_NAME(forward_msg));
             switch (GST_MESSAGE_TYPE(forward_msg)) {

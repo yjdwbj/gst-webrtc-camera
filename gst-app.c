@@ -143,12 +143,6 @@ static gboolean _check_initial_status() {
 // https://github.com/hgtcs/gstreamer/blob/master/v4l2-enc-appsink.c
 // https://gstreamer.freedesktop.org/documentation/tutorials/basic/dynamic-pipelines.html?gi-language=c
 
-GstElement *
-launch_from_shell(char *pipeline) {
-    GError *error = NULL;
-    return gst_parse_launch(pipeline, &error);
-}
-
 static gchar *get_format_current_time() {
     GDateTime *datetime;
     gchar *time_str;
@@ -766,6 +760,7 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
         gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
         g_print(message);
         g_free(message);
+        g_error_free(error);
     }
 
     bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
@@ -1681,7 +1676,6 @@ static void stop_udpsrc_webrtc(gpointer user_data) {
 }
 
 void start_udpsrc_webrtcbin(WebrtcItem *item) {
-    GError *error = NULL;
     gchar *cmdline = NULL;
     GstBus *bus = NULL;
     // gchar *turn_srv = NULL;
@@ -1711,7 +1705,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
         // g_free(turn_srv);
     }
 
-    item->sendpipe = gst_parse_launch(cmdline, &error);
+    item->sendpipe = gst_parse_launch(cmdline, NULL);
     gst_element_set_state(item->sendpipe, GST_STATE_READY);
 
     g_free(cmdline);
@@ -1785,7 +1779,6 @@ check_webrtcbin_state_by_timer(GstElement *webrtcbin) {
 }
 
 void start_appsrc_webrtcbin(WebrtcItem *item) {
-    GError *error = NULL;
     gchar *cmdline = NULL;
     GstBus *bus = NULL;
     // gchar *turn_srv = NULL;
@@ -1820,7 +1813,7 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     g_print("webrtc cmdline: %s \n", cmdline);
     g_free(video_src);
 
-    item->sendpipe = gst_parse_launch(cmdline, &error);
+    item->sendpipe = gst_parse_launch(cmdline, NULL);
     g_free(cmdline);
 
     item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
@@ -2145,6 +2138,7 @@ int motion_hlssink() {
         gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
         g_print(message);
         g_free(message);
+        g_error_free(error);
     }
     g_free(binstr);
     g_free(tmp2);
@@ -2227,6 +2221,7 @@ int cvtracker_hlssink() {
         gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
         g_print(message);
         g_free(message);
+        g_error_free(error);
     }
     g_free(binstr);
     g_free(outdir);
@@ -2308,6 +2303,7 @@ int facedetect_hlssink() {
         gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
         g_print(message);
         g_free(message);
+        g_error_free(error);
     }
     g_free(binstr);
     g_free(outdir);
@@ -2386,6 +2382,7 @@ int edgedect_hlssink() {
         gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
         g_print(message);
         g_free(message);
+        g_error_free(error);
     }
     g_free(binstr);
     g_free(outdir);

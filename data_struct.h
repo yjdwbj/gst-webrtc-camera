@@ -22,6 +22,8 @@
 #ifndef _DATA_STRUCT_H
 #define _DATA_STRUCT_H
 #include <glib.h>
+#include <gst/gst.h>
+#include <libsoup/soup.h>
 
 #if !defined(JETSON_NANO) || (JETSON_NANO == 1)
 #define HAS_JETSON_NANO
@@ -59,8 +61,8 @@ struct _GstConfigData {
         gchar *type;
         gchar *format;
     } v4l2src_data;
-    gchar *root_dir;   // streams output root path;
-    gboolean showdot; // generate gstreamer pipeline graphs;
+    gchar *root_dir;         // streams output root path;
+    gboolean showdot;        // generate gstreamer pipeline graphs;
     gboolean splitfile_sink; // splitmuxsink save multipart file.
     gboolean app_sink;       // appsink for filesink save.
     struct _hls_onoff {
@@ -112,4 +114,55 @@ struct _GstConfigData {
 // };
 
 typedef struct _GstConfigData GstConfigData;
+
+#if 0
+typedef struct _APPData AppData;
+struct _APPData {
+    GstElement *pipeline;
+    GMainLoop *loop;
+    SoupServer *soup_server;
+    GHashTable *receiver_entry_table;
+    GstConfigData config;
+};
+
+static AppData gs_app = {
+    NULL, NULL, NULL, NULL, {
+    .v4l2src_data.device = "/dev/video0",
+    .v4l2src_data.format = "NV12",
+    .v4l2src_data.framerate = 25,
+    .v4l2src_data.height = 1280,
+    .v4l2src_data.width = 720,
+    .v4l2src_data.io_mode = 2,
+    .v4l2src_data.type = "image/jpeg",
+    .root_dir = "./",
+    .showdot = FALSE,
+    .splitfile_sink = FALSE,
+    .app_sink = FALSE,
+    .hls_onoff.av_hlssink = FALSE,
+    .hls_onoff.motion_hlssink = FALSE,
+    .hls_onoff.facedetect_hlssink = FALSE,
+    .hls_onoff.edge_hlssink = FALSE,
+    .hls_onoff.cvtracker_hlssink = FALSE,
+    .http.host = "127.0.0.1",
+    .http.user = "test",
+    .http.password = "testsoup",
+    .udp.enable = FALSE,
+    .udp.multicast = FALSE,
+    .udp.port = 5000,
+    .udp.host = "224.1.1.1",
+    .hls.files = 10,
+    .hls.duration = 60,
+    .hls.showtext = FALSE,
+    .audio.enable = FALSE,
+    .audio.path = 0,
+    .audio.buf_time = 50000,
+    .rec_len = 60,
+    .motion_rec = FALSE,
+    .sysinfo = TRUE,
+    .webrtc.enable = TRUE,
+    .webrtc.stun = "stun://stun.l.google.com:19302",
+    .webrtc.udpsink.addr = "224.1.1.2",
+    .webrtc.udpsink.port = 6000,
+    .webrtc.udpsink.multicast = TRUE}};
+#endif
 #endif

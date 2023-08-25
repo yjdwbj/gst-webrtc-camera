@@ -53,7 +53,7 @@ static void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
     gchar *json_string;
     JsonObject *sdp_json;
     JsonObject *sdp_data_json;
-    GstStructure const *reply;
+    const GstStructure  *reply;
     GstPromise *local_desc_promise;
     GstWebRTCSessionDescription *offer = NULL;
     WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
@@ -654,6 +654,7 @@ void start_http(webrtc_callback fn, int port) {
                                           -1, &error);
     if (cert == NULL) {
         g_printerr("failed to parse PEM: %s\n", error->message);
+        g_error_free(error);
         return;
     }
 
