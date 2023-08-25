@@ -185,6 +185,41 @@ static gchar *get_today_str() {
     return g_strdup(time_str);
 }
 
+static gchar *get_shellcmd_results(const gchar *shellcmd) {
+    FILE *fp;
+    gchar *val;
+    char path[256];
+
+    /* Open the command for reading. */
+    fp = popen(shellcmd, "r");
+    if (fp == NULL) {
+        printf("Failed to run command\n");
+        exit(1);
+    }
+
+    /* Read the output a line at a time - output it. */
+    while (fgets(path, sizeof(path), fp) != NULL) {
+        val = g_strdup(path);
+    }
+
+    /* close */
+    pclose(fp);
+    return val;
+}
+
+static gchar *get_basic_sysinfo() {
+    // g_file_get_contents("/etc/lsb-release", &contents, NULL, NULL);
+    gchar *cpumodel = get_shellcmd_results("cat /proc/cpuinfo | grep 'model name' | head -n1 | awk -F ':' '{print \"CPU:\"$2}'");
+    gchar *memsize = get_shellcmd_results("free -h | awk 'NR==2{print $1$2}'");
+    gchar *kerstr = get_shellcmd_results("uname -a");
+    gchar *line = g_strconcat(cpumodel, "\t", memsize, kerstr, NULL);
+
+    g_free(cpumodel);
+    g_free(memsize);
+    g_free(kerstr);
+    return line;
+}
+
 static GstElement *get_hardware_h264_encoder() {
     GstElement *encoder;
     if (gst_element_factory_find("vaapih264enc")) {
@@ -334,73 +369,17 @@ static GstElement *audio_src() {
     return teesrc;
 }
 
-static GstElement *encoder_h264() {
-    GstElement *encoder, *teeh264, *queue, *capsfilter;
-    GstPad *src_pad, *queue_pad;
-    GstCaps *srcCaps;
-    GstPadLinkReturn lret;
 
-    queue = gst_element_factory_make("queue", NULL);
-    capsfilter = gst_element_factory_make("capsfilter", NULL);
-    g_object_set(G_OBJECT(queue), "leaky", 1, NULL);
+static void get_pad_caps_info(GstPad *pad) {
+    GstStructure *structure;
+    GstCaps *caps;
+    const gchar *name;
 
-    encoder = get_hardware_h264_encoder();
-
-    srcCaps = gst_caps_from_string("video/x-h264,profile=constrained-baseline");
-    g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
-    gst_caps_unref(srcCaps);
-
-    if (!encoder || !queue || !capsfilter) {
-        g_printerr("encoder_h264 all elements could not be created.\n");
-        // g_printerr("encoder %x ; clock %x.\n", encoder, clock);
-        return NULL;
-    }
-
-#if defined(HAS_JETSON_NANO)
-    GstElement *clockbin;
-    teeh264 = gst_element_factory_make("tee", NULL);
-
-    if (!teeh264) {
-        g_printerr("nvtee elements could not be created.\n");
-        // g_printerr("encoder %x ; clock %x.\n", encoder, clock);
-        return NULL;
-    }
-    const static gchar *tmp = " nvvidconv ! video/x-raw ! clockoverlay time-format=\"%D %H:%M:%S\" ! video/x-raw ! nvvidconv";
-    clockbin = gst_parse_bin_from_description(tmp, TRUE, NULL);
-    gst_element_sync_state_with_parent(clockbin);
-    gst_bin_add_many(GST_BIN(pipeline), clockbin, teeh264, queue, capsfilter, NULL);
-    if (!gst_element_link_many(queue, clockbin, encoder, capsfilter, teeh264, NULL)) {
-        g_print("Failed to link nvv4l2h264enc elements encoder \n");
-        return NULL;
-    }
-#else
-    GstElement *clock;
-    teeh264 = gst_element_factory_make("tee", NULL);
-    // jetson nano don't have clockoverylay , owner by libgstpango.so
-    clock = gst_element_factory_make("clockoverlay", NULL);
-    gst_bin_add_many(GST_BIN(pipeline), clock, teeh264, queue, capsfilter, NULL);
-    if (!gst_element_link_many(queue, clock, encoder, capsfilter, teeh264, NULL)) {
-        g_print("Failed to link elements encoder \n");
-        return NULL;
-    }
-    g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
-#endif
-
-#if GST_VERSION_MINOR >= 20
-    src_pad = gst_element_request_pad_simple(video_source, "src_%u");
-#else
-    src_pad = gst_element_get_request_pad(video_source, "src_%u");
-#endif
-    g_print("Obtained request pad %s for from video source.\n", gst_pad_get_name(src_pad));
-    queue_pad = gst_element_get_static_pad(queue, "sink");
-    if ((lret = gst_pad_link(src_pad, queue_pad)) != GST_PAD_LINK_OK) {
-        g_error("Tee source could not be linked at encoder, return :%d.\n", lret);
-        return NULL;
-    }
-    gst_object_unref(src_pad);
-    gst_object_unref(queue_pad);
-
-    return teeh264;
+    caps = gst_pad_query_caps(pad, NULL);
+    structure = gst_caps_get_structure(caps, 0);
+    name = gst_structure_get_name(structure);
+    g_print("Pad: %s, name: %s\n", GST_PAD_NAME(pad), name);
+    gst_caps_unref(caps);
 }
 
 static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
@@ -418,6 +397,8 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
         gchar *sname = gst_pad_get_name(src_pad);
         gchar *dname = gst_pad_get_name(sink_pad);
         g_print("Src pad %s link to sink pad %s failed . return: %d\n", sname, dname, lret);
+        get_pad_caps_info(src_pad);
+        get_pad_caps_info(sink_pad);
         g_free(sname);
         g_free(dname);
         return -1;
@@ -425,6 +406,111 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
     gst_object_unref(sink_pad);
     gst_object_unref(src_pad);
     return lret;
+}
+
+#if defined(HAS_JETSON_NANO)
+static GstElement *create_textbins() {
+    GstElement *pre_vconv, *post_vconv, *textoverlay, *clockoverlay;
+    GstPad *sub_sink_vpad, *sub_src_vpad;
+    GstElement *bin = gst_bin_new("text_bins");
+    /**
+     * @note nvvidconv supports
+     * video/x-raw(memory:NVMM) ! nvvidconv ! video/x-raw(memory:NVMM)
+     * video/x-raw(memory:NVMM) ! nvvidconv ! video/x-raw
+     * video/x-raw ! nvvidconv ! video/x-raw(memory:NVMM)
+     *
+     */
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, pre_vconv, "nvvidconv");
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, post_vconv, "nvvidconv");
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, textoverlay, "textoverlay");
+    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, clockoverlay, "clockoverlay");
+
+    /**
+     * @note
+     * This gst_parse_bin_from_description("nvvidconv ! textoverlay ! clockoverlay ! nvvidconv",TRUE,NULL) cannot be used here
+     * to create a custom bin as it will return GST_PAD_LINK_NOFORMAT(-4).
+     * The upstream caps is the video/x-raw, but the downstream(textoverlay) caps is the text/x-raw.
+     *
+     */
+
+    gchar *sysinfo = get_basic_sysinfo();
+    g_object_set(G_OBJECT(textoverlay), "text", sysinfo, "valignment", 1, "line-alignment", 0, "halignment", 0, "font-desc", "Sans, 10", NULL);
+    g_object_set(G_OBJECT(clockoverlay), "time-format", "%D %H:%M:%S", NULL);
+    g_free(sysinfo);
+
+    if (!gst_element_link_many(pre_vconv, textoverlay, clockoverlay, post_vconv, NULL)) {
+        g_error("Failed to link text bins elements \n");
+        return NULL;
+    }
+
+    sub_sink_vpad = gst_element_get_static_pad(pre_vconv, "sink");
+    gst_element_add_pad(bin, gst_ghost_pad_new("sink", sub_sink_vpad));
+    gst_object_unref(GST_OBJECT(sub_sink_vpad));
+
+    sub_src_vpad = gst_element_get_static_pad(post_vconv, "src");
+    gst_element_add_pad(bin, gst_ghost_pad_new("src", sub_src_vpad));
+    gst_object_unref(GST_OBJECT(sub_src_vpad));
+    return bin;
+}
+#endif
+
+static GstElement *encoder_h264() {
+    GstElement *encoder, *teeh264, *queue, *capsfilter;
+    GstCaps *srcCaps;
+    capsfilter = gst_element_factory_make("capsfilter", NULL);
+    encoder = get_hardware_h264_encoder();
+
+    srcCaps = gst_caps_from_string("video/x-h264,profile=constrained-baseline");
+    g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
+    gst_caps_unref(srcCaps);
+
+    if (!encoder || !capsfilter) {
+        g_printerr("encoder_h264 all elements could not be created.\n");
+        // g_printerr("encoder %x ; clock %x.\n", encoder, clock);
+        return NULL;
+    }
+
+#if defined(HAS_JETSON_NANO)
+    GstElement *clockbin;
+    teeh264 = gst_element_factory_make("tee", NULL);
+
+    if (!teeh264) {
+        g_printerr("nvtee elements could not be created.\n");
+        // g_printerr("encoder %x ; clock %x.\n", encoder, clock);
+        return NULL;
+    }
+
+    clockbin = create_textbins();
+    gst_element_sync_state_with_parent(clockbin);
+
+    gst_bin_add_many(GST_BIN(pipeline), clockbin, teeh264, capsfilter, NULL);
+    if (!gst_element_link_many(clockbin, encoder, capsfilter, teeh264, NULL)) {
+        g_print("Failed to link nvv4l2h264enc elements encoder \n");
+        return NULL;
+    }
+    link_request_src_pad(video_source, clockbin);
+#else
+    GstElement *clock, *textoverlay;
+    queue = gst_element_factory_make("queue", NULL);
+    g_object_set(G_OBJECT(queue), "leaky", 1, NULL);
+    teeh264 = gst_element_factory_make("tee", NULL);
+    clock = gst_element_factory_make("clockoverlay", NULL);
+    textoverlay = gst_element_factory_make("textoverlay", NULL);
+    // jetson nano don't have clockoverylay , owner by libgstpango.so
+    gchar *sysinfo = get_basic_sysinfo();
+    g_object_set(G_OBJECT(textoverlay), "text", sysinfo, "valignment", 1, "line-alignment", 0, "halignment", 0, "font-desc", "Sans, 10", NULL);
+    g_free(sysinfo);
+
+    gst_bin_add_many(GST_BIN(pipeline), textoverlay, clock, teeh264, queue, capsfilter, NULL);
+    if (!gst_element_link_many(queue, textoverlay, clock, encoder, capsfilter, teeh264, NULL)) {
+        g_print("Failed to link elements encoder \n");
+        return NULL;
+    }
+    g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
+
+    link_request_src_pad(video_source, queue);
+#endif
+    return teeh264;
 }
 
 static GstElement *vaapi_postproc() {
@@ -2052,7 +2138,7 @@ int motion_hlssink() {
                                     " %s ! videoconvert  ! nvvidconv ! video/x-raw(memory:NVMM) ! "
                                     "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ! %s ",
                                     tmp2, clock, hlssinkstr);
-    g_print("cmdline: %s\n", binstr);
+    // g_print("cmdline: %s\n", binstr);
     GError *error = NULL;
     motionbin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
@@ -2134,7 +2220,7 @@ int cvtracker_hlssink() {
                                     " %s ! videoconvert  ! nvvidconv ! video/x-raw(memory:NVMM) ! "
                                     "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ! %s ",
                                     clock, hlssinkstr);
-    g_print("cmdline: %s\n", binstr);
+    // g_print("cmdline: %s\n", binstr);
     GError *error = NULL;
     trackerbin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
@@ -2204,12 +2290,18 @@ int facedetect_hlssink() {
     _mkdir(outdir, 0755);
     gchar *hlssinkstr = get_hlssink_string(outdir, "/facedetect-%05d.ts");
     const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
+    gchar *facestr = g_strdup_printf("facedetect name=face0 eyes-profile=%s mouth-profile=%s nose-profile=%s profile=%s",
+                                     "/usr/local/share/opencv4/haarcascades/haarcascade_eye.xml",
+                                     "/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_alt2.xml",
+                                     "/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_alt2.xml",
+                                     "/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_alt2.xml");
 
-    gchar *binstr = g_strdup_printf(" queue ! nvvidconv ! video/x-raw ! videoconvert  ! facedetect min-stddev=24 scale-factor=2.8 ! video/x-raw ! "
+    gchar *binstr = g_strdup_printf(" queue ! nvvidconv ! video/x-raw ! videoconvert  ! %s ! video/x-raw ! "
                                     " %s ! videoconvert  ! nvvidconv ! video/x-raw(memory:NVMM) ! "
                                     "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ! %s ",
-                                    clock, hlssinkstr);
-    g_print("cmdline: %s\n", binstr);
+                                    facestr, clock, hlssinkstr);
+    g_free(facestr);
+    // g_print("cmdline: %s\n", binstr);
     GError *error = NULL;
     facebin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
@@ -2287,7 +2379,7 @@ int edgedect_hlssink() {
                                     " %s ! videoconvert  ! nvvidconv ! video/x-raw(memory:NVMM) ! "
                                     "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ! %s ",
                                     clock, hlssinkstr);
-    g_print("cmdline: %s\n", binstr);
+    // g_print("cmdline: %s\n", binstr);
     GError *error = NULL;
     edgebin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {

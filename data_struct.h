@@ -89,6 +89,7 @@ struct _GstConfigData {
     } audio;
     int rec_len; // motion detect record duration, seconds.
     gboolean motion_rec;
+    gboolean sysinfo; // show system info brief
     struct _webrtc webrtc;
 };
 

@@ -19,19 +19,33 @@
  * and configures webrtcbin to receive an H.264 video feed, and to
  * send+recv an Opus audio stream */
 
-static char *index_source = NULL;
-
 #define RTP_PAYLOAD_TYPE "96"
 #define RTP_CAPS_OPUS "application/x-rtp,media=audio,encoding-name=OPUS,payload="
 
 #define SOUP_HTTP_PORT 57778
-#define STUN_SERVER "stun.l.google.com:19302"
+#define STUN_SERVER "stun://stun.l.google.com:19302"
 #define TURN_SERVER "turn://test:test123@192.168.1.100:3478"
 
-typedef struct _ReceiverEntry ReceiverEntry;
+typedef struct _APPData AppData;
+struct _APPData {
+    GstElement *pipeline;
+    GMainLoop *loop;
+    SoupServer *soup_server;
+    GHashTable *receiver_entry_table;
+    gchar *video_dev;  // v4l2src device. ex: /dev/video0
+    gchar *user;
+    gchar *password;
+    int port;
+};
 
-ReceiverEntry *create_receiver_entry(SoupWebsocketConnection *connection);
-void destroy_receiver_entry(gpointer receiver_entry_ptr);
+static AppData gs_app = {
+    NULL,NULL,NULL,NULL,
+    "/dev/video0","test","test1234",57778
+};
+
+static void start_http(AppData *app);
+
+typedef struct _ReceiverEntry ReceiverEntry;
 
 GstPadProbeReturn payloader_caps_event_probe_cb(GstPad *pad,
                                                 GstPadProbeInfo *info, gpointer user_data);
@@ -57,119 +71,57 @@ static gchar *get_string_from_json_object(JsonObject *object);
 
 struct _ReceiverEntry {
     SoupWebsocketConnection *connection;
-
     GstElement *pipeline;
     GstElement *webrtcbin;
 };
 
-static void
-handle_media_stream(GstPad *pad, GstElement *pipe, const char *convert_name,
-                    const char *sink_name) {
-    GstPad *qpad;
-    GstElement *q, *conv, *resample, *sink;
-    GstPadLinkReturn ret;
+static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
+    GstPad *src_pad, *sink_pad;
+    GstPadLinkReturn lret;
+#if GST_VERSION_MINOR >= 20
+    src_pad = gst_element_request_pad_simple(src, "src_%u");
+#else
+    src_pad = gst_element_get_request_pad(src, "src_%u");
+#endif
+    g_print("motion obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
 
-    gst_print("Trying to handle stream with %s ! %s", convert_name, sink_name);
+#if GST_VERSION_MINOR >= 20
+    sink_pad = gst_element_request_pad_simple(dst, "sink_%u");
+#else
+    sink_pad = gst_element_request_pad_simple(src, "sink_%u");
+#endif
 
-    q = gst_element_factory_make("queue", NULL);
-    g_assert_nonnull(q);
-    conv = gst_element_factory_make(convert_name, NULL);
-    g_assert_nonnull(conv);
-    sink = gst_element_factory_make(sink_name, NULL);
-    g_assert_nonnull(sink);
-
-    if (g_strcmp0(convert_name, "audioconvert") == 0) {
-        /* Might also need to resample, so add it just in case.
-         * Will be a no-op if it's not required. */
-        resample = gst_element_factory_make("audioresample", NULL);
-        g_assert_nonnull(resample);
-        gst_bin_add_many(GST_BIN(pipe), q, conv, resample, sink, NULL);
-        gst_element_sync_state_with_parent(q);
-        gst_element_sync_state_with_parent(conv);
-        gst_element_sync_state_with_parent(resample);
-        gst_element_sync_state_with_parent(sink);
-        gst_element_link_many(q, conv, resample, sink, NULL);
-    } else {
-        gst_bin_add_many(GST_BIN(pipe), q, conv, sink, NULL);
-        gst_element_sync_state_with_parent(q);
-        gst_element_sync_state_with_parent(conv);
-        gst_element_sync_state_with_parent(sink);
-        gst_element_link_many(q, conv, sink, NULL);
+    if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
+        gchar *sname = gst_pad_get_name(src_pad);
+        gchar *dname = gst_pad_get_name(sink_pad);
+        g_print("Src pad %s link to sink pad %s failed . return: %d\n", sname, dname, lret);
+        g_free(sname);
+        g_free(dname);
+        return -1;
     }
-
-    qpad = gst_element_get_static_pad(q, "sink");
-
-    ret = gst_pad_link(pad, qpad);
-    g_assert_cmphex(ret, ==, GST_PAD_LINK_OK);
+    gst_object_unref(sink_pad);
+    gst_object_unref(src_pad);
+    return lret;
 }
 
-static void
-on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
-                             GstElement *pipe) {
-    GstCaps *caps;
-    const gchar *name;
-    g_print("on_incoming_decodebin_stream !!!!\n");
+void destroy_receiver_entry(gpointer receiver_entry_ptr) {
+    ReceiverEntry *receiver_entry = (ReceiverEntry *)receiver_entry_ptr;
 
-    if (!gst_pad_has_current_caps(pad)) {
-        gst_printerr("Pad '%s' has no caps, can't do anything, ignoring\n",
-                     GST_PAD_NAME(pad));
-        return;
-    }
+    g_assert(receiver_entry != NULL);
+    gst_element_set_state(receiver_entry->webrtcbin, GST_STATE_NULL);
+    gst_bin_remove(GST_BIN(receiver_entry->pipeline), receiver_entry->webrtcbin);
+    gst_object_unref(receiver_entry->webrtcbin);
 
-    caps = gst_pad_get_current_caps(pad);
-    name = gst_structure_get_name(gst_caps_get_structure(caps, 0));
+    if (receiver_entry->connection != NULL)
+        g_object_unref(G_OBJECT(receiver_entry->connection));
 
-    if (g_str_has_prefix(name, "video")) {
-        handle_media_stream(pad, pipe, "videoconvert", "autovideosink");
-    } else if (g_str_has_prefix(name, "audio")) {
-        handle_media_stream(pad, pipe, "audioconvert", "autoaudiosink");
-    } else {
-        gst_printerr("Unknown pad %s, ignoring", GST_PAD_NAME(pad));
-    }
-}
-
-static gboolean
-bus_watch_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
-    GstPipeline *pipeline = user_data;
-
-    switch (GST_MESSAGE_TYPE(message)) {
-    case GST_MESSAGE_ERROR: {
-        GError *error = NULL;
-        gchar *debug = NULL;
-
-        gst_message_parse_error(message, &error, &debug);
-        g_error("Error on bus: %s (debug: %s)", error->message, debug);
-        g_error_free(error);
-        g_free(debug);
-        break;
-    }
-    case GST_MESSAGE_WARNING: {
-        GError *error = NULL;
-        gchar *debug = NULL;
-
-        gst_message_parse_warning(message, &error, &debug);
-        g_warning("Warning on bus: %s (debug: %s)", error->message, debug);
-        g_error_free(error);
-        g_free(debug);
-        break;
-    }
-    case GST_MESSAGE_LATENCY:
-        gst_bin_recalculate_latency(GST_BIN(pipeline));
-        break;
-    default:
-        break;
-    }
-
-    return G_SOURCE_CONTINUE;
+    g_free(receiver_entry);
 }
 
 ReceiverEntry *
-create_receiver_entry(SoupWebsocketConnection *connection) {
-    GError *error;
+create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     ReceiverEntry *receiver_entry;
-    GstCaps *video_caps;
-    GstWebRTCRTPTransceiver *trans = NULL;
-    GstBus *bus;
+    GstElement *h264src = NULL;
 
     receiver_entry = g_new0(ReceiverEntry, 1);
     receiver_entry->connection = connection;
@@ -179,74 +131,33 @@ create_receiver_entry(SoupWebsocketConnection *connection) {
     g_signal_connect(G_OBJECT(connection), "message",
                      G_CALLBACK(soup_websocket_message_cb), (gpointer)receiver_entry);
 
-    error = NULL;
+    // gchar *cmdline = "webrtcbin name=webrtcbin stun-server=stun://stun.l.google.com:19302 "
+    //                  "udpsrc port=6000 ! application/x-rtp,media=video,encoding-name=H264,payload=96 ! "
+    //                  " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! "
+    //                  " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96  ! queue ! webrtcbin. ";
+    receiver_entry->webrtcbin = gst_element_factory_make_full("webrtcbin",
+                                                              "stun-server", STUN_SERVER, NULL);
+    gst_bin_add(GST_BIN(app->pipeline), receiver_entry->webrtcbin);
+    receiver_entry->pipeline = app->pipeline;
 
-    gchar *cmdline = "webrtcbin name=webrtcbin turn-server=turn://lcy:lcy123@192.168.1.100:3478 "
-                     "udpsrc port=6000 ! application/x-rtp,media=video,encoding-name=H264,payload=96 ! "
-                     " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! "
-                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96  ! queue ! webrtcbin. ";
-    g_print("cmdline: %s \n", cmdline);
-    receiver_entry->pipeline = gst_parse_launch(cmdline, NULL);
-    if (error != NULL) {
-        g_error("Could not create WebRTC pipeline: %s\n", error->message);
-        g_error_free(error);
-        goto cleanup;
-    }
+    h264src = gst_bin_get_by_name(GST_BIN(app->pipeline), "h264src");
+    g_assert(h264src != NULL);
+    link_request_src_pad(h264src, receiver_entry->webrtcbin);
+    gst_object_unref(h264src);
 
-    receiver_entry->webrtcbin =
-        gst_bin_get_by_name(GST_BIN(receiver_entry->pipeline), "webrtcbin");
     g_assert(receiver_entry->webrtcbin != NULL);
 
-#if 0
-  GstElement *rtpbin =
-      gst_bin_get_by_name (GST_BIN (receiver_entry->webrtcbin), "rtpbin");
-  g_object_set (rtpbin, "latency", 40, NULL);
-  gst_object_unref (rtpbin);
-#endif
     g_signal_connect(receiver_entry->webrtcbin, "on-negotiation-needed",
                      G_CALLBACK(on_negotiation_needed_cb), (gpointer)receiver_entry);
 
     g_signal_connect(receiver_entry->webrtcbin, "on-ice-candidate",
                      G_CALLBACK(on_ice_candidate_cb), (gpointer)receiver_entry);
 
-    bus = gst_pipeline_get_bus(GST_PIPELINE(receiver_entry->pipeline));
-    gst_bus_add_watch(bus, bus_watch_cb, receiver_entry->pipeline);
-    gst_object_unref(bus);
-
-    if (gst_element_set_state(receiver_entry->pipeline, GST_STATE_PLAYING) ==
+    if (gst_element_set_state(receiver_entry->webrtcbin, GST_STATE_PLAYING) ==
         GST_STATE_CHANGE_FAILURE)
-        g_error("Error starting pipeline");
+        g_print("Error starting pipeline");
 
     return receiver_entry;
-
-cleanup:
-    destroy_receiver_entry((gpointer)receiver_entry);
-    return NULL;
-}
-
-void destroy_receiver_entry(gpointer receiver_entry_ptr) {
-    ReceiverEntry *receiver_entry = (ReceiverEntry *)receiver_entry_ptr;
-
-    g_assert(receiver_entry != NULL);
-
-    if (receiver_entry->pipeline != NULL) {
-        GstBus *bus;
-
-        gst_element_set_state(GST_ELEMENT(receiver_entry->pipeline),
-                              GST_STATE_NULL);
-
-        bus = gst_pipeline_get_bus(GST_PIPELINE(receiver_entry->pipeline));
-        gst_bus_remove_watch(bus);
-        gst_object_unref(bus);
-
-        gst_object_unref(GST_OBJECT(receiver_entry->webrtcbin));
-        gst_object_unref(GST_OBJECT(receiver_entry->pipeline));
-    }
-
-    if (receiver_entry->connection != NULL)
-        g_object_unref(G_OBJECT(receiver_entry->connection));
-
-    g_free(receiver_entry);
 }
 
 void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
@@ -459,64 +370,230 @@ unknown_message:
     goto cleanup;
 }
 
+static gboolean
+message_cb(GstBus *bus, GstMessage *message, AppData *app) {
+    gchar *name;
+
+    name = gst_object_get_path_string(message->src);
+    switch (GST_MESSAGE_TYPE(message)) {
+    case GST_MESSAGE_CLOCK_LOST:
+        g_printerr("!!clock lost, src name %s \n", name);
+        break;
+    case GST_MESSAGE_SEGMENT_START:
+        g_printerr("GST_MESSAGE_SEGMENT_START, src name %s \n", name);
+        break;
+    case GST_MESSAGE_SEGMENT_DONE:
+        g_printerr("GST_MESSAGE_SEGMENT_DONE, src name %s \n", name);
+        break;
+    case GST_MESSAGE_ASYNC_START:
+        g_printerr("GST_MESSAGE_ASYNC_START, src name %s \n", name);
+        break;
+    case GST_MESSAGE_ASYNC_DONE:
+        g_printerr("GST_MESSAGE_ASYNC_START, src name %s \n", name);
+        break;
+    case GST_MESSAGE_ERROR: {
+        GError *err = NULL;
+        gchar *debug = NULL;
+        GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(app->pipeline),
+                                  GST_DEBUG_GRAPH_SHOW_ALL, "error");
+        name = gst_object_get_path_string(message->src);
+        gst_message_parse_error(message, &err, &debug);
+
+        g_printerr("ERROR: from element %s: %s\n", name, err->message);
+        if (debug != NULL)
+            g_printerr("Additional debug info:\n%s\n", debug);
+        g_error_free(err);
+        g_free(debug);
+        g_main_loop_quit(app->loop);
+        break;
+    }
+    case GST_MESSAGE_WARNING: {
+        GError *err = NULL;
+        gchar *name, *debug = NULL;
+        GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(app->pipeline),
+                                  GST_DEBUG_GRAPH_SHOW_ALL, "warning");
+        name = gst_object_get_path_string(message->src);
+        gst_message_parse_warning(message, &err, &debug);
+
+        g_printerr("ERROR: from element %s: %s\n", name, err->message);
+        if (debug != NULL)
+            g_printerr("Additional debug info:\n%s\n", debug);
+
+        g_error_free(err);
+        g_free(debug);
+        g_free(name);
+        break;
+    }
+    case GST_MESSAGE_EOS: {
+        g_print("Got EOS \n");
+        g_main_loop_quit(app->loop);
+        gst_element_set_state(app->pipeline, GST_STATE_NULL);
+        break;
+    }
+    case GST_MESSAGE_ELEMENT: {
+        const gchar *location;
+        const GstStructure *s = gst_message_get_structure(message);
+        if (gst_structure_has_name(s, "splitmuxsink-fragment-opened")) {
+            location = gst_structure_get_string(s, "location");
+            g_message("get message: %s\n location: %s",
+                      gst_structure_to_string(gst_message_get_structure(message)),
+                      location);
+
+            // gst_debug_log(cat,
+            //               GST_LEVEL_INFO,
+            //               "Msg",
+            //               "Msg",
+            //               0,
+            //               NULL,
+            //               location);
+        } else if (gst_structure_has_name(s, "GstBinForwarded")) {
+            GstMessage *forward_msg = NULL;
+
+            gst_structure_get(s, "message", GST_TYPE_MESSAGE, &forward_msg, NULL);
+            g_assert(forward_msg);
+            // gst_println("GstBinForwarded message source %s\n", GST_MESSAGE_SRC_NAME(forward_msg));
+            switch (GST_MESSAGE_TYPE(forward_msg)) {
+            case GST_MESSAGE_ASYNC_DONE:
+                // g_print("ASYNC done %s\n", GST_MESSAGE_SRC_NAME(forward_msg));
+                if (g_strcmp0("bin0", GST_MESSAGE_SRC_NAME(forward_msg)) == 0) {
+                    g_print("prerolled, starting synchronized playback and recording\n");
+                    /* returns ASYNC because the sink linked to the live source is not
+                     * prerolled */
+                    if (gst_element_set_state(app->pipeline,
+                                              GST_STATE_PLAYING) != GST_STATE_CHANGE_ASYNC) {
+                        g_warning("State change failed");
+                    }
+                }
+                break;
+            default:
+                break;
+            }
+            gst_message_unref(forward_msg);
+        }
+        break;
+    }
+    case GST_MESSAGE_STATE_CHANGED:
+        /* We are only interested in state-changed messages from the pipeline */
+        if (GST_MESSAGE_SRC(message) == GST_OBJECT(app->pipeline)) {
+            GstState old_state, new_state, pending_state;
+            gst_message_parse_state_changed(message, &old_state, &new_state, &pending_state);
+            g_print("Pipeline state changed from %s to %s:\n",
+                    gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
+            GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(app->pipeline),
+                                      GST_DEBUG_GRAPH_SHOW_ALL, gst_element_state_get_name(new_state));
+            if (new_state == GST_STATE_PLAYING) {
+                start_http(app);
+            }
+            break;
+        }
+    default:
+        break;
+    }
+
+    g_free(name);
+    return TRUE;
+}
+
 void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
                               gpointer user_data) {
-    GHashTable *receiver_entry_table = (GHashTable *)user_data;
-    // g_hash_table_remove(receiver_entry_table, connection);
+    AppData *app = (AppData *)user_data;
+    g_hash_table_remove(app->receiver_entry_table, connection);
     gst_print("Closed websocket connection %p\n", (gpointer)connection);
 }
 
+#define INDEX_HTML "index.html"
+#define BOOTSTRAP_JS "bootstrap.bundle.min.js"
+#define BOOTSTRAP_CSS "bootstrap.min.css"
+
 void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
-                       SoupMessage *message, const char *path, G_GNUC_UNUSED GHashTable *query,
+                       SoupMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
                        G_GNUC_UNUSED SoupClientContext *client_context,
                        G_GNUC_UNUSED gpointer user_data) {
-    SoupBuffer *soup_buffer;
-
-    if ((g_strcmp0(path, "/") != 0) && (g_strcmp0(path, "/index.html") != 0)) {
-        soup_message_set_status(message, SOUP_STATUS_NOT_FOUND);
-        return;
-    }
-    if (index_source == NULL) {
-        struct stat buffer;
-        const gchar *index_file = "index.html\0";
-        int status;
-        long read_len = 0;
-        int fd = open(index_file, O_RDONLY);
-        status = stat(index_file, &buffer);
-        if (fd && status == 0) {
-            index_source = (char *)malloc(sizeof(char) * buffer.st_size + 1);
-            memset(index_source, 0, buffer.st_size);
-            read_len = read(fd, index_source, buffer.st_size);
-            close(fd);
+    if (msg->method == SOUP_METHOD_GET) {
+        GMappedFile *mapping;
+        SoupBuffer *buffer;
+        g_print("to get path is: %s\n", path);
+        if (g_str_has_suffix(path, INDEX_HTML) || g_str_has_suffix(path, "/")) {
+            mapping = g_mapped_file_new(INDEX_HTML, FALSE, NULL);
+        } else if (g_str_has_suffix(path, BOOTSTRAP_JS)) {
+            mapping = g_mapped_file_new(BOOTSTRAP_JS, FALSE, NULL);
+        } else if (g_str_has_suffix(path, BOOTSTRAP_CSS)) {
+            mapping = g_mapped_file_new(BOOTSTRAP_CSS, FALSE, NULL);
+        } else {
+            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            return;
         }
+
+        if (!mapping) {
+            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            return;
+        }
+
+        buffer = soup_buffer_new_with_owner(g_mapped_file_get_contents(mapping),
+                                            g_mapped_file_get_length(mapping),
+                                            mapping, (GDestroyNotify)g_mapped_file_unref);
+        soup_message_body_append_buffer(msg->response_body, buffer);
+        soup_buffer_free(buffer);
     }
-    gchar *tmp_str = g_strdup(index_source);
-
-    soup_buffer =
-        soup_buffer_new(SOUP_MEMORY_COPY, tmp_str, strlen(tmp_str));
-    g_free(tmp_str);
-
-    soup_message_headers_set_content_type(message->response_headers, "text/html",
-                                          NULL);
-    soup_message_body_append_buffer(message->response_body, soup_buffer);
-    soup_buffer_free(soup_buffer);
-
-    soup_message_set_status(message, SOUP_STATUS_OK);
+    soup_message_set_status(msg, SOUP_STATUS_OK);
 }
 
-static gboolean first = TRUE;
 void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                             SoupWebsocketConnection *connection, G_GNUC_UNUSED const char *path,
                             G_GNUC_UNUSED SoupClientContext *client_context, gpointer user_data) {
     ReceiverEntry *receiver_entry;
-    GHashTable *receiver_entry_table = (GHashTable *)user_data;
+    AppData *app = (AppData *)user_data;
     gst_print("Processing new websocket connection %p", (gpointer)connection);
 
     g_signal_connect(G_OBJECT(connection), "closed",
-                     G_CALLBACK(soup_websocket_closed_cb), (gpointer)receiver_entry_table);
+                     G_CALLBACK(soup_websocket_closed_cb), app);
 
-    receiver_entry = create_receiver_entry(connection);
-    g_hash_table_replace(receiver_entry_table, connection, receiver_entry);
+    receiver_entry = create_receiver_entry(connection, app);
+    g_hash_table_replace(app->receiver_entry_table, connection, receiver_entry);
+}
+
+#define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
+
+static char *
+digest_auth_callback(SoupAuthDomain *auth_domain,
+                     SoupMessage *msg,
+                     const char *username,
+                     gpointer data) {
+    if (strcmp(username, gs_app.user) != 0)
+        return NULL;
+
+    return soup_auth_domain_digest_encode_password(username,
+                                                   HTTP_AUTH_DOMAIN_REALM,
+                                                   gs_app.password);
+}
+
+static void start_http(AppData *app) {
+    SoupAuthDomain *auth_domain;
+    app->receiver_entry_table =
+        g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL,
+                              destroy_receiver_entry);
+    app->soup_server =
+        soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server", NULL);
+    soup_server_add_handler(app->soup_server, "/", soup_http_handler, NULL, NULL);
+    soup_server_add_websocket_handler(app->soup_server, "/ws", NULL, NULL,
+                                      soup_websocket_handler, app, NULL);
+
+    auth_domain = soup_auth_domain_digest_new(
+        "realm", HTTP_AUTH_DOMAIN_REALM,
+        SOUP_AUTH_DOMAIN_DIGEST_AUTH_CALLBACK,
+        digest_auth_callback,
+        NULL);
+    // soup_auth_domain_add_path(auth_domain, "/Digest");
+    // soup_auth_domain_add_path(auth_domain, "/Any");
+    soup_auth_domain_add_path(auth_domain, "/");
+    // soup_auth_domain_remove_path(auth_domain, "/Any/Not"); // not need to auth path
+    soup_server_add_auth_domain(app->soup_server, auth_domain);
+    g_object_unref(auth_domain);
+
+    soup_server_listen_all(app->soup_server, app->port,
+                           (SoupServerListenOptions)0, NULL);
+
+    gst_print("WebRTC page link: http://127.0.0.1:%d/\n", app->port);
 }
 
 static gchar *
@@ -537,59 +614,115 @@ get_string_from_json_object(JsonObject *object) {
     return text;
 }
 
-#ifdef G_OS_UNIX
-gboolean
-exit_sighandler(gpointer user_data) {
-    gst_print("Caught signal, stopping mainloop\n");
-    GMainLoop *mainloop = (GMainLoop *)user_data;
-    g_main_loop_quit(mainloop);
-    return TRUE;
+void sigintHandler(int unused) {
+    g_print("You ctrl-c-ed! Sending EoS");
+    gst_element_send_event(gs_app.pipeline, gst_event_new_eos());
+    gst_element_set_state(gs_app.pipeline, GST_STATE_NULL);
+    g_main_loop_quit(gs_app.loop);
 }
-#endif
+
+#include <stdio.h>
+static gchar *get_shellcmd_results(const gchar *shellcmd) {
+    FILE *fp;
+    gchar *val;
+    char path[256];
+
+    /* Open the command for reading. */
+    fp = popen(shellcmd, "r");
+    if (fp == NULL) {
+        printf("Failed to run command\n");
+        exit(1);
+    }
+
+    /* Read the output a line at a time - output it. */
+    while (fgets(path, sizeof(path), fp) != NULL) {
+        val = g_strdup(path);
+    }
+
+    /* close */
+    pclose(fp);
+    return val;
+}
+
+static gchar *get_basic_sysinfo() {
+    // g_file_get_contents("/etc/lsb-release", &contents, NULL, NULL);
+    gchar *cpumodel = get_shellcmd_results("cat /proc/cpuinfo | grep 'model name' | head -n1 | awk -F ':' '{print \"CPU:\"$2}'");
+    gchar *memsize = get_shellcmd_results("free -h | awk 'NR==2{print $1$2}'");
+    gchar *kerstr = get_shellcmd_results("uname -a");
+    gchar *line = g_strconcat(cpumodel, "\t", memsize, kerstr, NULL);
+
+    g_free(kerstr);
+    g_free(cpumodel);
+    g_free(memsize);
+    return line;
+}
+
+static GOptionEntry entries[] = {
+    {"device", 'd', 0, G_OPTION_ARG_STRING, &gs_app.video_dev,
+     "Device location, Default: /dev/video0", "DEVICE"},
+    {"user", 'u', 0, G_OPTION_ARG_STRING, &gs_app.user,
+     "User name for http digest auth, Default: test", "USER"},
+    {"password", 'p', 0, G_OPTION_ARG_STRING, &gs_app.password,
+     "Password for http digest auth, Default: test1234", "PASSWORD"},
+    {"port", 0, 0, G_OPTION_ARG_INT, &gs_app.port, "Port to listen on (default: 57778 )", "PORT"},
+     {NULL}};
 
 int main(int argc, char *argv[]) {
-    GMainLoop *mainloop;
-    SoupServer *soup_server;
-    GHashTable *receiver_entry_table;
+    GOptionContext *context;
+    gchar *contents;
+    GstBus *bus;
+    GError *error;
 
+    context = g_option_context_new("- gstreamer webrtc camera");
+    g_option_context_add_main_entries(context, entries, NULL);
+    g_option_context_add_group(context, gst_init_get_option_group());
+    if (!g_option_context_parse(context, &argc, &argv, &error)) {
+        gst_printerr("Error initializing: %s\n", error->message);
+        g_option_context_free(context);
+        g_clear_error(&error);
+        return -1;
+    }
+    g_option_context_free(context);
+
+    g_print("args, device: %s, user: %s, pwd: %s ,port %d\n", gs_app.video_dev, gs_app.user, gs_app.password, gs_app.port);
+
+    AppData *app = &gs_app;
     setlocale(LC_ALL, "");
+    signal(SIGINT, sigintHandler);
     gst_init(&argc, &argv);
+    app->loop = g_main_loop_new(NULL, FALSE);
+    g_assert(app->loop != NULL);
 
-#if 0
-    int fd = open("index.html", O_WRONLY | O_CREAT , 0666);
-    ssize_t ret =  write(fd, html_source, strlen(html_source));
-    g_print("fd: %d,write file size: %d\n", fd, ret);
-    close(fd);
-#endif
+    const gchar *clockstr = "clockoverlay time-format=\"%D %H:%M:%S\"";
+    contents = get_basic_sysinfo();
+    gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
+    gchar *cmdline = g_strdup_printf("v4l2src device=%s ! image/jpeg,width=1280,height=720,framterate=30/1,format=NV12 ! "
+                                     "jpegparse ! jpegdec ! videoconvert ! %s ! %s ! x264enc ! h264parse ! rtph264pay config-interval=-1 ! "
+                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                     " queue leaky=1 ! tee name=h264src h264src. ! fakesink ",
+                                     app->video_dev, clockstr, textoverlay);
 
-    receiver_entry_table =
-        g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL,
-                              destroy_receiver_entry);
+    app->pipeline = gst_parse_launch(cmdline, NULL);
+    g_free(cmdline);
+    g_free(textoverlay);
+    g_free(contents);
 
-    mainloop = g_main_loop_new(NULL, FALSE);
-    g_assert(mainloop != NULL);
+    g_object_set(app->pipeline, "message-forward", TRUE, NULL);
+    bus = gst_pipeline_get_bus(GST_PIPELINE(app->pipeline));
+    gst_bus_add_signal_watch(bus);
+    g_signal_connect(G_OBJECT(bus), "message", G_CALLBACK(message_cb), app);
+    gst_object_unref(GST_OBJECT(bus));
 
-#ifdef G_OS_UNIX
-    g_unix_signal_add(SIGINT, exit_sighandler, mainloop);
-    g_unix_signal_add(SIGTERM, exit_sighandler, mainloop);
-#endif
+    if (gst_element_set_state(app->pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+        g_printerr("unable to set the pipeline to playing state %d.\n", GST_STATE_CHANGE_FAILURE);
+        goto bail;
+    }
 
-    soup_server =
-        soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server", NULL);
-    soup_server_add_handler(soup_server, "/", soup_http_handler, NULL, NULL);
-    soup_server_add_websocket_handler(soup_server, "/ws", NULL, NULL,
-                                      soup_websocket_handler, (gpointer)receiver_entry_table, NULL);
-    soup_server_listen_all(soup_server, SOUP_HTTP_PORT,
-                           (SoupServerListenOptions)0, NULL);
-
-    gst_print("WebRTC page link: http://127.0.0.1:%d/\n", (gint)SOUP_HTTP_PORT);
-
-    g_main_loop_run(mainloop);
-
-    g_object_unref(G_OBJECT(soup_server));
-    g_hash_table_destroy(receiver_entry_table);
-    g_main_loop_unref(mainloop);
-
+    g_main_loop_run(app->loop);
+    g_object_unref(G_OBJECT(app->soup_server));
+    g_hash_table_destroy(app->receiver_entry_table);
+    g_main_loop_unref(app->loop);
+bail:
     gst_deinit();
 
     return 0;

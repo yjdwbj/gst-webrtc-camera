@@ -246,6 +246,7 @@ static void read_config_json(gchar *fullpath) {
     config_data.root_dir = g_strdup(json_object_get_string_member(root_obj, "rootdir"));
 
     config_data.showdot = json_object_get_boolean_member(root_obj, "showdot");
+    config_data.sysinfo = json_object_get_boolean_member(root_obj, "sysinfo");
 
     config_data.rec_len = json_object_get_int_member(root_obj, "rec_len");
     config_data.motion_rec = json_object_get_boolean_member(root_obj, "motion_rec");
@@ -308,12 +309,39 @@ static gchar *_get_config_path() {
 
 #if defined(HAS_JETSON_NANO)
 static void
-load_plugin_func(const gchar *name) {
+load_plugin_func(const gchar *path, const gchar *name) {
     GstPlugin *plugin;
     gchar *filename;
     GError *err = NULL;
 
-    filename = g_strdup_printf("/usr/lib/aarch64-linux-gnu/gstreamer-1.0/libgst%s.so", name);
+    filename = g_strdup_printf("%s/libgst%s.so", path, name);
+    GST_DEBUG("Pre-loading plugin %s", filename);
+
+    plugin = gst_plugin_load_file(filename, &err);
+
+    if (plugin) {
+        GST_INFO("Loaded plugin: \"%s\"", filename);
+
+        gst_registry_add_plugin(gst_registry_get(), plugin);
+    } else {
+        if (err) {
+            /* Report error to user, and free error */
+            GST_ERROR("Failed to load plugin: %s \n", err->message);
+            g_error_free(err);
+        } else {
+            GST_WARNING("Failed to load plugin: \"%s\" \n", filename);
+        }
+    }
+    g_free(filename);
+}
+
+static void
+load_deepstream_plugin(const gchar *name) {
+    GstPlugin *plugin;
+    gchar *filename;
+    GError *err = NULL;
+
+    filename = g_strdup_printf("/opt/nvidia/deepstream/deepstream-6.0/lib/gst-plugins/lib%s.so", name);
     GST_DEBUG("Pre-loading plugin %s", filename);
 
     plugin = gst_plugin_load_file(filename, &err);
@@ -374,9 +402,19 @@ int main(int argc, char *argv[]) {
         "nvivafilter"};
     int len = sizeof(nvlibs) / sizeof(gchar *);
     for (int i = 0; i < len; i++) {
-        load_plugin_func(nvlibs[i]);
+        load_plugin_func("/usr/lib/aarch64-linux-gnu/gstreamer-1.0", nvlibs[i]);
     }
-    g_print("nvlibs size: %ld\n", sizeof(nvlibs) / sizeof(gchar *));
+    // const gchar *deepstream[] = {
+    //     "gstnvvideoconvert",
+    //     "nvdsgst_deepstream_bins",
+    //     "nvdsgst_tracker"};
+
+    // len = sizeof(deepstream) / sizeof(gchar *);
+    // for (int i = 0; i < len; i++) {
+    //     load_deepstream_plugin(deepstream[i]);
+    // }
+
+    load_plugin_func("/usr/lib/aarch64-linux-gnu/gstreamer-1.0","pango");
     // load_plugin_func("/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdv.so");
 #endif
     gst_segtrap_set_enabled(TRUE);

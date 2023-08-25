@@ -45,6 +45,7 @@
   "splitfile_sink": false,
   "app_sink": false,
   "motion_rec": false,
+  "sysinfo": false,
   "rec_len": 20,
   "hls_onoff": {
     "av_hlssink": true,
