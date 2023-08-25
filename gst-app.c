@@ -414,11 +414,17 @@ static GstElement *create_textbins() {
      * video/x-raw ! nvvidconv ! video/x-raw(memory:NVMM)
      *
      */
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, pre_vconv, "nvvidconv");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, post_vconv, "nvvidconv");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, textoverlay, "textoverlay");
-    SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, clockoverlay, "clockoverlay");
 
+    pre_vconv = gst_element_factory_make("nvvidconv", NULL);
+    post_vconv = gst_element_factory_make("nvvidconv", NULL);
+    textoverlay = gst_element_factory_make("textoverlay", NULL);
+    clockoverlay = gst_element_factory_make("clockoverlay", NULL);
+    if(!pre_vconv || !post_vconv || !textoverlay || !clockoverlay)
+    {
+        g_error("Failed to create all elements of text bin.\n");
+        return NULL;
+    }
+    gst_bin_add_many(GST_BIN(bin), pre_vconv, textoverlay, clockoverlay, post_vconv,NULL);
     /**
      * @note
      * This gst_parse_bin_from_description("nvvidconv ! textoverlay ! clockoverlay ! nvvidconv",TRUE,NULL) cannot be used here
@@ -449,7 +455,7 @@ static GstElement *create_textbins() {
 #endif
 
 static GstElement *encoder_h264() {
-    GstElement *encoder, *teeh264, *queue, *capsfilter;
+    GstElement *encoder, *teeh264, *capsfilter;
     GstCaps *srcCaps;
     capsfilter = gst_element_factory_make("capsfilter", NULL);
     encoder = get_hardware_h264_encoder();
@@ -484,7 +490,7 @@ static GstElement *encoder_h264() {
     }
     link_request_src_pad(video_source, clockbin);
 #else
-    GstElement *clock, *textoverlay;
+    GstElement *clock, *textoverlay, *queue;
     queue = gst_element_factory_make("queue", NULL);
     g_object_set(G_OBJECT(queue), "leaky", 1, NULL);
     teeh264 = gst_element_factory_make("tee", NULL);
@@ -758,7 +764,7 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     item->pipeline = gst_parse_launch(cmdline, &error);
     if (error) {
         gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
-        g_print(message);
+        g_print("%s",message);
         g_free(message);
         g_error_free(error);
     }
@@ -2136,7 +2142,7 @@ int motion_hlssink() {
     motionbin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
         gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
-        g_print(message);
+        g_print("%s",message);
         g_free(message);
         g_error_free(error);
     }
@@ -2219,7 +2225,7 @@ int cvtracker_hlssink() {
     trackerbin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
         gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
-        g_print(message);
+        g_print("%s", message);
         g_free(message);
         g_error_free(error);
     }
@@ -2301,7 +2307,7 @@ int facedetect_hlssink() {
     facebin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
         gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
-        g_print(message);
+        g_print("%s", message);
         g_free(message);
         g_error_free(error);
     }
@@ -2380,7 +2386,7 @@ int edgedect_hlssink() {
     edgebin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
         gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
-        g_print(message);
+        g_print("%s", message);
         g_free(message);
         g_error_free(error);
     }

@@ -23,6 +23,7 @@
 #include "gst-app.h"
 #include "soup.h"
 #include <json-glib/json-glib.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -198,9 +199,9 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
 }
 
 void sigintHandler(int unused) {
-    g_print("You ctrl-c-ed! Sending EoS");
+    g_print("You ctrl-c-ed! Sending EoS\n");
     gboolean ret = gst_element_send_event(pipeline, gst_event_new_eos());
-    g_print("send Eos ret: %B .\n", ret);
+    g_print("send Eos ret: %s .\n", ret ? "true": "false");
     exit(0);
 }
 
