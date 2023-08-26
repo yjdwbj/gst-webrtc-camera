@@ -32,7 +32,8 @@ struct _APPData {
     GMainLoop *loop;
     SoupServer *soup_server;
     GHashTable *receiver_entry_table;
-    gchar *video_dev;  // v4l2src device. ex: /dev/video0
+    gchar *video_dev;  // v4l2src device. default: /dev/video0
+    gchar *audio_dev;  // only for alsasrc device
     gchar *user;
     gchar *password;
     int port;
@@ -40,7 +41,7 @@ struct _APPData {
 
 static AppData gs_app = {
     NULL,NULL,NULL,NULL,
-    "/dev/video0","test","test1234",57778
+    "/dev/video0","hw:0","test","test1234",57778
 };
 
 static void start_http(AppData *app);
@@ -121,7 +122,7 @@ void destroy_receiver_entry(gpointer receiver_entry_ptr) {
 ReceiverEntry *
 create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     ReceiverEntry *receiver_entry;
-    GstElement *h264src = NULL;
+    GstElement *h264src, *audiosrc;
 
     receiver_entry = g_new0(ReceiverEntry, 1);
     receiver_entry->connection = connection;
@@ -144,6 +145,11 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     g_assert(h264src != NULL);
     link_request_src_pad(h264src, receiver_entry->webrtcbin);
     gst_object_unref(h264src);
+
+    audiosrc = gst_bin_get_by_name(GST_BIN(app->pipeline), "audio");
+    g_assert(audiosrc != NULL);
+    link_request_src_pad(audiosrc, receiver_entry->webrtcbin);
+    gst_object_unref(audiosrc);
 
     g_assert(receiver_entry->webrtcbin != NULL);
 
@@ -370,130 +376,6 @@ unknown_message:
     goto cleanup;
 }
 
-static gboolean
-message_cb(GstBus *bus, GstMessage *message, AppData *app) {
-    gchar *name;
-
-    name = gst_object_get_path_string(message->src);
-    switch (GST_MESSAGE_TYPE(message)) {
-    case GST_MESSAGE_CLOCK_LOST:
-        g_printerr("!!clock lost, src name %s \n", name);
-        break;
-    case GST_MESSAGE_SEGMENT_START:
-        g_printerr("GST_MESSAGE_SEGMENT_START, src name %s \n", name);
-        break;
-    case GST_MESSAGE_SEGMENT_DONE:
-        g_printerr("GST_MESSAGE_SEGMENT_DONE, src name %s \n", name);
-        break;
-    case GST_MESSAGE_ASYNC_START:
-        g_printerr("GST_MESSAGE_ASYNC_START, src name %s \n", name);
-        break;
-    case GST_MESSAGE_ASYNC_DONE:
-        g_printerr("GST_MESSAGE_ASYNC_START, src name %s \n", name);
-        break;
-    case GST_MESSAGE_ERROR: {
-        GError *err = NULL;
-        gchar *debug = NULL;
-        GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(app->pipeline),
-                                  GST_DEBUG_GRAPH_SHOW_ALL, "error");
-        name = gst_object_get_path_string(message->src);
-        gst_message_parse_error(message, &err, &debug);
-
-        g_printerr("ERROR: from element %s: %s\n", name, err->message);
-        if (debug != NULL)
-            g_printerr("Additional debug info:\n%s\n", debug);
-        g_error_free(err);
-        g_free(debug);
-        g_main_loop_quit(app->loop);
-        break;
-    }
-    case GST_MESSAGE_WARNING: {
-        GError *err = NULL;
-        gchar *name, *debug = NULL;
-        GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(app->pipeline),
-                                  GST_DEBUG_GRAPH_SHOW_ALL, "warning");
-        name = gst_object_get_path_string(message->src);
-        gst_message_parse_warning(message, &err, &debug);
-
-        g_printerr("ERROR: from element %s: %s\n", name, err->message);
-        if (debug != NULL)
-            g_printerr("Additional debug info:\n%s\n", debug);
-
-        g_error_free(err);
-        g_free(debug);
-        g_free(name);
-        break;
-    }
-    case GST_MESSAGE_EOS: {
-        g_print("Got EOS \n");
-        g_main_loop_quit(app->loop);
-        gst_element_set_state(app->pipeline, GST_STATE_NULL);
-        break;
-    }
-    case GST_MESSAGE_ELEMENT: {
-        const gchar *location;
-        const GstStructure *s = gst_message_get_structure(message);
-        if (gst_structure_has_name(s, "splitmuxsink-fragment-opened")) {
-            location = gst_structure_get_string(s, "location");
-            g_message("get message: %s\n location: %s",
-                      gst_structure_to_string(gst_message_get_structure(message)),
-                      location);
-
-            // gst_debug_log(cat,
-            //               GST_LEVEL_INFO,
-            //               "Msg",
-            //               "Msg",
-            //               0,
-            //               NULL,
-            //               location);
-        } else if (gst_structure_has_name(s, "GstBinForwarded")) {
-            GstMessage *forward_msg = NULL;
-
-            gst_structure_get(s, "message", GST_TYPE_MESSAGE, &forward_msg, NULL);
-            g_assert(forward_msg);
-            // gst_println("GstBinForwarded message source %s\n", GST_MESSAGE_SRC_NAME(forward_msg));
-            switch (GST_MESSAGE_TYPE(forward_msg)) {
-            case GST_MESSAGE_ASYNC_DONE:
-                // g_print("ASYNC done %s\n", GST_MESSAGE_SRC_NAME(forward_msg));
-                if (g_strcmp0("bin0", GST_MESSAGE_SRC_NAME(forward_msg)) == 0) {
-                    g_print("prerolled, starting synchronized playback and recording\n");
-                    /* returns ASYNC because the sink linked to the live source is not
-                     * prerolled */
-                    if (gst_element_set_state(app->pipeline,
-                                              GST_STATE_PLAYING) != GST_STATE_CHANGE_ASYNC) {
-                        g_warning("State change failed");
-                    }
-                }
-                break;
-            default:
-                break;
-            }
-            gst_message_unref(forward_msg);
-        }
-        break;
-    }
-    case GST_MESSAGE_STATE_CHANGED:
-        /* We are only interested in state-changed messages from the pipeline */
-        if (GST_MESSAGE_SRC(message) == GST_OBJECT(app->pipeline)) {
-            GstState old_state, new_state, pending_state;
-            gst_message_parse_state_changed(message, &old_state, &new_state, &pending_state);
-            g_print("Pipeline state changed from %s to %s:\n",
-                    gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
-            GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(app->pipeline),
-                                      GST_DEBUG_GRAPH_SHOW_ALL, gst_element_state_get_name(new_state));
-            if (new_state == GST_STATE_PLAYING) {
-                start_http(app);
-            }
-            break;
-        }
-    default:
-        break;
-    }
-
-    g_free(name);
-    return TRUE;
-}
-
 void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
                               gpointer user_data) {
     AppData *app = (AppData *)user_data;
@@ -658,19 +540,20 @@ static gchar *get_basic_sysinfo() {
 }
 
 static GOptionEntry entries[] = {
-    {"device", 'd', 0, G_OPTION_ARG_STRING, &gs_app.video_dev,
-     "Device location, Default: /dev/video0", "DEVICE"},
+    {"video", 'v', 0, G_OPTION_ARG_STRING, &gs_app.video_dev,
+     "Video device location, Default: /dev/video0", "VIDEO"},
+    {"audio", 'a', 0, G_OPTION_ARG_STRING, &gs_app.audio_dev,
+     "Audio device location, Default: hw:1", "AUDIO"},
     {"user", 'u', 0, G_OPTION_ARG_STRING, &gs_app.user,
      "User name for http digest auth, Default: test", "USER"},
     {"password", 'p', 0, G_OPTION_ARG_STRING, &gs_app.password,
      "Password for http digest auth, Default: test1234", "PASSWORD"},
     {"port", 0, 0, G_OPTION_ARG_INT, &gs_app.port, "Port to listen on (default: 57778 )", "PORT"},
-     {NULL}};
+    {NULL}};
 
 int main(int argc, char *argv[]) {
     GOptionContext *context;
     gchar *contents;
-    GstBus *bus;
     GError *error;
 
     context = g_option_context_new("- gstreamer webrtc camera");
@@ -695,29 +578,28 @@ int main(int argc, char *argv[]) {
 
     const gchar *clockstr = "clockoverlay time-format=\"%D %H:%M:%S\"";
     contents = get_basic_sysinfo();
+    const gchar *enc = gst_element_factory_find("vaapih264enc") ? "vaapih264enc" : "x264enc";
     gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
-    gchar *cmdline = g_strdup_printf("v4l2src device=%s ! image/jpeg,width=1280,height=720,framterate=30/1,format=NV12 ! "
-                                     "jpegparse ! jpegdec ! videoconvert ! %s ! %s ! x264enc ! h264parse ! rtph264pay config-interval=-1 ! "
+    gchar *cmdline = g_strdup_printf("alsasrc device=%s ! audioconvert ! opusenc ! rtpopuspay ! "
+                                     " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                     " queue leaky=1 ! tee name=audio audio. ! fakesink async=false "
+                                     "v4l2src device=%s ! image/jpeg,width=1280,height=720,framterate=30/1,format=NV12 ! "
+                                     "jpegparse ! jpegdec ! videoconvert ! %s ! %s ! %s ! h264parse ! rtph264pay config-interval=-1 ! "
                                      " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                     " queue leaky=1 ! tee name=h264src h264src. ! fakesink ",
-                                     app->video_dev, clockstr, textoverlay);
+                                     " queue leaky=1 ! tee name=h264src h264src. ! fakesink async=false ",
+                                     app->audio_dev,app->video_dev, clockstr, textoverlay, enc);
 
     app->pipeline = gst_parse_launch(cmdline, NULL);
+
     g_free(cmdline);
     g_free(textoverlay);
     g_free(contents);
 
-    g_object_set(app->pipeline, "message-forward", TRUE, NULL);
-    bus = gst_pipeline_get_bus(GST_PIPELINE(app->pipeline));
-    gst_bus_add_signal_watch(bus);
-    g_signal_connect(G_OBJECT(bus), "message", G_CALLBACK(message_cb), app);
-    gst_object_unref(GST_OBJECT(bus));
-
     if (gst_element_set_state(app->pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-        g_printerr("unable to set the pipeline to playing state %d.\n", GST_STATE_CHANGE_FAILURE);
+        g_printerr("unable to set the pipeline to playing state %d. maybe the alsasrc device is wrong. \n", GST_STATE_CHANGE_FAILURE);
         goto bail;
     }
-
+    start_http(app);
     g_main_loop_run(app->loop);
     g_object_unref(G_OBJECT(app->soup_server));
     g_hash_table_destroy(app->receiver_entry_table);
