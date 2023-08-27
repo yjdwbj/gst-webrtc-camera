@@ -388,7 +388,7 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
     src_pad = gst_element_get_request_pad(src, "src_%u");
 #endif
     g_print("Obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
-    g_print("kclass name is: %s\n",klassname);
+    g_print("kclass name is: %s\n", klassname);
     sink_pad = g_str_has_suffix(klassname, "WebRTC") ? gst_element_request_pad_simple(dst, "sink_%u") : gst_element_get_static_pad(dst, "sink");
     if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
         gchar *sname = gst_pad_get_name(src_pad);
@@ -926,32 +926,33 @@ static void
 on_peer_connection_state_notify(GstElement *webrtcbin, GParamSpec *pspec,
                                 gpointer user_data) {
     GstWebRTCPeerConnectionState ice_gather_state;
-    const gchar *new_state = "unknown";
+    gchar *new_state = g_strdup("unknown");
     gchar *biname = gst_element_get_name(webrtcbin);
 
     g_object_get(webrtcbin, "connection-state", &ice_gather_state, NULL);
     switch (ice_gather_state) {
     case GST_WEBRTC_PEER_CONNECTION_STATE_NEW:
-        new_state = "new";
+        new_state = g_strdup("new");
         break;
     case GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTING:
-        new_state = "connecting";
+        new_state = g_strdup("connecting");
         break;
     case GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED:
-        new_state = "connected";
+        new_state = g_strdup("connected");
         break;
     case GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED:
-        new_state = "disconnected";
+        new_state = g_strdup("disconnected");
         break;
     case GST_WEBRTC_PEER_CONNECTION_STATE_FAILED:
-        new_state = "failed";
+        new_state = g_strdup("failed");
         break;
     case GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED:
-        new_state = "closed";
+        new_state = g_strdup("closed");
         break;
     }
     gst_print("%s webrtc connection state changed to %s\n", biname, new_state);
     g_free(biname);
+    g_free(new_state);
 }
 
 void appsrc_cmd_rec_stop(gpointer user_data) {
@@ -1204,7 +1205,7 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     GstPadLinkReturn ret;
     GstElement *playbin;
     gchar *desc;
-    WebrtcItem *item_entry = (WebrtcItem *)user_data;
+    WebrtcItem *item = (WebrtcItem *)user_data;
     if (GST_PAD_DIRECTION(pad) != GST_PAD_SRC)
         return;
 
@@ -1239,11 +1240,11 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
         }
         playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
         g_free(desc);
-        gst_bin_add(GST_BIN(pipe), playbin);
+        gst_bin_add(GST_BIN(item->recv.recvpipe), playbin);
     } else if (g_strcmp0(name, "video") == 0) {
         if (!has_running_xwindow()) {
-            if (item_entry->receive_channel)
-                g_signal_emit_by_name(item_entry->receive_channel, "send-string", "{\"notify\":\"The remote peer cannot view your video\"}");
+            if (item->receive_channel)
+                g_signal_emit_by_name(item->receive_channel, "send-string", "{\"notify\":\"The remote peer cannot view your video\"}");
             gst_printerr("Current system not running on Xwindow. \n");
             return;
         }
@@ -1263,7 +1264,7 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
 
         playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
         g_free(desc);
-        gst_bin_add(GST_BIN(pipe), playbin);
+        gst_bin_add(GST_BIN(item->recv.recvpipe), playbin);
     } else {
         gst_printerr("Unknown pad %s, ignoring", GST_PAD_NAME(pad));
         return;
@@ -1586,8 +1587,9 @@ static void stop_appsrc_webrtc(gpointer user_data) {
     gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
     gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
 
-    g_object_unref(webrtc_entry->send_channel);
-    g_object_unref(webrtc_entry->receive_channel);
+    if (webrtc_entry->send_channel)
+        g_object_unref(webrtc_entry->send_channel);
+
     g_mutex_lock(&G_appsrc_lock);
     G_AppsrcList = g_list_remove(G_AppsrcList, &webrtc_entry->send_avpair);
     g_mutex_unlock(&G_appsrc_lock);
@@ -1604,8 +1606,8 @@ static void stop_udpsrc_webrtc(gpointer user_data) {
     gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
     gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
 
-    g_object_unref(webrtc_entry->send_channel);
-    g_object_unref(webrtc_entry->receive_channel);
+    if (webrtc_entry->send_channel != NULL)
+        g_object_unref(webrtc_entry->send_channel);
 }
 
 void start_udpsrc_webrtcbin(WebrtcItem *item) {

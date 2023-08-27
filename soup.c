@@ -483,6 +483,8 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                      G_CALLBACK(soup_websocket_closed_cb), (gpointer)webrtc_connected_table);
     webrtc_entry = g_new0(WebrtcItem, 1);
     webrtc_entry->connection = connection;
+    webrtc_entry->send_channel = NULL;
+    webrtc_entry->receive_channel = NULL;
     webrtc_entry->hash_id = (guint64)(webrtc_entry->connection);
 
     g_object_ref(G_OBJECT(connection));
