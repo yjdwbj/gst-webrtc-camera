@@ -32,7 +32,7 @@ static GMainLoop *loop;
 static GstElement *pipeline;
 extern GstConfigData config_data;
 
-static GThread *inotify_watch = NULL;
+// static GThread *inotify_watch = NULL;
 
 static void _get_cpuid() {
     // refer from https://en.wikipedia.org/wiki/CPUID#EAX=3:_Processor_Serial_Number
@@ -69,26 +69,10 @@ static void _get_cpuid() {
 #endif
 }
 
+#if 0
 static gboolean
 message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
-    gchar *name;
-    name = gst_object_get_path_string(message->src);
     switch (GST_MESSAGE_TYPE(message)) {
-    case GST_MESSAGE_CLOCK_LOST:
-        g_printerr("!!clock lost, src name %s \n", name);
-        break;
-    case GST_MESSAGE_SEGMENT_START:
-        g_printerr("GST_MESSAGE_SEGMENT_START, src name %s \n", name);
-        break;
-    case GST_MESSAGE_SEGMENT_DONE:
-        g_printerr("GST_MESSAGE_SEGMENT_DONE, src name %s \n", name);
-        break;
-    case GST_MESSAGE_ASYNC_START:
-        g_printerr("GST_MESSAGE_ASYNC_START, src name %s \n", name);
-        break;
-    case GST_MESSAGE_ASYNC_DONE:
-        g_printerr("GST_MESSAGE_ASYNC_START, src name %s \n", name);
-        break;
     case GST_MESSAGE_ERROR: {
         GError *err = NULL;
         gchar *debug, *strname;
@@ -106,23 +90,6 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
         g_main_loop_quit(loop);
         break;
     }
-    case GST_MESSAGE_WARNING: {
-        GError *err = NULL;
-        gchar *strname, *debug = NULL;
-        GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline),
-                                  GST_DEBUG_GRAPH_SHOW_ALL, "warning");
-        strname = gst_object_get_path_string(message->src);
-        gst_message_parse_warning(message, &err, &debug);
-
-        g_printerr("ERROR: from element %s: %s\n", strname, err->message);
-        if (debug != NULL)
-            g_printerr("Additional debug info:\n%s\n", debug);
-
-        g_error_free(err);
-        g_free(debug);
-        g_free(strname);
-        break;
-    }
     case GST_MESSAGE_EOS: {
         g_print("Got EOS \n");
         g_main_loop_quit(loop);
@@ -130,49 +97,6 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
         g_main_loop_unref(loop);
         gst_object_unref(pipeline);
         exit(0);
-        break;
-    }
-    case GST_MESSAGE_ELEMENT: {
-        const gchar *location;
-        gchar *str;
-        const GstStructure *structure = gst_message_get_structure(message);
-        if (gst_structure_has_name(structure, "splitmuxsink-fragment-opened")) {
-            location = gst_structure_get_string(structure, "location");
-            str = gst_structure_to_string(gst_message_get_structure(message));
-            g_message("get message: %s\n location: %s",str,location);
-            g_free(str);
-
-            // gst_debug_log(cat,
-            //               GST_LEVEL_INFO,
-            //               "Msg",
-            //               "Msg",
-            //               0,
-            //               NULL,
-            //               location);
-        } else if (gst_structure_has_name(structure, "GstBinForwarded")) {
-            GstMessage *forward_msg = NULL;
-
-            gst_structure_get(structure, "message", GST_TYPE_MESSAGE, &forward_msg, NULL);
-            g_assert(forward_msg);
-            // gst_println("GstBinForwarded message source %s\n", GST_MESSAGE_SRC_NAME(forward_msg));
-            switch (GST_MESSAGE_TYPE(forward_msg)) {
-            case GST_MESSAGE_ASYNC_DONE:
-                // g_print("ASYNC done %s\n", GST_MESSAGE_SRC_NAME(forward_msg));
-                if (g_strcmp0("bin0", GST_MESSAGE_SRC_NAME(forward_msg)) == 0) {
-                    g_print("prerolled, starting synchronized playback and recording\n");
-                    /* returns ASYNC because the sink linked to the live source is not
-                     * prerolled */
-                    if (gst_element_set_state(pipeline,
-                                              GST_STATE_PLAYING) != GST_STATE_CHANGE_ASYNC) {
-                        g_warning("State change failed");
-                    }
-                }
-                break;
-            default:
-                break;
-            }
-            gst_message_unref(forward_msg);
-        }
         break;
     }
     case GST_MESSAGE_STATE_CHANGED:
@@ -194,15 +118,16 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
         break;
     }
 
-    g_free(name);
     return TRUE;
 }
+#endif
 
 void sigintHandler(int unused) {
     g_print("You ctrl-c-ed! Sending EoS\n");
     gboolean ret = gst_element_send_event(pipeline, gst_event_new_eos());
     g_print("send Eos ret: %s .\n", ret ? "true": "false");
-    exit(0);
+    g_main_loop_quit(loop);
+    //exit(0);
 }
 
 static void read_config_json(gchar *fullpath) {
@@ -425,11 +350,11 @@ int main(int argc, char *argv[]) {
 
     pipeline = create_instance();
     /* this enables messages of individual elements inside the pipeline */
-    g_object_set(pipeline, "message-forward", TRUE, NULL);
-    GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
-    gst_bus_add_signal_watch(bus);
-    g_signal_connect(G_OBJECT(bus), "message", G_CALLBACK(message_cb), NULL);
-    gst_object_unref(GST_OBJECT(bus));
+    // g_object_set(pipeline, "message-forward", TRUE, NULL);
+    // GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
+    // gst_bus_add_signal_watch(bus);
+    // g_signal_connect(G_OBJECT(bus), "message", G_CALLBACK(message_cb), NULL);
+    // gst_object_unref(GST_OBJECT(bus));
 
     if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         g_printerr("unable to set the pipeline to playing state %d.\n", GST_STATE_CHANGE_FAILURE);

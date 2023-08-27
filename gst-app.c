@@ -659,38 +659,11 @@ on_new_sample_from_sink(GstElement *elt, CustomAppData *data) {
 
 #endif
 
-static gboolean
-on_source_message(GstBus *bus, GstMessage *message, CustomAppData *data) {
-    gchar *name;
-    name = gst_object_get_path_string(message->src);
-    switch (GST_MESSAGE_TYPE(message)) {
-    case GST_MESSAGE_EOS: {
-        g_print("Finished record, src: %s\n", name);
-    }
-
-    break;
-    case GST_MESSAGE_ERROR:
-        g_print("Received error, src: %s\n", name);
-        break;
-    default:
-        break;
-    }
-    g_free(name);
-    return TRUE;
-}
-
 void udpsrc_cmd_rec_stop(gpointer user_data) {
     RecordItem *item = (RecordItem *)user_data;
-    GstBus *bus;
     gst_element_set_state(GST_ELEMENT(item->pipeline),
                           GST_STATE_NULL);
     g_print("stop udpsrc record.\n");
-
-    bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
-    if (bus != NULL) {
-        gst_bus_remove_watch(bus);
-        gst_object_unref(bus);
-    }
 
     gst_object_unref(GST_OBJECT(item->pipeline));
     if (pthread_mutex_lock(&cmd_mtx)) {
@@ -723,7 +696,6 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     RecordItem *item = (RecordItem *)user_data;
     gchar *timestr = NULL;
     gchar *cmdline = NULL;
-    GstBus *bus = NULL;
     GError *error = NULL;
     gchar *today = get_today_str();
 
@@ -769,9 +741,6 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
         g_error_free(error);
     }
 
-    bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
-    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
-    gst_object_unref(bus);
     g_free(cmdline);
     gst_element_set_state(item->pipeline, GST_STATE_READY);
 
@@ -792,7 +761,6 @@ destroy_timeout(TimeoutFulldata *tdata) {
 #endif
 
 static gboolean stop_udpsrc_rec(gpointer user_data) {
-    // GstBus *bus;
 #if defined(GLIB_AVAILABLE_IN_2_74)
     GstElement *rec_pipeline = (GstElement *)user_data;
 #else
@@ -806,10 +774,6 @@ static gboolean stop_udpsrc_rec(gpointer user_data) {
     gst_element_set_state(GST_ELEMENT(rec_pipeline),
                           GST_STATE_NULL);
     g_print("stop udpsrc record.\n");
-
-    // bus = gst_pipeline_get_bus(GST_PIPELINE(rec_pipeline));
-    // gst_bus_remove_watch(bus);
-    // gst_object_unref(bus);
 
     gst_object_unref(GST_OBJECT(rec_pipeline));
     if (pthread_mutex_lock(&mtx)) {
@@ -833,7 +797,6 @@ static int start_udpsrc_rec(gpointer user_data) {
     gchar *fullpath;
     gchar *timestr = NULL;
     gchar *cmdline = NULL;
-    GstBus *bus = NULL;
     gchar *today = get_today_str();
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/record/", today, NULL);
@@ -872,9 +835,7 @@ static int start_udpsrc_rec(gpointer user_data) {
     g_free(video_src);
 
     rec_pipeline = gst_parse_launch(cmdline, NULL);
-    bus = gst_pipeline_get_bus(GST_PIPELINE(rec_pipeline));
-    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
-    gst_object_unref(bus);
+
     g_free(cmdline);
     gst_element_set_state(rec_pipeline, GST_STATE_PLAYING);
 #if defined(GLIB_AVAILABLE_IN_2_74)
@@ -993,16 +954,9 @@ on_peer_connection_state_notify(GstElement *webrtcbin, GParamSpec *pspec,
 
 void appsrc_cmd_rec_stop(gpointer user_data) {
     RecordItem *item = (RecordItem *)user_data;
-    GstBus *bus;
     gst_element_set_state(GST_ELEMENT(item->pipeline),
                           GST_STATE_NULL);
     g_print("stop appsrc record.\n");
-
-    bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
-    if (bus != NULL) {
-        gst_bus_remove_watch(bus);
-        gst_object_unref(bus);
-    }
 
     gst_object_unref(GST_OBJECT(item->pipeline));
     if (pthread_mutex_lock(&cmd_mtx)) {
@@ -1046,7 +1000,6 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
     gchar *cmdline;
     gchar *timestr = NULL;
     gchar *today = NULL;
-    GstBus *bus;
 
     if (pthread_mutex_lock(&cmd_mtx)) {
         g_error("Failed to lock on mutex.\n");
@@ -1100,10 +1053,6 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
 
     item->pipeline = gst_parse_launch(cmdline, NULL);
     g_free(cmdline);
-
-    bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
-    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
-    gst_object_unref(bus);
 
     gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
     item->rec_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->pipeline), vid_str);
@@ -1164,7 +1113,6 @@ start_appsrc_record() {
     gchar *cmdline;
     gchar *timestr = NULL;
     gchar *today = NULL;
-    GstBus *bus;
     today = get_today_str();
     const gchar *vid_str = "video_appsrc";
     const gchar *aid_str = "audio_appsrc";
@@ -1216,10 +1164,6 @@ start_appsrc_record() {
     item->rec_avpair.audio_src = config_data.audio.enable ? gst_bin_get_by_name(GST_BIN(item->pipeline), aid_str) : NULL;
     // g_signal_connect(appsrc_aid, "need-data", (GCallback)need_data, audio_sink);
     g_signal_connect(item->rec_avpair.audio_src, "enough-data", (GCallback)on_enough_data, NULL);
-
-    bus = gst_pipeline_get_bus(GST_PIPELINE(item->pipeline));
-    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
-    gst_object_unref(bus);
 
     gst_element_set_state(item->pipeline, GST_STATE_PLAYING);
 
@@ -1348,7 +1292,6 @@ data_channel_on_close(GObject *dc, gpointer user_data) {
 }
 
 static void stop_recv_webrtc(gpointer user_data) {
-    GstBus *bus;
     GstIterator *iter = NULL;
     gboolean done;
 
@@ -1389,12 +1332,6 @@ static void stop_recv_webrtc(gpointer user_data) {
     if (recv_entry->recvpipe)
         gst_element_set_state(GST_ELEMENT(recv_entry->recvpipe),
                               GST_STATE_NULL);
-
-    bus = gst_pipeline_get_bus(GST_PIPELINE(recv_entry->recvpipe));
-    if (bus != NULL) {
-        gst_bus_remove_watch(bus);
-        gst_object_unref(bus);
-    }
 
     gst_object_unref(recv_entry->recvpipe);
     recv_entry->stop_recv = NULL;
@@ -1593,7 +1530,6 @@ on_remove_decodebin_stream(GstElement *srcbin, GstPad *pad,
 static void start_recv_webrtcbin(gpointer user_data) {
     WebrtcItem *item = (WebrtcItem *)user_data;
     // gchar *turn_srv;
-    GstBus *bus;
     gchar *pipe_name = g_strdup_printf("recv_%ld", item->hash_id);
     gchar *bin_name = g_strdup_printf("recvbin_%ld", item->hash_id);
 
@@ -1612,10 +1548,6 @@ static void start_recv_webrtcbin(gpointer user_data) {
     item->recv.stop_recv = &stop_recv_webrtc;
     g_object_set(G_OBJECT(item->recv.recvbin), "async-handling", TRUE, NULL);
     g_object_set(G_OBJECT(item->recv.recvbin), "bundle-policy", 3, NULL);
-
-    bus = gst_pipeline_get_bus(GST_PIPELINE(item->recv.recvpipe));
-    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
-    gst_object_unref(bus);
 
     /* Takes ownership of each: */
     gst_bin_add(GST_BIN(item->recv.recvpipe), item->recv.recvbin);
@@ -1643,17 +1575,10 @@ static void start_recv_webrtcbin(gpointer user_data) {
 }
 
 static void stop_appsrc_webrtc(gpointer user_data) {
-    GstBus *bus;
     WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
 
     gst_element_set_state(GST_ELEMENT(webrtc_entry->sendpipe),
                           GST_STATE_NULL);
-
-    bus = gst_pipeline_get_bus(GST_PIPELINE(webrtc_entry->sendpipe));
-    if (bus != NULL) {
-        gst_bus_remove_watch(bus);
-        gst_object_unref(bus);
-    }
 
     gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
     gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
@@ -1665,17 +1590,10 @@ static void stop_appsrc_webrtc(gpointer user_data) {
 }
 
 static void stop_udpsrc_webrtc(gpointer user_data) {
-    GstBus *bus;
     WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
 
     gst_element_set_state(GST_ELEMENT(webrtc_entry->sendpipe),
                           GST_STATE_NULL);
-
-    bus = gst_pipeline_get_bus(GST_PIPELINE(webrtc_entry->sendpipe));
-    if (bus != NULL) {
-        gst_bus_remove_watch(bus);
-        gst_object_unref(bus);
-    }
 
     gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
     gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
@@ -1683,7 +1601,6 @@ static void stop_udpsrc_webrtc(gpointer user_data) {
 
 void start_udpsrc_webrtcbin(WebrtcItem *item) {
     gchar *cmdline = NULL;
-    GstBus *bus = NULL;
     // gchar *turn_srv = NULL;
     const gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
@@ -1715,9 +1632,6 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     gst_element_set_state(item->sendpipe, GST_STATE_READY);
 
     g_free(cmdline);
-    bus = gst_pipeline_get_bus(GST_PIPELINE(item->sendpipe));
-    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
-    gst_object_unref(bus);
 
     item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     item->record.get_rec_state = &get_record_state;
@@ -1786,7 +1700,6 @@ check_webrtcbin_state_by_timer(GstElement *webrtcbin) {
 
 void start_appsrc_webrtcbin(WebrtcItem *item) {
     gchar *cmdline = NULL;
-    GstBus *bus = NULL;
     // gchar *turn_srv = NULL;
 
     gchar *webrtc_name = g_strdup_printf("webrtc_appsrc_%ld", item->hash_id);
@@ -1844,9 +1757,6 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     G_AppsrcList = g_list_append(G_AppsrcList, &item->send_avpair);
     g_mutex_unlock(&G_appsrc_lock);
 
-    bus = gst_pipeline_get_bus(GST_PIPELINE(item->sendpipe));
-    gst_bus_add_watch(bus, (GstBusFunc)on_source_message, NULL);
-    gst_object_unref(bus);
     gst_element_set_state(item->sendpipe, GST_STATE_READY);
     create_data_channel((gpointer)item);
 
