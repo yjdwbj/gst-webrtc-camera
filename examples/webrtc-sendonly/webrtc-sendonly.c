@@ -81,17 +81,13 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
     GstPadLinkReturn lret;
 #if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(src, "src_%u");
-#else
-    src_pad = gst_element_get_request_pad(src, "src_%u");
-#endif
-    g_print("motion obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
-
-#if GST_VERSION_MINOR >= 20
     sink_pad = gst_element_request_pad_simple(dst, "sink_%u");
 #else
-    sink_pad = gst_element_request_pad_simple(src, "sink_%u");
+    src_pad = gst_element_get_request_pad(src, "src_%u");
+    sink_pad = gst_element_get_request_pad(dst, "sink_%u");
+    g_assert_nonnull(sink_pad);
 #endif
-
+    g_print("motion obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
     if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
         gchar *sname = gst_pad_get_name(src_pad);
         gchar *dname = gst_pad_get_name(sink_pad);
@@ -136,8 +132,11 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     //                  "udpsrc port=6000 ! application/x-rtp,media=video,encoding-name=H264,payload=96 ! "
     //                  " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! "
     //                  " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96  ! queue ! webrtcbin. ";
-    receiver_entry->webrtcbin = gst_element_factory_make_full("webrtcbin",
-                                                              "stun-server", STUN_SERVER, NULL);
+    receiver_entry->webrtcbin = gst_element_factory_make("webrtcbin", NULL);
+    g_assert(receiver_entry->webrtcbin != NULL);
+
+    g_object_set(receiver_entry->webrtcbin, "stun-server", STUN_SERVER, NULL);
+
     gst_bin_add(GST_BIN(app->pipeline), receiver_entry->webrtcbin);
     receiver_entry->pipeline = app->pipeline;
 
@@ -152,8 +151,6 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
         link_request_src_pad(audiosrc, receiver_entry->webrtcbin);
         gst_object_unref(audiosrc);
     }
-
-    g_assert(receiver_entry->webrtcbin != NULL);
 
     g_signal_connect(receiver_entry->webrtcbin, "on-negotiation-needed",
                      G_CALLBACK(on_negotiation_needed_cb), (gpointer)receiver_entry);
@@ -427,7 +424,7 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                             G_GNUC_UNUSED SoupClientContext *client_context, gpointer user_data) {
     ReceiverEntry *receiver_entry;
     AppData *app = (AppData *)user_data;
-    gst_print("Processing new websocket connection %p", (gpointer)connection);
+    gst_print("Processing new websocket connection %p\n", (gpointer)connection);
 
     g_signal_connect(G_OBJECT(connection), "closed",
                      G_CALLBACK(soup_websocket_closed_cb), app);
@@ -503,6 +500,7 @@ void sigintHandler(int unused) {
     gst_element_send_event(gs_app.pipeline, gst_event_new_eos());
     gst_element_set_state(gs_app.pipeline, GST_STATE_NULL);
     g_main_loop_quit(gs_app.loop);
+    exit(0);
 }
 
 #include <stdio.h>
@@ -581,17 +579,16 @@ int main(int argc, char *argv[]) {
     app->loop = g_main_loop_new(NULL, FALSE);
     g_assert(app->loop != NULL);
 
-
     const gchar *clockstr = "clockoverlay time-format=\"%D %H:%M:%S\"";
     contents = get_basic_sysinfo();
-    const gchar *enc = gst_element_factory_find("vaapih264enc") ? "vaapih264enc" : " video/x-raw,format=I420 ! x264enc";
+    const gchar *enc = gst_element_factory_find("vaapih264enc") ? "vaapih264enc" : gst_element_factory_find("v4l2h264enc") ? "v4l2h264enc"
+                                                                                                                           : " video/x-raw,format=I420 ! x264enc";
     gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
     GstCaps *vcaps = gst_caps_from_string(app->video_caps);
     GstStructure *structure = gst_caps_get_structure(vcaps, 0);
     g_print(" caps name is: %s\n", gst_structure_get_name(structure));
 
-    if(g_str_has_prefix(gst_structure_get_name(structure),"video"))
-    {
+    if (g_str_has_prefix(gst_structure_get_name(structure), "video")) {
         strvcaps = g_strdup(app->video_caps);
     } else {
         strvcaps = g_strdup("image/jpeg,width=1280,height=720,framerate=30/1,format=NV12 ! jpegparse ! jpegdec ");
@@ -605,19 +602,17 @@ int main(int argc, char *argv[]) {
     g_free(strvcaps);
     g_print("video cmdline: %s\n", cmdline);
 
-    if( app->audio_dev != NULL)
-    {
+    if (app->audio_dev != NULL) {
         gchar *tmp = g_strdup_printf("alsasrc device=%s ! audioconvert ! opusenc ! rtpopuspay ! "
-                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " queue leaky=1 ! tee name=audio audio. ! fakesink async=false %s",
-                                           app->audio_dev, cmdline);
+                                     " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                     " queue leaky=1 ! tee name=audio audio. ! fakesink async=false %s",
+                                     app->audio_dev, cmdline);
         g_free(cmdline);
         cmdline = g_strdup(tmp);
         g_free(tmp);
     }
 
     app->pipeline = gst_parse_launch(cmdline, NULL);
-
 
     g_free(cmdline);
     g_free(textoverlay);

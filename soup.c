@@ -485,7 +485,7 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     webrtc_entry->connection = connection;
     webrtc_entry->send_channel = NULL;
     webrtc_entry->receive_channel = NULL;
-    webrtc_entry->hash_id = (guint64)(webrtc_entry->connection);
+    webrtc_entry->hash_id = (intptr_t)(webrtc_entry->connection);
 
     g_object_ref(G_OBJECT(connection));
 

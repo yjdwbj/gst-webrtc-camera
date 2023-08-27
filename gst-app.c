@@ -219,6 +219,8 @@ static GstElement *get_hardware_h264_encoder() {
         g_object_set(G_OBJECT(encoder), "bitrate", 8000, NULL);
     } else if (gst_element_factory_find("nvv4l2h264enc")) {
         encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
+    } else if (gst_element_factory_find("v4l2h264enc")) {
+        encoder = gst_element_factory_make("v4l2h264enc", NULL);
     } else {
         encoder = gst_element_factory_make("x264enc", NULL);
         // g_object_set(G_OBJECT(encoder), "key-int-max", 2, NULL);
@@ -382,14 +384,15 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
 
     klassname =
         gst_element_class_get_metadata(klass, GST_ELEMENT_METADATA_KLASS);
+
 #if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(src, "src_%u");
+    sink_pad = g_str_has_suffix(klassname, "WebRTC") ? gst_element_request_pad_simple(dst, "sink_%u") : gst_element_get_static_pad(dst, "sink");
 #else
     src_pad = gst_element_get_request_pad(src, "src_%u");
+    sink_pad = g_str_has_suffix(klassname, "WebRTC") ? gst_element_get_request_pad(dst, "sink_%u") : gst_element_get_static_pad(dst, "sink");
 #endif
-    g_print("Obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
-    g_print("kclass name is: %s\n", klassname);
-    sink_pad = g_str_has_suffix(klassname, "WebRTC") ? gst_element_request_pad_simple(dst, "sink_%u") : gst_element_get_static_pad(dst, "sink");
+
     if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
         gchar *sname = gst_pad_get_name(src_pad);
         gchar *dname = gst_pad_get_name(sink_pad);
@@ -1508,7 +1511,7 @@ create_data_channel(gpointer user_data) {
     g_signal_connect(item->sendbin, "on-data-channel", G_CALLBACK(on_data_channel),
                      (gpointer)item);
 
-    gchar *chname = g_strdup_printf("channel_%ld", item->hash_id);
+    gchar *chname = g_strdup_printf("channel_%" G_GUINT64_FORMAT, item->hash_id);
     g_signal_emit_by_name(item->sendbin, "create-data-channel", chname, NULL,
                           &item->send_channel);
     g_free(chname);
@@ -1534,8 +1537,8 @@ on_remove_decodebin_stream(GstElement *srcbin, GstPad *pad,
 static void start_recv_webrtcbin(gpointer user_data) {
     WebrtcItem *item = (WebrtcItem *)user_data;
     // gchar *turn_srv;
-    gchar *pipe_name = g_strdup_printf("recv_%ld", item->hash_id);
-    gchar *bin_name = g_strdup_printf("recvbin_%ld", item->hash_id);
+    gchar *pipe_name = g_strdup_printf("recv_%" G_GUINT64_FORMAT, item->hash_id);
+    gchar *bin_name = g_strdup_printf("recvbin_%" G_GUINT64_FORMAT, item->hash_id);
 
     // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
     item->recv.recvpipe = gst_pipeline_new(pipe_name);
@@ -1613,7 +1616,8 @@ static void stop_udpsrc_webrtc(gpointer user_data) {
 void start_udpsrc_webrtcbin(WebrtcItem *item) {
     gchar *cmdline = NULL;
     // gchar *turn_srv = NULL;
-    gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
+    gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, item->hash_id);
+    g_print("webrtc_name----------> : %s\n", webrtc_name);
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue leaky=1 ! "
@@ -1707,7 +1711,8 @@ int start_av_udpsink() {
 #define FSINK_VNAME "fsink_video"
 #define FSINK_ANAME "fsink_audio"
 
-static void stop_webrtc(WebrtcItem *item) {
+static void stop_webrtc(gpointer user_data) {
+    WebrtcItem *item = (WebrtcItem *)user_data;
     gst_element_set_state(item->sendbin, GST_STATE_NULL);
     gst_bin_remove(GST_BIN(pipeline), item->sendbin);
     gst_object_unref(item->sendbin);
@@ -1715,7 +1720,7 @@ static void stop_webrtc(WebrtcItem *item) {
 
 void start_webrtcbin(WebrtcItem *item) {
     // gchar *turn_srv = NULL;
-    gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
+    gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, item->hash_id);
     g_print("webrtc_name: %s\n", webrtc_name);
     item->sendbin = gst_element_factory_make("webrtcbin", webrtc_name);
     g_object_set(item->sendbin, "stun-server", config_data.webrtc.stun, NULL);
@@ -1757,7 +1762,7 @@ int start_av_fakesink() {
     MAKE_ELEMENT_AND_ADD(video_pay, "rtph264pay");
     MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
     MAKE_ELEMENT_AND_ADD(video_sink, "fakesink");
-    vtee = gst_element_factory_make_full("tee", "name", FSINK_VNAME, NULL);
+    vtee = gst_element_factory_make("tee", FSINK_VNAME);
     gst_bin_add(GST_BIN(pipeline), vtee);
 
     /* Configure udpsink */
@@ -1778,7 +1783,7 @@ int start_av_fakesink() {
         MAKE_ELEMENT_AND_ADD(audio_sink, "fakesink");
         MAKE_ELEMENT_AND_ADD(audio_pay, "rtpopuspay");
         MAKE_ELEMENT_AND_ADD(aqueue, "queue");
-        atee = gst_element_factory_make_full("tee", "name", FSINK_ANAME, NULL);
+        atee = gst_element_factory_make("tee", FSINK_ANAME);
         gst_bin_add(GST_BIN(pipeline), atee);
         g_object_set(audio_sink, "async", FALSE, NULL);
         g_object_set(audio_pay, "pt", 97, NULL);
@@ -1808,11 +1813,11 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     gchar *cmdline = NULL;
     // gchar *turn_srv = NULL;
 
-    gchar *webrtc_name = g_strdup_printf("webrtc_appsrc_%ld", item->hash_id);
+    gchar *webrtc_name = g_strdup_printf("webrtc_appsrc_%" G_GUINT64_FORMAT, item->hash_id);
     // vcaps = gst_caps_from_string("video/x-h264,stream-format=(string)avc,alignment=(string)au,width=(int)1280,height=(int)720,framerate=(fraction)30/1,profile=(string)main");
     // acaps = gst_caps_from_string("audio/x-opus, channels=(int)1,channel-mapping-family=(int)1");
 
-    gchar *video_src = g_strdup_printf("appsrc  name=video_%ld format=3 leaky-type=2 ! "
+    gchar *video_src = g_strdup_printf("appsrc  name=video_%" G_GUINT64_FORMAT " format=3 leaky-type=2 ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue leaky=2 !"
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
@@ -1820,7 +1825,7 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
                                        item->hash_id, webrtc_name);
 
     if (audio_source != NULL) {
-        gchar *audio_src = g_strdup_printf("appsrc name=audio_%ld  format=3 leaky-type=2 ! "
+        gchar *audio_src = g_strdup_printf("appsrc name=audio_%" G_GUINT64_FORMAT "  format=3 leaky-type=2 ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                            " rtpopusdepay ! rtpopuspay ! queue leaky=2 ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
@@ -1844,7 +1849,7 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     g_free(webrtc_name);
 
-    webrtc_name = g_strdup_printf("video_%ld", item->hash_id);
+    webrtc_name = g_strdup_printf("video_%" G_GUINT64_FORMAT, item->hash_id);
     item->send_avpair.video_src = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     g_free(webrtc_name);
 #if 0
@@ -1852,7 +1857,7 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     g_signal_connect(item->send_avpair.video_src, "need-data", (GCallback)need_data, NULL);
 #endif
 
-    webrtc_name = g_strdup_printf("audio_%ld", item->hash_id);
+    webrtc_name = g_strdup_printf("audio_%" G_GUINT64_FORMAT, item->hash_id);
     item->send_avpair.audio_src = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
     g_free(webrtc_name);
 #if 0
