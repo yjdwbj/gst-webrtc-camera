@@ -33,6 +33,7 @@ struct _APPData {
     SoupServer *soup_server;
     GHashTable *receiver_entry_table;
     gchar *video_dev;  // v4l2src device. default: /dev/video0
+    gchar *video_caps; // video/x-raw,width=1280,height=720,format=NV12,framerate=25/1
     gchar *audio_dev;  // only for alsasrc device
     gchar *user;
     gchar *password;
@@ -40,9 +41,8 @@ struct _APPData {
 };
 
 static AppData gs_app = {
-    NULL,NULL,NULL,NULL,
-    "/dev/video0","hw:0","test","test1234",57778
-};
+    NULL, NULL, NULL, NULL,
+    "/dev/video0", "video/x-raw,width=1280,height=720,format=YUY2,framerate=25/1", NULL, "test", "test1234", 57778};
 
 static void start_http(AppData *app);
 
@@ -146,10 +146,12 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     link_request_src_pad(h264src, receiver_entry->webrtcbin);
     gst_object_unref(h264src);
 
-    audiosrc = gst_bin_get_by_name(GST_BIN(app->pipeline), "audio");
-    g_assert(audiosrc != NULL);
-    link_request_src_pad(audiosrc, receiver_entry->webrtcbin);
-    gst_object_unref(audiosrc);
+    if (app->audio_dev != NULL) {
+        audiosrc = gst_bin_get_by_name(GST_BIN(app->pipeline), "audio");
+        g_assert(audiosrc != NULL);
+        link_request_src_pad(audiosrc, receiver_entry->webrtcbin);
+        gst_object_unref(audiosrc);
+    }
 
     g_assert(receiver_entry->webrtcbin != NULL);
 
@@ -542,6 +544,8 @@ static gchar *get_basic_sysinfo() {
 static GOptionEntry entries[] = {
     {"video", 'v', 0, G_OPTION_ARG_STRING, &gs_app.video_dev,
      "Video device location, Default: /dev/video0", "VIDEO"},
+    {"vcaps", 'c', 0, G_OPTION_ARG_STRING, &gs_app.video_caps,
+     "Video device caps, Default: video/x-raw,width=1280,height=720,format=YUY2,framerate=25/1", "VCAPS"},
     {"audio", 'a', 0, G_OPTION_ARG_STRING, &gs_app.audio_dev,
      "Audio device location, Default: hw:1", "AUDIO"},
     {"user", 'u', 0, G_OPTION_ARG_STRING, &gs_app.user,
@@ -555,6 +559,7 @@ int main(int argc, char *argv[]) {
     GOptionContext *context;
     gchar *contents;
     GError *error;
+    gchar *strvcaps;
 
     context = g_option_context_new("- gstreamer webrtc camera");
     g_option_context_add_main_entries(context, entries, NULL);
@@ -576,20 +581,43 @@ int main(int argc, char *argv[]) {
     app->loop = g_main_loop_new(NULL, FALSE);
     g_assert(app->loop != NULL);
 
+
     const gchar *clockstr = "clockoverlay time-format=\"%D %H:%M:%S\"";
     contents = get_basic_sysinfo();
-    const gchar *enc = gst_element_factory_find("vaapih264enc") ? "vaapih264enc" : "x264enc";
+    const gchar *enc = gst_element_factory_find("vaapih264enc") ? "vaapih264enc" : " video/x-raw,format=I420 ! x264enc";
     gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
-    gchar *cmdline = g_strdup_printf("alsasrc device=%s ! audioconvert ! opusenc ! rtpopuspay ! "
-                                     " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                     " queue leaky=1 ! tee name=audio audio. ! fakesink async=false "
-                                     "v4l2src device=%s ! image/jpeg,width=1280,height=720,framterate=30/1,format=NV12 ! "
-                                     "jpegparse ! jpegdec ! videoconvert ! %s ! %s ! %s ! h264parse ! rtph264pay config-interval=-1 ! "
-                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                     " queue leaky=1 ! tee name=h264src h264src. ! fakesink async=false ",
-                                     app->audio_dev,app->video_dev, clockstr, textoverlay, enc);
+    GstCaps *vcaps = gst_caps_from_string(app->video_caps);
+    GstStructure *structure = gst_caps_get_structure(vcaps, 0);
+    g_print(" caps name is: %s\n", gst_structure_get_name(structure));
+
+    if(g_str_has_prefix(gst_structure_get_name(structure),"video"))
+    {
+        strvcaps = g_strdup(app->video_caps);
+    } else {
+        strvcaps = g_strdup("image/jpeg,width=1280,height=720,framerate=30/1,format=NV12 ! jpegparse ! jpegdec ");
+    }
+
+    gchar *cmdline = g_strdup_printf(
+        "v4l2src device=%s ! %s ! videoconvert ! %s ! %s ! %s ! h264parse ! rtph264pay config-interval=-1 ! "
+        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+        " queue leaky=1 ! tee name=h264src h264src. ! fakesink async=false ",
+        app->video_dev, strvcaps, clockstr, textoverlay, enc);
+    g_free(strvcaps);
+    g_print("video cmdline: %s\n", cmdline);
+
+    if( app->audio_dev != NULL)
+    {
+        gchar *tmp = g_strdup_printf("alsasrc device=%s ! audioconvert ! opusenc ! rtpopuspay ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " queue leaky=1 ! tee name=audio audio. ! fakesink async=false %s",
+                                           app->audio_dev, cmdline);
+        g_free(cmdline);
+        cmdline = g_strdup(tmp);
+        g_free(tmp);
+    }
 
     app->pipeline = gst_parse_launch(cmdline, NULL);
+
 
     g_free(cmdline);
     g_free(textoverlay);
