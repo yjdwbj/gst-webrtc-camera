@@ -42,7 +42,7 @@ struct _APPData {
 
 static AppData gs_app = {
     NULL, NULL, NULL, NULL,
-    "/dev/video0", "video/x-raw,width=1280,height=720,format=YUY2,framerate=25/1", NULL, "test", "test1234", 57778};
+    "/dev/video0", "video/x-raw,width=800,height=600,format=YUY2,framerate=25/1", NULL, "test", "test1234", 57778};
 
 static void start_http(AppData *app);
 

@@ -483,7 +483,7 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                      G_CALLBACK(soup_websocket_closed_cb), (gpointer)webrtc_connected_table);
     webrtc_entry = g_new0(WebrtcItem, 1);
     webrtc_entry->connection = connection;
-    webrtc_entry->hash_id = g_int64_hash(webrtc_entry->connection);
+    webrtc_entry->hash_id = (guint64)(webrtc_entry->connection);
 
     g_object_ref(G_OBJECT(connection));
 
@@ -498,7 +498,8 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     g_signal_connect(webrtc_entry->sendbin, "on-ice-candidate",
                      G_CALLBACK(on_ice_candidate_cb), (gpointer)webrtc_entry);
 
-    gst_element_set_state(webrtc_entry->sendpipe, GST_STATE_PLAYING);
+    if (webrtc_entry->sendpipe)
+        gst_element_set_state(webrtc_entry->sendpipe, GST_STATE_PLAYING);
 
     g_hash_table_insert(webrtc_connected_table, connection, webrtc_entry);
     g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));

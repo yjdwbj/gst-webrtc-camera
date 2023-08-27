@@ -80,6 +80,8 @@ struct _WebrtcItem {
     struct _RecordItem record;
     struct _RecvItem recv;
     struct _DcFile dcfile;
+    GObject *send_channel;
+    GObject *receive_channel;
 };
 typedef struct _WebrtcItem WebrtcItem;
 typedef struct _RecvItem RecvItem;

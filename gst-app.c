@@ -51,8 +51,6 @@ static GList *G_AppsrcList;
 
 GstConfigData config_data;
 
-static GObject *send_channel, *receive_channel;
-
 #define MAKE_ELEMENT_AND_ADD(elem, name)                          \
     G_STMT_START {                                                \
         GstElement *_elem = gst_element_factory_make(name, NULL); \
@@ -363,7 +361,6 @@ static GstElement *audio_src() {
     return teesrc;
 }
 
-
 static void get_pad_caps_info(GstPad *pad) {
     GstStructure *structure;
     GstCaps *caps;
@@ -379,14 +376,20 @@ static void get_pad_caps_info(GstPad *pad) {
 static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
     GstPad *src_pad, *sink_pad;
     GstPadLinkReturn lret;
+    GstElementClass *klass;
+    const gchar *klassname;
+    klass = GST_ELEMENT_CLASS(G_OBJECT_GET_CLASS(dst));
+
+    klassname =
+        gst_element_class_get_metadata(klass, GST_ELEMENT_METADATA_KLASS);
 #if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(src, "src_%u");
 #else
     src_pad = gst_element_get_request_pad(src, "src_%u");
 #endif
-    g_print("motion obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
-    sink_pad = gst_element_get_static_pad(dst, "sink");
-
+    g_print("Obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
+    g_print("kclass name is: %s\n",klassname);
+    sink_pad = g_str_has_suffix(klassname, "WebRTC") ? gst_element_request_pad_simple(dst, "sink_%u") : gst_element_get_static_pad(dst, "sink");
     if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
         gchar *sname = gst_pad_get_name(src_pad);
         gchar *dname = gst_pad_get_name(sink_pad);
@@ -419,12 +422,11 @@ static GstElement *create_textbins() {
     post_vconv = gst_element_factory_make("nvvidconv", NULL);
     textoverlay = gst_element_factory_make("textoverlay", NULL);
     clockoverlay = gst_element_factory_make("clockoverlay", NULL);
-    if(!pre_vconv || !post_vconv || !textoverlay || !clockoverlay)
-    {
+    if (!pre_vconv || !post_vconv || !textoverlay || !clockoverlay) {
         g_error("Failed to create all elements of text bin.\n");
         return NULL;
     }
-    gst_bin_add_many(GST_BIN(bin), pre_vconv, textoverlay, clockoverlay, post_vconv,NULL);
+    gst_bin_add_many(GST_BIN(bin), pre_vconv, textoverlay, clockoverlay, post_vconv, NULL);
     /**
      * @note
      * This gst_parse_bin_from_description("nvvidconv ! textoverlay ! clockoverlay ! nvvidconv",TRUE,NULL) cannot be used here
@@ -736,7 +738,7 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     item->pipeline = gst_parse_launch(cmdline, &error);
     if (error) {
         gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
-        g_print("%s",message);
+        g_print("%s", message);
         g_free(message);
         g_error_free(error);
     }
@@ -1193,7 +1195,7 @@ has_running_xwindow() {
 
 static void
 on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
-                             GstElement *pipe) {
+                             gpointer user_data) {
     GstStructure *structure;
     GstCaps *caps;
     const gchar *name;
@@ -1202,7 +1204,7 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     GstPadLinkReturn ret;
     GstElement *playbin;
     gchar *desc;
-
+    WebrtcItem *item_entry = (WebrtcItem *)user_data;
     if (GST_PAD_DIRECTION(pad) != GST_PAD_SRC)
         return;
 
@@ -1240,8 +1242,8 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
         gst_bin_add(GST_BIN(pipe), playbin);
     } else if (g_strcmp0(name, "video") == 0) {
         if (!has_running_xwindow()) {
-            if (receive_channel)
-                g_signal_emit_by_name(receive_channel, "send-string", "{\"notify\":\"The remote peer cannot view your video\"}");
+            if (item_entry->receive_channel)
+                g_signal_emit_by_name(item_entry->receive_channel, "send-string", "{\"notify\":\"The remote peer cannot view your video\"}");
             gst_printerr("Current system not running on Xwindow. \n");
             return;
         }
@@ -1493,8 +1495,9 @@ connect_data_channel_signals(GObject *data_channel, gpointer user_data) {
 static void
 on_data_channel(GstElement *webrtc, GObject *data_channel,
                 gpointer user_data) {
+    WebrtcItem *item_entry = (WebrtcItem *)user_data;
     connect_data_channel_signals(data_channel, user_data);
-    receive_channel = data_channel;
+    item_entry->receive_channel = data_channel;
 }
 
 static void
@@ -1506,7 +1509,7 @@ create_data_channel(gpointer user_data) {
 
     gchar *chname = g_strdup_printf("channel_%ld", item->hash_id);
     g_signal_emit_by_name(item->sendbin, "create-data-channel", chname, NULL,
-                          &send_channel);
+                          &item->send_channel);
     g_free(chname);
 }
 
@@ -1555,7 +1558,7 @@ static void start_recv_webrtcbin(gpointer user_data) {
     gst_element_set_state(item->recv.recvpipe, GST_STATE_READY);
 
     g_signal_connect(item->recv.recvbin, "pad-added",
-                     G_CALLBACK(on_incoming_decodebin_stream), item->recv.recvpipe);
+                     G_CALLBACK(on_incoming_decodebin_stream), item);
 
     g_signal_connect(item->recv.recvbin, "pad-removed",
                      G_CALLBACK(on_remove_decodebin_stream), item->recv.recvpipe);
@@ -1582,6 +1585,9 @@ static void stop_appsrc_webrtc(gpointer user_data) {
 
     gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
     gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
+
+    g_object_unref(webrtc_entry->send_channel);
+    g_object_unref(webrtc_entry->receive_channel);
     g_mutex_lock(&G_appsrc_lock);
     G_AppsrcList = g_list_remove(G_AppsrcList, &webrtc_entry->send_avpair);
     g_mutex_unlock(&G_appsrc_lock);
@@ -1597,12 +1603,15 @@ static void stop_udpsrc_webrtc(gpointer user_data) {
 
     gst_object_unref(GST_OBJECT(webrtc_entry->sendbin));
     gst_object_unref(GST_OBJECT(webrtc_entry->sendpipe));
+
+    g_object_unref(webrtc_entry->send_channel);
+    g_object_unref(webrtc_entry->receive_channel);
 }
 
 void start_udpsrc_webrtcbin(WebrtcItem *item) {
     gchar *cmdline = NULL;
     // gchar *turn_srv = NULL;
-    const gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
+    gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue leaky=1 ! "
@@ -1634,6 +1643,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     g_free(cmdline);
 
     item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
+    g_free(webrtc_name);
     item->record.get_rec_state = &get_record_state;
     item->record.start = &udpsrc_cmd_rec_start;
     item->record.stop = &udpsrc_cmd_rec_stop;
@@ -1688,6 +1698,100 @@ int start_av_udpsink() {
         }
         link_request_src_pad(audio_source, aqueue);
     }
+
+    return 0;
+}
+
+#define FSINK_VNAME "fsink_video"
+#define FSINK_ANAME "fsink_audio"
+
+static void stop_webrtc(WebrtcItem *item) {
+    gst_element_set_state(item->sendbin, GST_STATE_NULL);
+    gst_bin_remove(GST_BIN(pipeline), item->sendbin);
+    gst_object_unref(item->sendbin);
+}
+
+void start_webrtcbin(WebrtcItem *item) {
+    // gchar *turn_srv = NULL;
+    gchar *webrtc_name = g_strdup_printf("send_%ld", item->hash_id);
+    g_print("webrtc_name: %s\n", webrtc_name);
+    item->sendbin = gst_element_factory_make("webrtcbin", webrtc_name);
+    g_object_set(item->sendbin, "stun-server", config_data.webrtc.stun, NULL);
+    g_free(webrtc_name);
+    g_assert(item->sendbin != NULL);
+    gst_bin_add(GST_BIN(pipeline), item->sendbin);
+
+    GstElement *vtee = gst_bin_get_by_name(GST_BIN(pipeline), FSINK_VNAME);
+    g_assert(vtee != NULL);
+    link_request_src_pad(vtee, item->sendbin);
+
+    if (audio_source != NULL) {
+        GstElement *atee = gst_bin_get_by_name(GST_BIN(pipeline), FSINK_ANAME);
+        link_request_src_pad(atee, item->sendbin);
+        // gst_object_unref(atee);
+    }
+
+    gst_element_set_state(item->sendbin, GST_STATE_PLAYING);
+
+    item->record.get_rec_state = &get_record_state;
+    item->record.start = &udpsrc_cmd_rec_start;
+    item->record.stop = &udpsrc_cmd_rec_stop;
+    item->recv.addremote = &start_recv_webrtcbin;
+    item->stop_webrtc = &stop_webrtc;
+
+    create_data_channel((gpointer)item);
+#if 0
+    gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->sendpipe), GST_DEBUG_GRAPH_SHOW_ALL, "udpsrc_webrtc");
+#endif
+}
+
+int start_av_fakesink() {
+    if (!_check_initial_status())
+        return -1;
+    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *h264parse;
+    GstElement *vtee, *atee;
+    MAKE_ELEMENT_AND_ADD(vqueue, "queue");
+    MAKE_ELEMENT_AND_ADD(pqueue, "queue");
+    MAKE_ELEMENT_AND_ADD(video_pay, "rtph264pay");
+    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    MAKE_ELEMENT_AND_ADD(video_sink, "fakesink");
+    vtee = gst_element_factory_make_full("tee", "name", FSINK_VNAME, NULL);
+    gst_bin_add(GST_BIN(pipeline), vtee);
+
+    /* Configure udpsink */
+    g_object_set(video_sink, "async", FALSE, NULL);
+
+    g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
+    g_object_set(vqueue, "max-size-time", 100000000, "leaky", 1, NULL);
+
+    if (!gst_element_link_many(vqueue, h264parse, video_pay, pqueue, vtee, NULL)) {
+        g_error("Failed to link elements audio to mpegtsmux.\n");
+        return -1;
+    }
+
+    link_request_src_pad(vtee, video_sink);
+    link_request_src_pad(h264_encoder, vqueue);
+
+    if (audio_source != NULL) {
+        MAKE_ELEMENT_AND_ADD(audio_sink, "fakesink");
+        MAKE_ELEMENT_AND_ADD(audio_pay, "rtpopuspay");
+        MAKE_ELEMENT_AND_ADD(aqueue, "queue");
+        atee = gst_element_factory_make_full("tee", "name", FSINK_ANAME, NULL);
+        gst_bin_add(GST_BIN(pipeline), atee);
+        g_object_set(audio_sink, "async", FALSE, NULL);
+        g_object_set(audio_pay, "pt", 97, NULL);
+        /* link to upstream. */
+        if (!gst_element_link_many(aqueue, audio_pay, atee, NULL)) {
+            g_error("Failed to link elements audio to mpegtsmux.\n");
+            return -1;
+        }
+
+        link_request_src_pad(atee, audio_sink);
+        link_request_src_pad(audio_source, aqueue);
+        gst_element_set_state(audio_sink, GST_STATE_PLAYING);
+    }
+
+    gst_element_set_state(video_sink, GST_STATE_PLAYING);
 
     return 0;
 }
@@ -2052,7 +2156,7 @@ int motion_hlssink() {
     motionbin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
         gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
-        g_print("%s",message);
+        g_print("%s", message);
         g_free(message);
         g_error_free(error);
     }
@@ -2421,6 +2525,7 @@ GstElement *create_instance() {
     pipeline = gst_pipeline_new("pipeline");
     if (!is_initial)
         _initial_device();
+    start_av_fakesink();
 
     if (config_data.udp.enable)
         udp_multicastsink();

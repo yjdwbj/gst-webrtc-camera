@@ -14,6 +14,14 @@
                     "value": "4,*webrtc*:7",
                 },
                 {
+                    "name": "GST_DEBUG_DUMP_DOT_DIR",
+                    "value": "/tmp/dot",
+                },
+                {
+                    "name": "G_DEBUG",
+                    "value": "atal-criticals",
+                },
+                {
                     "name": "ASAN_OPTIONS",
                     "value": "sleep_before_dying=10"
                 },
