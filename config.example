@@ -18,7 +18,8 @@
   "audio": {
     "enable": true,
     "path": 0,
-    "buf_time": 5000000
+    "buf_time": 5000000,
+    "device": "hw0"
   },
   "rootdir": "./",
   "showdot": true,

@@ -236,7 +236,12 @@ static GstElement *video_src() {
     GstElement *teesrc, *source, *capsfilter;
 
     capsfilter = gst_element_factory_make("capsfilter", NULL);
-    g_print("device: %s, Type: %s, format: %s\n", config_data.v4l2src_data.device, config_data.v4l2src_data.type, config_data.v4l2src_data.format);
+    g_print("device: %s, Type: %s, W: %d, H: %d , format: %s\n",
+            config_data.v4l2src_data.device,
+            config_data.v4l2src_data.type,
+            config_data.v4l2src_data.width,
+            config_data.v4l2src_data.height,
+            config_data.v4l2src_data.format);
 
     capBuf = g_strdup_printf("%s, width=%d, height=%d, framerate=(fraction)%d/1",
                              config_data.v4l2src_data.type,
@@ -306,33 +311,44 @@ static GstElement *video_src() {
     return teesrc;
 }
 
-static gchar *get_pipewire_path() {
-    const gchar *cmdstr = "wpctl status | grep Ncs | head -n1 | awk  '{print $2}' | awk -F. '{print $1}'";
-    FILE *fp;
-    gchar *val;
-    char path[4];
+static GstElement *get_audio_device() {
+    GstElement *source;
+    if (gst_element_factory_find("pipewiresrc")) {
+        source = gst_element_factory_make("pipewiresrc", NULL);
+        if (config_data.audio.path != 0) {
+            gchar *tmp = g_strdup_printf("%d", config_data.audio.path);
+            g_object_set(G_OBJECT(source), "path", tmp, NULL);
+            g_free(tmp);
+        } else {
+            gchar *path = get_shellcmd_results("wpctl status | grep Ncs | head -n1 | awk  '{print $2}' | awk -F. '{print $1}'");
+            g_object_set(G_OBJECT(source), "path", path, NULL);
+            g_free(path);
+        }
 
-    /* Open the command for reading. */
-    fp = popen(cmdstr, "r");
-    if (fp == NULL) {
-        printf("Failed to run command\n");
-        exit(1);
+        return source;
     }
 
-    /* Read the output a line at a time - output it. */
-    while (fgets(path, sizeof(path), fp) != NULL) {
-        val = g_strdup(path);
+    if (gst_element_factory_find("pulsesrc")) {
+        source = gst_element_factory_make("pulsesrc", NULL);
+        gchar *path = get_shellcmd_results("pactl list sources short | grep Ncs | awk '{print $2}'");
+        if(path == NULL)
+        {
+            path = get_shellcmd_results("pactl list sources short | grep input | head -n1 | awk '{print $2}'");
+        }
+        g_object_set(G_OBJECT(source), "device", path, NULL);
+        free(path);
+        return source;
     }
 
-    /* close */
-    pclose(fp);
-    return val;
+    source = gst_element_factory_make("alsasrc", NULL);
+    g_object_set(G_OBJECT(source), "device", config_data.audio.device, NULL);
+    return source;
 }
 
 static GstElement *audio_src() {
     GstElement *teesrc, *source, *srcvconvert, *enc, *postconv, *audioecho;
     teesrc = gst_element_factory_make("tee", NULL);
-    source = gst_element_factory_make("pipewiresrc", NULL);
+    source = get_audio_device();
     srcvconvert = gst_element_factory_make("audioconvert", NULL);
     postconv = gst_element_factory_make("audioconvert", NULL);
     enc = gst_element_factory_make("opusenc", NULL);
@@ -341,16 +357,6 @@ static GstElement *audio_src() {
     if (!teesrc || !source || !srcvconvert || !postconv || !enc || !audioecho) {
         g_printerr("audio source all elements could be created.\n");
         return NULL;
-    }
-
-    if (config_data.audio.path != 0) {
-        gchar *tmp = g_strdup_printf("%d", config_data.audio.path);
-        g_object_set(G_OBJECT(source), "path", tmp, NULL);
-        g_free(tmp);
-    } else {
-        gchar *path = get_pipewire_path();
-        g_object_set(G_OBJECT(source), "path", path, NULL);
-        g_free(path);
     }
 
     g_object_set(G_OBJECT(audioecho), "delay", 50000000, "intensity", 0.6, "feedback", 0.4, NULL);
@@ -410,7 +416,7 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
 
 #if defined(HAS_JETSON_NANO)
 static GstElement *create_textbins() {
-    GstElement *pre_vconv, *post_vconv, *textoverlay, *clockoverlay;
+    GstElement *pre_vconv, *post_vconv, *clockoverlay;
     GstPad *sub_sink_vpad, *sub_src_vpad;
     GstElement *bin = gst_bin_new("text_bins");
     /**
@@ -423,13 +429,15 @@ static GstElement *create_textbins() {
 
     pre_vconv = gst_element_factory_make("nvvidconv", NULL);
     post_vconv = gst_element_factory_make("nvvidconv", NULL);
-    textoverlay = gst_element_factory_make("textoverlay", NULL);
+
     clockoverlay = gst_element_factory_make("clockoverlay", NULL);
-    if (!pre_vconv || !post_vconv || !textoverlay || !clockoverlay) {
+    if (!pre_vconv || !post_vconv || !clockoverlay) {
         g_error("Failed to create all elements of text bin.\n");
         return NULL;
     }
-    gst_bin_add_many(GST_BIN(bin), pre_vconv, textoverlay, clockoverlay, post_vconv, NULL);
+
+    g_object_set(G_OBJECT(clockoverlay), "time-format", "%D %H:%M:%S", NULL);
+    gst_bin_add_many(GST_BIN(bin), pre_vconv, clockoverlay, post_vconv, NULL);
     /**
      * @note
      * This gst_parse_bin_from_description("nvvidconv ! textoverlay ! clockoverlay ! nvvidconv",TRUE,NULL) cannot be used here
@@ -438,14 +446,24 @@ static GstElement *create_textbins() {
      *
      */
 
-    gchar *sysinfo = get_basic_sysinfo();
-    g_object_set(G_OBJECT(textoverlay), "text", sysinfo, "valignment", 1, "line-alignment", 0, "halignment", 0, "font-desc", "Sans, 10", NULL);
-    g_object_set(G_OBJECT(clockoverlay), "time-format", "%D %H:%M:%S", NULL);
-    g_free(sysinfo);
+    if (config_data.sysinfo) {
+        GstElement *textoverlay;
+        textoverlay = gst_element_factory_make("textoverlay", NULL);
+        g_assert_nonnull(textoverlay);
+        gst_bin_add(GST_BIN(bin), textoverlay);
+        gchar *sysinfo = get_basic_sysinfo();
+        g_object_set(G_OBJECT(textoverlay), "text", sysinfo, "valignment", 1, "line-alignment", 0, "halignment", 0, "font-desc", "Sans, 10", NULL);
 
-    if (!gst_element_link_many(pre_vconv, textoverlay, clockoverlay, post_vconv, NULL)) {
-        g_error("Failed to link text bins elements \n");
-        return NULL;
+        g_free(sysinfo);
+        if (!gst_element_link_many(pre_vconv, textoverlay, clockoverlay, post_vconv, NULL)) {
+            g_error("Failed to link text bins elements \n");
+            return NULL;
+        }
+    } else {
+        if (!gst_element_link_many(pre_vconv, clockoverlay, post_vconv, NULL)) {
+            g_error("Failed to link text bins elements \n");
+            return NULL;
+        }
     }
 
     sub_sink_vpad = gst_element_get_static_pad(pre_vconv, "sink");
@@ -495,24 +513,32 @@ static GstElement *encoder_h264() {
     }
     link_request_src_pad(video_source, clockbin);
 #else
-    GstElement *clock, *textoverlay, *queue;
+    GstElement *clock, *queue;
     queue = gst_element_factory_make("queue", NULL);
     g_object_set(G_OBJECT(queue), "leaky", 1, NULL);
     teeh264 = gst_element_factory_make("tee", NULL);
     clock = gst_element_factory_make("clockoverlay", NULL);
-    textoverlay = gst_element_factory_make("textoverlay", NULL);
-    // jetson nano don't have clockoverylay , owner by libgstpango.so
-    gchar *sysinfo = get_basic_sysinfo();
-    g_object_set(G_OBJECT(textoverlay), "text", sysinfo, "valignment", 1, "line-alignment", 0, "halignment", 0, "font-desc", "Sans, 10", NULL);
-    g_free(sysinfo);
-
-    gst_bin_add_many(GST_BIN(pipeline), textoverlay, clock, teeh264, queue, capsfilter, NULL);
-    if (!gst_element_link_many(queue, textoverlay, clock, encoder, capsfilter, teeh264, NULL)) {
-        g_print("Failed to link elements encoder \n");
-        return NULL;
-    }
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
-
+    gst_bin_add_many(GST_BIN(pipeline), clock, teeh264, queue, capsfilter, NULL);
+    if (config_data.sysinfo) {
+        GstElement *textoverlay;
+        textoverlay = gst_element_factory_make("textoverlay", NULL);
+        g_assert_nonnull(textoverlay);
+        gst_bin_add(GST_BIN(pipeline), textoverlay);
+        // jetson nano don't have clockoverylay , owner by libgstpango.so
+        gchar *sysinfo = get_basic_sysinfo();
+        g_object_set(G_OBJECT(textoverlay), "text", sysinfo, "valignment", 1, "line-alignment", 0, "halignment", 0, "font-desc", "Sans, 10", NULL);
+        g_free(sysinfo);
+        if (!gst_element_link_many(queue, textoverlay, clock, encoder, capsfilter, teeh264, NULL)) {
+            g_print("Failed to link elements encoder \n");
+            return NULL;
+        }
+    } else {
+        if (!gst_element_link_many(queue, clock, encoder, capsfilter, teeh264, NULL)) {
+            g_print("Failed to link elements encoder \n");
+            return NULL;
+        }
+    }
     link_request_src_pad(video_source, queue);
 #endif
     return teeh264;

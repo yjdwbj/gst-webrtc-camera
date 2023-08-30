@@ -88,6 +88,7 @@ struct _GstConfigData {
         gboolean enable;
         int path;
         int buf_time;
+        gchar *device; // for alsasrc  and puslesrc
     } audio;
     int rec_len; // motion detect record duration, seconds.
     gboolean motion_rec;

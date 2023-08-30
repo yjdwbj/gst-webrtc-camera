@@ -450,11 +450,82 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
 
 static void start_http(AppData *app) {
     SoupAuthDomain *auth_domain;
+
+    GTlsCertificate *cert;
+    GError *error = NULL;
+    cert = g_tls_certificate_new_from_pem("-----BEGIN CERTIFICATE-----"
+                                          "MIIFVzCCBD+gAwIBAgIUPBoi8re+lzZAiq4y58LEuc39eHwwDQYJKoZIhvcNAQEL"
+                                          "BQAwgccxCzAJBgNVBAYTAlVTMRIwEAYDVQQIDAlMb2NhbHpvbmUxEjAQBgNVBAcM"
+                                          "CWxvY2FsaG9zdDErMCkGA1UECgwiQ2VydGlmaWNhdGUgQXV0aG9yaXR5IExvY2Fs"
+                                          "IENlbnRlcjEQMA4GA1UECwwHRGV2ZWxvcDEmMCQGA1UEAwwdZGV2ZWxvcC5sb2Nh"
+                                          "bGhvc3QubG9jYWxkb21haW4xKTAnBgkqhkiG9w0BCQEWGnJvb3RAbG9jYWxob3N0"
+                                          "LmxvY2FsZG9tYWluMB4XDTIzMDgwNjA5NTExMVoXDTI0MDkwNzA5NTExMVowezEL"
+                                          "MAkGA1UEBhMCVVMxEjAQBgNVBAgMCUxvY2Fsem9uZTESMBAGA1UEBwwJTG9jYWxo"
+                                          "b3N0MSQwIgYDVQQKDBtDZXJ0aWZpY2F0ZSBzaWduZWQgYnkgbXkgQ0ExHjAcBgNV"
+                                          "BAMMFWxvY2FsaG9zdC5sb2NhbGRvbWFpbjCCASIwDQYJKoZIhvcNAQEBBQADggEP"
+                                          "ADCCAQoCggEBAK+8w14QMI53jnRHTrHZZsSSujGBzuPsXPmKTalHiI7V4QYs7Tim"
+                                          "aomC7NO3Pekqd+5o4CsPbX7eQNSp0mIWqodwVipzq49CbZ5dTTHEjSORHiz+eUje"
+                                          "PzSbDH1msGo+BRhtYC1Vb9fgbH9ZCEzqpBj+gQdUlWnwyBrEdfX5SlG6EUmDCjFR"
+                                          "0C5eBvaPZVyabKt9QaEgzG3CkNLKOSVOiFzsLBoqXvj3c1tDgHATW6+pU/hDp/Sy"
+                                          "SE9Npwtt7TV+Iege8KT4NwbyKiGwCS4ndylIiwsLcCH1mEK7J9TCIFJZ+2+0+XT3"
+                                          "7eZUJbnsnz4kNIQEdaUg/dZq6uyeApb5MsMCAwEAAaOCAYQwggGAMGsGA1UdEQRk"
+                                          "MGKHBH8AAAGHBH8AAAKHBH8AAAOHBMCoAQGHBMCoAbaHBGRAAAyHBGRAAAKCCWxv"
+                                          "Y2FsaG9zdIIVbG9jYWxob3N0LmxvY2FsZG9tYWlugglkZXYubG9jYWyCCWRlYmlh"
+                                          "bi5zaDAdBgNVHQ4EFgQU84Y8v0D8JetYe7w2uf+di/M0J90wgfEGA1UdIwSB6TCB"
+                                          "5qGBzaSByjCBxzELMAkGA1UEBhMCVVMxEjAQBgNVBAgMCUxvY2Fsem9uZTESMBAG"
+                                          "A1UEBwwJbG9jYWxob3N0MSswKQYDVQQKDCJDZXJ0aWZpY2F0ZSBBdXRob3JpdHkg"
+                                          "TG9jYWwgQ2VudGVyMRAwDgYDVQQLDAdEZXZlbG9wMSYwJAYDVQQDDB1kZXZlbG9w"
+                                          "LmxvY2FsaG9zdC5sb2NhbGRvbWFpbjEpMCcGCSqGSIb3DQEJARYacm9vdEBsb2Nh"
+                                          "bGhvc3QubG9jYWxkb21haW6CFDj3eXOxi7nCpXMc3VKkMFmmbCN2MA0GCSqGSIb3"
+                                          "DQEBCwUAA4IBAQBvb4v4gmcmXPaIRhfqnAmVPEAkAq+ZwoYP35ewBLcG1612Stax"
+                                          "sJPlgsQSBgNH1nZ3qQWN0pFahsVBVN2IvV7iLSCJ2rY0UU0aCD8N1BybRSdQCvPJ"
+                                          "wcYqCk2GxF3OcE8ixsku8nmZztvRRrfRefUWungkDh6qk8p8oAN6Byqpq0/XU+hB"
+                                          "Kt108Ulqddb1V4nl+ab9byBF0zD6aXF9yMzCsFGBi+2/thMziCCqwMvmuo6upQ2H"
+                                          "/+8N00W/fejV/cQHUBwgcavQfLlh/GdpQeXetIxJI61Tg+nwpNzMvOs26tVDC44c"
+                                          "EThUA33sB7PhDt9abFo3iaqQ/MV0x7CUcnxY"
+                                          "-----END CERTIFICATE-----"
+                                          "-----BEGIN PRIVATE KEY-----"
+                                          "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCvvMNeEDCOd450"
+                                          "R06x2WbEkroxgc7j7Fz5ik2pR4iO1eEGLO04pmqJguzTtz3pKnfuaOArD21+3kDU"
+                                          "qdJiFqqHcFYqc6uPQm2eXU0xxI0jkR4s/nlI3j80mwx9ZrBqPgUYbWAtVW/X4Gx/"
+                                          "WQhM6qQY/oEHVJVp8MgaxHX1+UpRuhFJgwoxUdAuXgb2j2VcmmyrfUGhIMxtwpDS"
+                                          "yjklTohc7CwaKl7493NbQ4BwE1uvqVP4Q6f0skhPTacLbe01fiHoHvCk+DcG8ioh"
+                                          "sAkuJ3cpSIsLC3Ah9ZhCuyfUwiBSWftvtPl09+3mVCW57J8+JDSEBHWlIP3Waurs"
+                                          "ngKW+TLDAgMBAAECggEANrQzOoYen1J/ERobWIhckac892k5bkCm5nTTXPTsAM56"
+                                          "GBKHG4HOGxUaxIK/bmPuZlPWKAFK69miY7CjUS5OEg/5eoh8KIGcntXbUDknWCF1"
+                                          "u7rRJUotcaIsHqMHGmNI8cQmUqZMRO5Sx8d+qnbF8xPSNWZyhkJR/+cU8ycRJ+QW"
+                                          "oW+LW/QiafSwwlldWswMsl51Jx25PfnaKWiGdV3DZrHitvuVjihyON5ElDsD1pd2"
+                                          "nSZHC3FEvb3SWmcdggJYpy2YP3waZnDkynXyh4Z4HsQvI9lDvMlU8lFH/Mf2UTHL"
+                                          "9ny84W7VPIRb45fRhnJRC4d0HaIv8MmDtOoNIwGMkQKBgQD3JbnAeKAAL4gEm/oe"
+                                          "anCtCeV/j+uGhVVBGprQOqoVVvLzSV+vkt3q8JwYi9HSfRm0T1nBW0bXWSmYoKz0"
+                                          "2p1g5vdBNi626ce/pHBo+7OVIZay+FfSL+Eze74b1tQ4H4oElMBHUWgq/iahRrzY"
+                                          "aJnSNkgO5vY8yoXJpQa4WFPrkwKBgQC2CDokICPU7Qv/UQnLryd2+0H38bZepsb4"
+                                          "YI4hEf4LM7wuC08Ucb0YI6wZhmJZlhsufONMN0whQhqLD3/83Vx9C/GdIsAD2ySq"
+                                          "btvDY+nWyJCI3xcIdvg7PtaebaaxHSuxge7JfWuTNHQ2M/uA6M4Iwgsvxak7S9zX"
+                                          "dnak1uP6EQKBgQCiwO9ANq93L9Xs4yKlYQbujPPbO1Wo8qkgBHsq4VccUnQPjqQ6"
+                                          "pQcLLoQ9DeaRLNz+hrrewFM4gXkJD9aWMFkvdSoigaHlxrJKG+oC2K58aPAqz6xV"
+                                          "uD4ffz/EaYa7ptlnBuZQkOV+Wnvp/QFjqg6SBjkRxzsk8WGFVu3D/DbXjQKBgQCe"
+                                          "TbVSaWj/6U5/sVgVfLOTc5rBJ8HzupJauo2gEOefklRarpcNLoTGE2+9mvK4+iOV"
+                                          "YCLDy2s3mSdAPDCQFWozjUmH4Aqgz9mpJlOULrXThgS8I1cCk4P48gLvMGjAqp+u"
+                                          "9VJWg+4jzIAsCzTzvIJBd48G8pzj5mueLXWskP0eIQKBgAQ1ZxO8rPFdm1bixIWx"
+                                          "GZrTqzWT6PANyzYfBBcUd5JYfSYmkMhwOhzQKsJn3zcqghHFLutJFTwRHMjhWr4/"
+                                          "Rzvym/EnEg1J66BQKEEEa76OX3aKALQCNvtLyCGlUggMGIlxpyG8zjmrcHQNOhu3"
+                                          "kJ5rlTjYpHEAgTU3yEYfhZnj"
+                                          "-----END PRIVATE KEY-----",
+                                          -1, &error);
+    if (cert == NULL) {
+        g_printerr("failed to parse PEM: %s\n", error->message);
+        g_error_free(error);
+        return;
+    }
     app->receiver_entry_table =
         g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL,
                               destroy_receiver_entry);
     app->soup_server =
-        soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server", NULL);
+        soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server",
+                        SOUP_SERVER_TLS_CERTIFICATE, cert,
+                        NULL);
+    g_object_unref(cert);
     soup_server_add_handler(app->soup_server, "/", soup_http_handler, NULL, NULL);
     soup_server_add_websocket_handler(app->soup_server, "/ws", NULL, NULL,
                                       soup_websocket_handler, app, NULL);
@@ -581,8 +652,8 @@ int main(int argc, char *argv[]) {
 
     const gchar *clockstr = "clockoverlay time-format=\"%D %H:%M:%S\"";
     contents = get_basic_sysinfo();
-    const gchar *enc = gst_element_factory_find("vaapih264enc") ? "vaapih264enc" : gst_element_factory_find("v4l2h264enc") ? "v4l2h264enc"
-                                                                                                                           : " video/x-raw,format=I420 ! x264enc";
+    const gchar *enc = gst_element_factory_find("vaapih264enc") ? "vaapih264enc" : gst_element_factory_find("v4l2h264enc") ? "v4l2h264enc output-io-mode=2"
+                                                                                                                           : " video/x-raw,format=I420 ! x264enc ! h264parse";
     gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
     GstCaps *vcaps = gst_caps_from_string(app->video_caps);
     GstStructure *structure = gst_caps_get_structure(vcaps, 0);
@@ -591,11 +662,18 @@ int main(int argc, char *argv[]) {
     if (g_str_has_prefix(gst_structure_get_name(structure), "video")) {
         strvcaps = g_strdup(app->video_caps);
     } else {
-        strvcaps = g_strdup("image/jpeg,width=1280,height=720,framerate=30/1,format=NV12 ! jpegparse ! jpegdec ");
+        gchar *jpegdec = NULL;
+        if (gst_element_factory_find("v4l2jpegdec")) {
+            jpegdec = g_strdup("v4l2jpegdec capture-io-mode=2");
+        } else {
+            jpegdec = g_strdup("jpegdec");
+        }
+        strvcaps = g_strdup_printf("image/jpeg,width=1280,height=720,framerate=30/1,format=NV12 ! jpegparse ! %s ", jpegdec);
+        g_free(jpegdec);
     }
 
     gchar *cmdline = g_strdup_printf(
-        "v4l2src device=%s ! %s ! videoconvert ! %s ! %s ! %s ! h264parse ! rtph264pay config-interval=-1 ! "
+        "v4l2src device=%s io-mode=2 ! %s ! videoconvert ! %s ! %s ! %s ! rtph264pay config-interval=-1 ! "
         " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
         " queue leaky=1 ! tee name=h264src h264src. ! fakesink async=false ",
         app->video_dev, strvcaps, clockstr, textoverlay, enc);

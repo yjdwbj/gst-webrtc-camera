@@ -183,6 +183,7 @@ static void read_config_json(gchar *fullpath) {
     config_data.audio.path = json_object_get_int_member(object, "path");
     config_data.audio.enable = json_object_get_boolean_member(object, "enable");
     config_data.audio.buf_time = json_object_get_int_member(object, "buf_time");
+    config_data.audio.device = g_strdup(json_object_get_string_member(object, "device"));
 
     object = json_object_get_object_member(root_obj, "http");
     if (object) {
