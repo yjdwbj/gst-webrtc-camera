@@ -690,7 +690,14 @@ int main(int argc, char *argv[]) {
         g_free(tmp);
     }
 
-    app->pipeline = gst_parse_launch(cmdline, NULL);
+    app->pipeline = gst_parse_launch(cmdline, &error);
+
+    if (error) {
+        gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
+        g_print("%s", message);
+        g_free(message);
+        g_error_free(error);
+    }
 
     g_free(cmdline);
     g_free(textoverlay);

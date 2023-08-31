@@ -53,7 +53,7 @@ static void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
     gchar *json_string;
     JsonObject *sdp_json;
     JsonObject *sdp_data_json;
-    const GstStructure  *reply;
+    const GstStructure *reply;
     GstPromise *local_desc_promise;
     GstWebRTCSessionDescription *offer = NULL;
     WebrtcItem *webrtc_entry = (WebrtcItem *)user_data;
@@ -444,11 +444,27 @@ do_get(SoupServer *server, SoupMessage *msg, const char *path) {
     soup_message_set_status(msg, SOUP_STATUS_OK);
 }
 
+typedef struct {
+    webrtc_callback fn;
+    GHashTable *webrtc_connected_table;
+
+} CustomSoupData;
+
 static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
                               SoupMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
                               G_GNUC_UNUSED SoupClientContext *client_context,
                               G_GNUC_UNUSED gpointer user_data) {
     char *file_path;
+    CustomSoupData *data = (CustomSoupData *)user_data;
+
+    GHashTable *webrtc_connected_table = data->webrtc_connected_table;
+    if (g_hash_table_size(webrtc_connected_table) > 3) {
+        soup_message_set_status(msg, SOUP_STATUS_INSUFFICIENT_STORAGE);
+        gchar *txt = "The maximum number of connections has been reached.";
+        soup_message_set_response(msg, "text/plain",
+                                  SOUP_MEMORY_STATIC, txt, strlen(txt));
+        return;
+    }
 
     if (msg->method == SOUP_METHOD_GET || msg->method == SOUP_METHOD_HEAD) {
         if (g_strcmp0(path, "/") == 0) {
@@ -457,18 +473,16 @@ static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
             return;
         }
         file_path = g_strdup_printf(".%s", path);
-
         do_get(soup_server, msg, file_path);
-    } else
+    } else {
         soup_message_set_status(msg, SOUP_STATUS_NOT_IMPLEMENTED);
+        gchar *txt = "what you want?";
+        soup_message_set_response(msg, "text/plain",
+                                  SOUP_MEMORY_STATIC, txt, strlen(txt));
+    }
+
     g_free(file_path);
 }
-
-typedef struct {
-    webrtc_callback fn;
-    GHashTable *webrtc_connected_table;
-
-} CustomSoupData;
 
 static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                                    SoupWebsocketConnection *connection, G_GNUC_UNUSED const char *path,
@@ -673,7 +687,7 @@ void start_http(webrtc_callback fn, int port) {
     g_object_unref(cert);
     // g_signal_connect(soup_server, "request_started",
     //                  G_CALLBACK(request_started_callback), webrtc_connected_table);
-    soup_server_add_handler(soup_server, NULL, soup_http_handler, NULL, NULL);
+    soup_server_add_handler(soup_server, NULL, soup_http_handler, (gpointer)data, NULL);
     soup_server_add_websocket_handler(soup_server, "/ws", NULL, NULL,
                                       soup_websocket_handler, (gpointer)data, NULL);
 

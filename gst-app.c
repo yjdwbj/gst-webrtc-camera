@@ -191,7 +191,7 @@ static gchar *get_shellcmd_results(const gchar *shellcmd) {
 
     /* Read the output a line at a time - output it. */
     while (fgets(path, sizeof(path), fp) != NULL) {
-        val = g_strdup(path);
+        val = g_strchomp(g_strdup(path));
     }
 
     /* close */
@@ -345,7 +345,7 @@ static GstElement *get_audio_device() {
     return source;
 }
 
-static GstElement *audio_src() {
+static GstElement *get_audio_src() {
     GstElement *teesrc, *source, *srcvconvert, *enc, *postconv, *audioecho;
     teesrc = gst_element_factory_make("tee", NULL);
     source = get_audio_device();
@@ -932,23 +932,24 @@ static void
 on_ice_gathering_state_notify(GstElement *webrtcbin, GParamSpec *pspec,
                               gpointer user_data) {
     GstWebRTCICEGatheringState ice_gather_state;
-    const gchar *new_state = "unknown";
+    gchar *new_state = g_strdup("unknown");
     gchar *biname = gst_element_get_name(webrtcbin);
 
     g_object_get(webrtcbin, "ice-gathering-state", &ice_gather_state, NULL);
     switch (ice_gather_state) {
     case GST_WEBRTC_ICE_GATHERING_STATE_NEW:
-        new_state = "new";
+        new_state = g_strdup("new");
         break;
     case GST_WEBRTC_ICE_GATHERING_STATE_GATHERING:
-        new_state = "gathering";
+        new_state = g_strdup("gathering");
         break;
     case GST_WEBRTC_ICE_GATHERING_STATE_COMPLETE:
-        new_state = "complete";
+        new_state = g_strdup("complete");
         break;
     }
     gst_print("%s ICE gathering state changed to %s\n", biname, new_state);
     g_free(biname);
+    g_free(new_state);
 }
 
 static void
@@ -2522,7 +2523,7 @@ static void _initial_device() {
     }
 
     if (config_data.audio.enable) {
-        audio_source = audio_src();
+        audio_source = get_audio_src();
         if (audio_source == NULL) {
             g_printerr("unable to open audio device.\n");
         }
