@@ -214,6 +214,8 @@
           enableTalk.innerHTML = isTalk ? "Video off" : "Video on";
           sendVoice.disabled = pcShutdown; //hasMicroPhone ? isTalk : true;
           sendVoice.innerHTML = isVoiceRecord ? "Send Voice" : "Start Voice";
+        } else if(localpc.iceconnectionState === 'failed'){
+          localpc.restartIce();
         }
       };
       localpc.onicecandidate = onIceCandidate;
@@ -258,6 +260,12 @@
         webrtcPeerConnection.onicecandidate = onIceCandidate;
         webrtcPeerConnection.addTransceiver('video', { 'direction': 'sendrecv' });
         webrtcPeerConnection.addTransceiver('audio', { 'direction': 'sendrecv' });
+        webrtcPeerConnection.oniceconnectionstatechange = e => {
+          console.log("receive stream state change: " + webrtcPeerConnection.iceConnectionState);
+          if (webrtcPeerConnection.iceconnectionState === 'failed') {
+            webrtcPeerConnection.restartIce();
+          }
+        };
         playStream(null, null, null);
 
         localdc = webrtcPeerConnection.createDataChannel("web page channel", { ordered: true });

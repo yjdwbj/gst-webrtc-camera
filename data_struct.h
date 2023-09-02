@@ -61,6 +61,7 @@ struct _GstConfigData {
         gchar *type;
         gchar *format;
     } v4l2src_data;
+    gboolean h265enc;        // default h264enc;
     gchar *root_dir;         // streams output root path;
     gboolean showdot;        // generate gstreamer pipeline graphs;
     gboolean splitfile_sink; // splitmuxsink save multipart file.

@@ -70,7 +70,7 @@ static void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
     gst_promise_unref(local_desc_promise);
 
     sdp_string = gst_sdp_message_as_text(offer->sdp);
-    GST_DEBUG("Negotiation offer created:\n%s\n", sdp_string);
+    g_print("Negotiation offer created:\n%s\n", sdp_string);
 
     sdp_json = json_object_new();
     json_object_set_string_member(sdp_json, "type", "sdp");

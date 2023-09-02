@@ -175,6 +175,7 @@ static void read_config_json(gchar *fullpath) {
 
     config_data.showdot = json_object_get_boolean_member(root_obj, "showdot");
     config_data.sysinfo = json_object_get_boolean_member(root_obj, "sysinfo");
+    config_data.h265enc = json_object_get_boolean_member(root_obj, "h265enc");
 
     config_data.rec_len = json_object_get_int_member(root_obj, "rec_len");
     config_data.motion_rec = json_object_get_boolean_member(root_obj, "motion_rec");
@@ -373,6 +374,8 @@ int main(int argc, char *argv[]) {
     } else {
         start_http(&start_udpsrc_webrtcbin, config_data.http.port);
     }
+
+    // start_http(&start_webrtcbin, config_data.http.port);
 
     g_main_loop_run(loop);
     gst_element_set_state(pipeline, GST_STATE_NULL);

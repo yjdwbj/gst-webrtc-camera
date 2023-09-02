@@ -30,13 +30,15 @@
 #include <sys/types.h>
 
 static GstElement *pipeline;
-static GstElement *video_source, *audio_source, *h264_encoder, *va_pp;
+static GstElement *video_source, *audio_source, *video_encoder, *va_pp;
 static gboolean is_initial = FALSE;
 
 static volatile int threads_running = 0;
 static volatile int cmd_recording = 0;
 static int record_time = 7;
 static volatile gboolean reading_inotify = TRUE;
+
+static gboolean has_h265 = FALSE;
 
 static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t cmd_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -212,9 +214,45 @@ static gchar *get_basic_sysinfo() {
     return line;
 }
 
+static GstElement *get_hardware_h265_encoder() {
+    // https://www.avaccess.com/blogs/guides/h264-vs-h265-difference/
+    // https://x265.readthedocs.io/en/master/presets.html
+    GstElement *encoder;
+    guint bitrate = 1500;
+    if (config_data.v4l2src_data.height == 1080) {
+        if (config_data.v4l2src_data.framerate >= 60)
+            bitrate = 4000000;
+        else
+            bitrate = 3000000;
+    } else if (config_data.v4l2src_data.height == 720) {
+        if (config_data.v4l2src_data.framerate >= 60)
+            bitrate = 1380000;
+        else
+            bitrate = 1000000;
+    }
+    // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
+    if (gst_element_factory_find("vaapih265enc")) {
+        has_h265 = TRUE;
+        encoder = gst_element_factory_make("vaapih265enc", NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
+    } else if (gst_element_factory_find("nvv4l2h265enc")) {
+        encoder = gst_element_factory_make("nvv4l2h265enc", NULL);
+        g_object_set(G_OBJECT(encoder), "control-rate", 1, "maxperf-enable", TRUE, "bitrate", bitrate, NULL);
+    } else if (gst_element_factory_find("x265enc")) {
+        encoder = gst_element_factory_make("x265enc", NULL);
+        // g_object_set(G_OBJECT(encoder), "key-int-max", 2, NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, "speed-preset", 1, "tune", 4, "key-int-max", 30, NULL);
+    } else {
+        return NULL;
+    }
+
+    gst_bin_add(GST_BIN(pipeline), encoder);
+    return encoder;
+}
+
 static GstElement *get_hardware_h264_encoder() {
     GstElement *encoder;
-    gint bitrate = 8000;
+    guint bitrate = 8000;
     if (config_data.v4l2src_data.height == 1080) {
         if (config_data.v4l2src_data.framerate >= 60)
             bitrate = 10000000;
@@ -226,19 +264,31 @@ static GstElement *get_hardware_h264_encoder() {
         else
             bitrate = 4000000;
     }
-    if (gst_element_factory_find("vaapih264enc")) {
+    // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
+    if (gst_element_factory_find("vaapih265enc")) {
+        has_h265 = TRUE;
+        encoder = gst_element_factory_make("vaapih265enc", NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 2 / 1000, NULL);
+    } else if (gst_element_factory_find("nvv4l2h265enc")) {
+        encoder = gst_element_factory_make("nvv4l2h265enc", NULL);
+        has_h265 = TRUE;
+        g_object_set(G_OBJECT(encoder), "control-rate", 1, "maxperf-enable", TRUE, "bitrate", bitrate / 2, NULL);
+    } else if (gst_element_factory_find("vaapih264enc")) {
         encoder = gst_element_factory_make("vaapih264enc", NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
     } else if (gst_element_factory_find("nvv4l2h264enc")) {
         encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
-        g_object_set(G_OBJECT(encoder), "control-rate", 1, "maxperf-enable",TRUE, NULL);
+        g_object_set(G_OBJECT(encoder), "control-rate", 1, "maxperf-enable", TRUE, "bitrate", bitrate, NULL);
     } else if (gst_element_factory_find("v4l2h264enc")) {
         encoder = gst_element_factory_make("v4l2h264enc", NULL);
-    } else {
+    } else if (gst_element_factory_find("x264enc")) {
         encoder = gst_element_factory_make("x264enc", NULL);
         // g_object_set(G_OBJECT(encoder), "key-int-max", 2, NULL);
-        g_object_set(G_OBJECT(encoder), "speed-preset", 1, "tune", 4, "key-int-max", 30, NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, "speed-preset", 1, "tune", 4, "key-int-max", 30, NULL);
+    } else {
+        return NULL;
     }
-    g_object_set(G_OBJECT(encoder), "bitrate", bitrate, NULL);
+
     gst_bin_add(GST_BIN(pipeline), encoder);
     return encoder;
 }
@@ -247,7 +297,7 @@ static GstElement *get_hardware_h264_encoder() {
 static GstElement *get_nvbin() {
     GstElement *nvbin;
     // If the following parameters are not suitable, it will always block in BLOCKING MODE.
-    gchar *binstr = g_strdup_printf("nvarguscamerasrc sensor_id=0  ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12  ! "
+    gchar *binstr = g_strdup_printf("nvarguscamerasrc sensor_id=0 ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! "
                                     " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
                                     " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
                                     config_data.v4l2src_data.type,
@@ -260,7 +310,7 @@ static GstElement *get_nvbin() {
 }
 #endif
 
-static GstElement *video_src() {
+static GstElement *get_video_src() {
     GstCaps *srcCaps;
     GstElement *teesrc, *capsfilter;
 
@@ -271,8 +321,6 @@ static GstElement *video_src() {
             config_data.v4l2src_data.width,
             config_data.v4l2src_data.height,
             config_data.v4l2src_data.format);
-
-
 
 #if defined(HAS_JETSON_NANO)
     GstElement *nvbin = get_nvbin();
@@ -320,21 +368,39 @@ static GstElement *video_src() {
     if (!strncmp(config_data.v4l2src_data.type, "image/jpeg", 10)) {
         GstElement *jpegparse, *jpegdec;
         jpegparse = gst_element_factory_make("jpegparse", NULL);
-        jpegdec = gst_element_factory_make("jpegdec", NULL);
+
+        jpegdec = gst_element_factory_find("vaapijpegdec") ? gst_element_factory_make("vaapijpegdec", NULL) : gst_element_factory_make("jpegdec", NULL);
         if (!jpegdec || !jpegparse) {
             g_printerr("video_src all elements could be created.\n");
             return NULL;
         }
         gst_bin_add_many(GST_BIN(pipeline), jpegparse, jpegdec, NULL);
-        if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, queue, srcvconvert, teesrc, NULL)) {
-            g_error("Failed to link elements video mjpg src\n");
-            return NULL;
+        if (gst_element_factory_find("vaapipostproc")) {
+            GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
+            gst_bin_add(GST_BIN(pipeline), vapp);
+            if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, vapp, queue, srcvconvert, teesrc, NULL)) {
+                g_error("Failed to link elements video mjpg src\n");
+                return NULL;
+            }
+        } else {
+            if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, queue, srcvconvert, teesrc, NULL)) {
+                g_error("Failed to link elements video mjpg src\n");
+                return NULL;
+            }
         }
-
     } else {
-        if (!gst_element_link_many(source, queue, srcvconvert, teesrc, NULL)) {
-            g_error("Failed to link elements video src\n");
-            return NULL;
+        if (gst_element_factory_find("vaapipostproc")) {
+            GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
+            gst_bin_add(GST_BIN(pipeline), vapp);
+            if (!gst_element_link_many(source, vapp, queue, srcvconvert, teesrc, NULL)) {
+                g_error("Failed to link elements video src\n");
+                return NULL;
+            }
+        } else {
+            if (!gst_element_link_many(source, queue, srcvconvert, teesrc, NULL)) {
+                g_error("Failed to link elements video src\n");
+                return NULL;
+            }
         }
     }
 #endif
@@ -506,28 +572,21 @@ static GstElement *create_textbins() {
 }
 #endif
 
-static GstElement *encoder_h264() {
-    GstElement *encoder, *teeh264, *capsfilter;
-    GstCaps *srcCaps;
-    capsfilter = gst_element_factory_make("capsfilter", NULL);
-    encoder = get_hardware_h264_encoder();
-
-    srcCaps = gst_caps_from_string("video/x-h264,profile=constrained-baseline");
-    g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
-    gst_caps_unref(srcCaps);
-
-    if (!encoder || !capsfilter) {
-        g_printerr("encoder_h264 all elements could not be created.\n");
+static GstElement *get_encoder_src() {
+    GstElement *encoder, *teesrc;
+    encoder = config_data.h265enc ? get_hardware_h265_encoder() : get_hardware_h264_encoder();
+    if (!encoder) {
+        g_printerr("encoder source all elements could not be created.\n");
         // g_printerr("encoder %x ; clock %x.\n", encoder, clock);
         return NULL;
     }
+    teesrc = gst_element_factory_make("tee", NULL);
 
 #if defined(HAS_JETSON_NANO)
     GstElement *clockbin;
-    teeh264 = gst_element_factory_make("tee", NULL);
 
-    if (!teeh264) {
-        g_printerr("nvtee elements could not be created.\n");
+    if (!teesrc) {
+        g_printerr("tee source elements could not be created.\n");
         // g_printerr("encoder %x ; clock %x.\n", encoder, clock);
         return NULL;
     }
@@ -535,9 +594,9 @@ static GstElement *encoder_h264() {
     clockbin = create_textbins();
     gst_element_sync_state_with_parent(clockbin);
 
-    gst_bin_add_many(GST_BIN(pipeline), clockbin, teeh264, capsfilter, NULL);
-    if (!gst_element_link_many(clockbin, encoder, capsfilter, teeh264, NULL)) {
-        g_print("Failed to link nvv4l2h264enc elements encoder \n");
+    gst_bin_add_many(GST_BIN(pipeline), clockbin, teesrc, NULL);
+    if (!gst_element_link_many(clockbin, encoder, teesrc, NULL)) {
+        g_print("Failed to link  elements encoder source \n");
         return NULL;
     }
     link_request_src_pad(video_source, clockbin);
@@ -545,10 +604,9 @@ static GstElement *encoder_h264() {
     GstElement *clock, *queue;
     queue = gst_element_factory_make("queue", NULL);
     g_object_set(G_OBJECT(queue), "leaky", 1, NULL);
-    teeh264 = gst_element_factory_make("tee", NULL);
     clock = gst_element_factory_make("clockoverlay", NULL);
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
-    gst_bin_add_many(GST_BIN(pipeline), clock, teeh264, queue, capsfilter, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), clock, teesrc, queue, NULL);
     if (config_data.sysinfo) {
         GstElement *textoverlay;
         textoverlay = gst_element_factory_make("textoverlay", NULL);
@@ -558,19 +616,19 @@ static GstElement *encoder_h264() {
         gchar *sysinfo = get_basic_sysinfo();
         g_object_set(G_OBJECT(textoverlay), "text", sysinfo, "valignment", 1, "line-alignment", 0, "halignment", 0, "font-desc", "Sans, 10", NULL);
         g_free(sysinfo);
-        if (!gst_element_link_many(queue, textoverlay, clock, encoder, capsfilter, teeh264, NULL)) {
-            g_print("Failed to link elements encoder \n");
+        if (!gst_element_link_many(queue, textoverlay, clock, encoder, teesrc, NULL)) {
+            g_print("Failed to link elements encoder  source\n");
             return NULL;
         }
     } else {
-        if (!gst_element_link_many(queue, clock, encoder, capsfilter, teeh264, NULL)) {
-            g_print("Failed to link elements encoder \n");
+        if (!gst_element_link_many(queue, clock, encoder, teesrc, NULL)) {
+            g_print("Failed to link elements encoder source \n");
             return NULL;
         }
     }
     link_request_src_pad(video_source, queue);
 #endif
-    return teeh264;
+    return teesrc;
 }
 
 static GstElement *vaapi_postproc() {
@@ -772,11 +830,10 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(filename);
     g_free(timestr);
-
     gchar *video_src = g_strdup_printf("udpsrc port=%d address=%s  ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! queue leaky=1 ! mux. ",
-                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr);
+                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, config_data.h265enc ? "H265" : "H264");
     if (config_data.audio.enable) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
@@ -874,9 +931,9 @@ static int start_udpsrc_rec(gpointer user_data) {
     g_free(outdir);
 
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  name=video_save ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! queue leaky=1 ! mux. ",
-                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr);
+                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, config_data.h265enc ? "H265" : "H264");
 
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
@@ -1092,9 +1149,9 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
     g_free(outdir);
 
     gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 leaky-type=1  ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " rtph264depay ! h264parse !  queue leaky=1 ! mux. ",
-                                       vid_str);
+                                       vid_str, config_data.h265enc ? "H265" : "H264");
 
     if (config_data.audio.enable) {
         gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3  leaky-type=1  ! "
@@ -1196,9 +1253,9 @@ start_appsrc_record() {
     g_free(outdir);
 
     gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 leaky-type=1  ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " rtph264depay ! h264parse !  queue leaky=1 ! mux. ",
-                                       vid_str);
+                                       vid_str, config_data.h265enc ? "H265" : "H264");
 
     if (config_data.audio.enable) {
         gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 leaky-type=1 ! "
@@ -1674,21 +1731,22 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     // gchar *turn_srv = NULL;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, item->hash_id);
     g_print("webrtc_name----------> : %s\n", webrtc_name);
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue leaky=1 ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " queue leaky=1 ! %s. ",
-                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, webrtc_name);
+    gchar *video_src =
+        config_data.h265enc ? g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
+                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H265,payload=(int)96 ! "
+                                              " queue leaky=1 ! %s. ",
+                                              config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, webrtc_name)
+                            : g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
+                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                              " queue leaky=1 ! %s. ",
+                                              config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, webrtc_name);
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
-                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay ! rtpopuspay ! queue leaky=1 ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                            " queue leaky=1 ! %s.",
                                            config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr, webrtc_name);
         cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
-        GST_DEBUG("webrtc cmdline: %s \n", cmdline);
+        g_print("webrtc cmdline: %s \n", cmdline);
         g_free(audio_src);
         g_free(video_src);
     } else {
@@ -1721,11 +1779,11 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
 int start_av_udpsink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *h264parse;
+    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *videoparse;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(pqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(video_pay, "rtph264pay");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    MAKE_ELEMENT_AND_ADD(video_pay, config_data.h265enc ? "rtph265pay" : "rtph264pay");
+    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
     MAKE_ELEMENT_AND_ADD(video_sink, "udpsink");
 
     /* Configure udpsink */
@@ -1737,12 +1795,12 @@ int start_av_udpsink() {
     g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
     g_object_set(vqueue, "max-size-time", 100000000, NULL);
 
-    if (!gst_element_link_many(vqueue, h264parse, video_pay, pqueue, video_sink, NULL)) {
+    if (!gst_element_link_many(vqueue, videoparse, video_pay, pqueue, video_sink, NULL)) {
         g_error("Failed to link elements audio to mpegtsmux.\n");
         return -1;
     }
 
-    link_request_src_pad(h264_encoder, vqueue);
+    link_request_src_pad(video_encoder, vqueue);
 
     if (audio_source != NULL) {
         MAKE_ELEMENT_AND_ADD(audio_sink, "udpsink");
@@ -1760,7 +1818,9 @@ int start_av_udpsink() {
         }
         link_request_src_pad(audio_source, aqueue);
     }
+#if 1
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "udpsink_webrtc");
+#endif
     return 0;
 }
 
@@ -1811,12 +1871,12 @@ void start_webrtcbin(WebrtcItem *item) {
 int start_av_fakesink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *h264parse;
+    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *videoparse;
     GstElement *vtee, *atee;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(pqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(video_pay, "rtph264pay");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    MAKE_ELEMENT_AND_ADD(video_pay, config_data.h265enc ? "rtph265pay" : "rtph264pay");
+    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
     MAKE_ELEMENT_AND_ADD(video_sink, "fakesink");
     vtee = gst_element_factory_make("tee", FSINK_VNAME);
     gst_bin_add(GST_BIN(pipeline), vtee);
@@ -1827,13 +1887,13 @@ int start_av_fakesink() {
     g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
     g_object_set(vqueue, "max-size-time", 100000000, "leaky", 1, NULL);
 
-    if (!gst_element_link_many(vqueue, h264parse, video_pay, pqueue, vtee, NULL)) {
+    if (!gst_element_link_many(vqueue, videoparse, video_pay, pqueue, vtee, NULL)) {
         g_error("Failed to link elements audio to mpegtsmux.\n");
         return -1;
     }
 
     link_request_src_pad(vtee, video_sink);
-    link_request_src_pad(h264_encoder, vqueue);
+    link_request_src_pad(video_encoder, vqueue);
 
     if (audio_source != NULL) {
         MAKE_ELEMENT_AND_ADD(audio_sink, "fakesink");
@@ -1872,13 +1932,19 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     gchar *webrtc_name = g_strdup_printf("webrtc_appsrc_%" G_GUINT64_FORMAT, item->hash_id);
     // vcaps = gst_caps_from_string("video/x-h264,stream-format=(string)avc,alignment=(string)au,width=(int)1280,height=(int)720,framerate=(fraction)30/1,profile=(string)main");
     // acaps = gst_caps_from_string("audio/x-opus, channels=(int)1,channel-mapping-family=(int)1");
-
-    gchar *video_src = g_strdup_printf("appsrc  name=video_%" G_GUINT64_FORMAT " format=3 leaky-type=2 ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue leaky=2 !"
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " queue leaky=2 ! %s. ",
-                                       item->hash_id, webrtc_name);
+    gchar *video_src =
+        config_data.h265enc ? g_strdup_printf("appsrc  name=video_%" G_GUINT64_FORMAT " format=3 leaky-type=2 ! "
+                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H265,payload=(int)96 ! "
+                                              " rtph265depay ! h265parse ! rtph265pay config-interval=-1 ! queue leaky=2 !"
+                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H265,payload=(int)96 ! "
+                                              " queue leaky=2 ! %s. ",
+                                              item->hash_id, webrtc_name)
+                            : g_strdup_printf("appsrc  name=video_%" G_GUINT64_FORMAT " format=3 leaky-type=2 ! "
+                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                              " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue leaky=2 !"
+                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                              " queue leaky=2 ! %s. ",
+                                              item->hash_id, webrtc_name);
 
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("appsrc name=audio_%" G_GUINT64_FORMAT "  format=3 leaky-type=2 ! "
@@ -1994,10 +2060,10 @@ on_new_sample_from_sink(GstElement *elt, gpointer user_data) {
 int start_av_appsink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *aqueue, *vqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *h264parse;
+    GstElement *aqueue, *vqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *videoparse;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(video_pay, "rtph264pay");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    MAKE_ELEMENT_AND_ADD(video_pay, config_data.h265enc ? "rtph265pay" : "rtph264pay");
+    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
     video_sink = gst_element_factory_make("appsink", "video_sink");
 
     /* Configure udpsink */
@@ -2007,12 +2073,12 @@ int start_av_appsink() {
     g_object_set(vqueue, "leaky", 1, NULL);
     gst_bin_add(GST_BIN(pipeline), video_sink);
 
-    if (!gst_element_link_many(vqueue, h264parse, video_pay, video_sink, NULL)) {
+    if (!gst_element_link_many(vqueue, videoparse, video_pay, video_sink, NULL)) {
         g_error("Failed to link elements video to mpegtsmux.\n");
         return -1;
     }
 
-    link_request_src_pad(h264_encoder, vqueue);
+    link_request_src_pad(video_encoder, vqueue);
 
     g_signal_connect(video_sink, "new-sample",
                      (GCallback)on_new_sample_from_sink, NULL);
@@ -2046,16 +2112,16 @@ int start_av_appsink() {
 int splitfile_sink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *splitmuxsink, *h264parse, *vqueue;
+    GstElement *splitmuxsink, *videoparse, *vqueue;
     gchar *tmpfile;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/mp4", NULL);
     MAKE_ELEMENT_AND_ADD(splitmuxsink, "splitmuxsink");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
 
     g_object_set(vqueue, "leaky", 1, NULL);
-    if (!gst_element_link_many(vqueue, h264parse, splitmuxsink, NULL)) {
+    if (!gst_element_link_many(vqueue, videoparse, splitmuxsink, NULL)) {
         g_error("Failed to link elements splitmuxsink.\n");
         return -1;
     }
@@ -2072,7 +2138,7 @@ int splitfile_sink() {
     _mkdir(outdir, 0755);
     g_free(outdir);
 
-    link_request_src_pad(h264_encoder, vqueue);
+    link_request_src_pad(video_encoder, vqueue);
 
     // add audio to muxer.
     if (audio_source != NULL) {
@@ -2097,17 +2163,17 @@ static void set_hlssink_object(GstElement *hlssink, gchar *outdir, gchar *locati
 }
 
 int av_hlssink() {
-    GstElement *hlssink, *h264parse, *mpegtsmux, *vqueue;
+    GstElement *hlssink, *videoparse, *mpegtsmux, *vqueue;
     if (!_check_initial_status())
         return -1;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls", NULL);
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
     g_object_set(vqueue, "leaky", 1, NULL);
-    if (!gst_element_link_many(vqueue, h264parse, mpegtsmux, hlssink, NULL)) {
+    if (!gst_element_link_many(vqueue, videoparse, mpegtsmux, hlssink, NULL)) {
         g_error("Failed to link elements av hlssink\n");
         return -1;
     }
@@ -2117,7 +2183,7 @@ int av_hlssink() {
     _mkdir(outdir, 0755);
     g_free(outdir);
 
-    link_request_src_pad(h264_encoder, vqueue);
+    link_request_src_pad(video_encoder, vqueue);
     // add audio to muxer.
     if (audio_source != NULL) {
         GstElement *aqueue, *opusparse;
@@ -2168,7 +2234,7 @@ int udp_multicastsink() {
     gst_element_set_state(bin, GST_STATE_PAUSED);
     // gst_element_set_locked_state(udpsink, TRUE);
 
-    link_request_src_pad(h264_encoder, bin);
+    link_request_src_pad(video_encoder, bin);
 
     if (audio_source != NULL) {
         SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, aqueue, "queue");
@@ -2203,8 +2269,7 @@ static gchar *get_hlssink_string(gchar *outdir, gchar *location) {
     return hlssinkstr;
 }
 
-static gchar *get_hlssink_bin(const gchar *opencv_plugin)
-{
+static gchar *get_hlssink_bin(const gchar *opencv_plugin) {
     const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
     gchar *binstr = g_strdup_printf(" queue  ! videoconvert ! %s ! video/x-raw,width=1024,height=576 ! "
                                     " %s ! videoconvert ! nvvidconv ! video/x-raw(memory:NVMM),width=1024,height=576,format=I420,pixel-aspect-ratio=1/1 ! "
@@ -2244,7 +2309,7 @@ int motion_hlssink() {
 
 #else
 int motion_hlssink() {
-    GstElement *hlssink, *h264parse, *pre_convert, *post_convert;
+    GstElement *hlssink, *videoparse, *pre_convert, *post_convert;
     GstElement *queue, *motioncells, *encoder, *mpegtsmux;
     if (!_check_initial_status())
         return -1;
@@ -2253,7 +2318,7 @@ int motion_hlssink() {
     encoder = get_hardware_h264_encoder();
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
     MAKE_ELEMENT_AND_ADD(queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
@@ -2264,7 +2329,7 @@ int motion_hlssink() {
         GstElement *textoverlay;
         MAKE_ELEMENT_AND_ADD(textoverlay, "textoverlay");
         if (!gst_element_link_many(pre_convert, motioncells, post_convert,
-                                   textoverlay, encoder, queue, h264parse,
+                                   textoverlay, encoder, queue, videoparse,
                                    mpegtsmux, hlssink, NULL)) {
             g_error("Failed to link elements motion sink.\n");
             return -1;
@@ -2275,7 +2340,7 @@ int motion_hlssink() {
                      NULL);
     } else {
         if (!gst_element_link_many(pre_convert, motioncells, post_convert,
-                                   encoder, queue, h264parse,
+                                   encoder, queue, videoparse,
                                    mpegtsmux, hlssink, NULL)) {
             g_error("Failed to link elements motion sink.\n");
             return -1;
@@ -2325,7 +2390,7 @@ int cvtracker_hlssink() {
 
 #else
 int cvtracker_hlssink() {
-    GstElement *hlssink, *h264parse, *pre_convert, *post_convert;
+    GstElement *hlssink, *videoparse, *pre_convert, *post_convert;
     GstElement *queue, *cvtracker, *encoder, *mpegtsmux;
     if (!_check_initial_status())
         return -1;
@@ -2334,7 +2399,7 @@ int cvtracker_hlssink() {
     encoder = get_hardware_h264_encoder();
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
     MAKE_ELEMENT_AND_ADD(queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
@@ -2345,7 +2410,7 @@ int cvtracker_hlssink() {
         GstElement *textoverlay;
         MAKE_ELEMENT_AND_ADD(textoverlay, "textoverlay");
         if (!gst_element_link_many(pre_convert, cvtracker, post_convert,
-                                   textoverlay, encoder, queue, h264parse,
+                                   textoverlay, encoder, queue, videoparse,
                                    mpegtsmux, hlssink, NULL)) {
             g_error("Failed to link elements cvtracker sink.\n");
             return -1;
@@ -2356,7 +2421,7 @@ int cvtracker_hlssink() {
                      NULL);
     } else {
         if (!gst_element_link_many(pre_convert, cvtracker, post_convert,
-                                   encoder, queue, h264parse,
+                                   encoder, queue, videoparse,
                                    mpegtsmux, hlssink, NULL)) {
             g_error("Failed to link elements motion sink.\n");
             return -1;
@@ -2406,7 +2471,7 @@ int facedetect_hlssink() {
 }
 #else
 int facedetect_hlssink() {
-    GstElement *hlssink, *h264parse, *pre_convert, *post_convert;
+    GstElement *hlssink, *videoparse, *pre_convert, *post_convert;
     GstElement *queue, *post_queue, *facedetect, *encoder, *mpegtsmux;
 
     if (!_check_initial_status())
@@ -2414,7 +2479,7 @@ int facedetect_hlssink() {
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/face", NULL);
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
     MAKE_ELEMENT_AND_ADD(queue, "queue");
     MAKE_ELEMENT_AND_ADD(post_queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
@@ -2428,7 +2493,7 @@ int facedetect_hlssink() {
         GstElement *textoverlay;
         MAKE_ELEMENT_AND_ADD(textoverlay, "textoverlay");
         if (!gst_element_link_many(queue, pre_convert, facedetect, post_convert,
-                                   textoverlay, encoder, post_queue, h264parse,
+                                   textoverlay, encoder, post_queue, videoparse,
                                    mpegtsmux, hlssink, NULL)) {
             g_error("Failed to link elements facedetect sink.\n");
             return -1;
@@ -2439,7 +2504,7 @@ int facedetect_hlssink() {
                      NULL);
     } else {
         if (!gst_element_link_many(queue, pre_convert, facedetect, post_convert,
-                                   encoder, post_queue, h264parse,
+                                   encoder, post_queue, videoparse,
                                    hlssink, NULL)) {
             g_error("Failed to link elements facedetect sink.\n");
             return -1;
@@ -2484,7 +2549,7 @@ int edgedect_hlssink() {
 }
 #else
 int edgedect_hlssink() {
-    GstElement *hlssink, *h264parse, *pre_convert, *post_convert, *clock;
+    GstElement *hlssink, *videoparse, *pre_convert, *post_convert, *clock;
     GstElement *post_queue, *edgedetect, *encoder, *mpegtsmux;
 
     if (!_check_initial_status())
@@ -2492,7 +2557,7 @@ int edgedect_hlssink() {
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/edge", NULL);
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    MAKE_ELEMENT_AND_ADD(h264parse, "h264parse");
+    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
     MAKE_ELEMENT_AND_ADD(post_queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
@@ -2507,7 +2572,7 @@ int edgedect_hlssink() {
         GstElement *textoverlay;
         MAKE_ELEMENT_AND_ADD(textoverlay, "textoverlay");
         if (!gst_element_link_many(pre_convert, edgedetect, post_convert,
-                                   textoverlay, clock, encoder, post_queue, h264parse,
+                                   textoverlay, clock, encoder, post_queue, videoparse,
                                    mpegtsmux, hlssink, NULL)) {
             g_error("Failed to link elements cvtracker sink.\n");
             return -1;
@@ -2519,7 +2584,7 @@ int edgedect_hlssink() {
 
     } else {
         if (!gst_element_link_many(pre_convert, edgedetect, post_convert,
-                                   clock, encoder, post_queue, h264parse,
+                                   clock, encoder, post_queue, videoparse,
                                    hlssink, NULL)) {
             g_error("Failed to link elements motion sink.\n");
             return -1;
@@ -2548,14 +2613,14 @@ static void _initial_device() {
         g_free(dotdir);
     }
 
-    video_source = video_src();
+    video_source = get_video_src();
     if (video_source == NULL) {
         g_printerr("unable to open video device.\n");
         return;
     }
 
-    h264_encoder = encoder_h264();
-    if (h264_encoder == NULL) {
+    video_encoder = get_encoder_src();
+    if (video_encoder == NULL) {
         g_printerr("unable to open h264 encoder.\n");
         return;
     }
