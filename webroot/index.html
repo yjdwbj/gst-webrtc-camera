@@ -48,7 +48,7 @@
         </div>
       </div>
       <div class="card col p-1 m-0">
-        <div class="card-header text-center">人脸检测</div>
+        <div class="card-header text-center">对像追踪</div>
         <div class="card-body p-0 m-0"><video class="video-block w-100 h-100" id="face" autoplay controls></video></div>
       </div>
       <div class="card col p-1 m-0">
@@ -81,7 +81,7 @@
       });
       var face = document.getElementById('face');
       var fhls = new Hls();
-      fhls.loadSource('../hls/face/playlist.m3u8');
+      fhls.loadSource('../hls/cvtracker/playlist.m3u8');
       fhls.attachMedia(face);
       fhls.on(Hls.Events.MANIFEST_PARSED, async function () {
         await face.play();

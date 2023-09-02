@@ -328,6 +328,7 @@ int main(int argc, char *argv[]) {
         "nvegltransform",
         "nvcompositor",
         "omx",
+        "videoconvert",
         "nvivafilter"};
     int len = sizeof(nvlibs) / sizeof(gchar *);
     for (int i = 0; i < len; i++) {

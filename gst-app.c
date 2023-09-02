@@ -214,26 +214,55 @@ static gchar *get_basic_sysinfo() {
 
 static GstElement *get_hardware_h264_encoder() {
     GstElement *encoder;
+    gint bitrate = 8000;
+    if (config_data.v4l2src_data.height == 1080) {
+        if (config_data.v4l2src_data.framerate >= 60)
+            bitrate = 10000000;
+        else
+            bitrate = 8000000;
+    } else if (config_data.v4l2src_data.height == 720) {
+        if (config_data.v4l2src_data.framerate >= 60)
+            bitrate = 5000000;
+        else
+            bitrate = 4000000;
+    }
     if (gst_element_factory_find("vaapih264enc")) {
         encoder = gst_element_factory_make("vaapih264enc", NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", 8000, NULL);
     } else if (gst_element_factory_find("nvv4l2h264enc")) {
         encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
+        g_object_set(G_OBJECT(encoder), "control-rate", 1, "maxperf-enable",TRUE, NULL);
     } else if (gst_element_factory_find("v4l2h264enc")) {
         encoder = gst_element_factory_make("v4l2h264enc", NULL);
     } else {
         encoder = gst_element_factory_make("x264enc", NULL);
         // g_object_set(G_OBJECT(encoder), "key-int-max", 2, NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", 8000, "speed-preset", 1, "tune", 4, "key-int-max", 30, NULL);
+        g_object_set(G_OBJECT(encoder), "speed-preset", 1, "tune", 4, "key-int-max", 30, NULL);
     }
+    g_object_set(G_OBJECT(encoder), "bitrate", bitrate, NULL);
     gst_bin_add(GST_BIN(pipeline), encoder);
     return encoder;
 }
 
+#if defined(HAS_JETSON_NANO)
+static GstElement *get_nvbin() {
+    GstElement *nvbin;
+    // If the following parameters are not suitable, it will always block in BLOCKING MODE.
+    gchar *binstr = g_strdup_printf("nvarguscamerasrc sensor_id=0  ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12  ! "
+                                    " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
+                                    " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
+                                    config_data.v4l2src_data.type,
+                                    config_data.v4l2src_data.width,
+                                    config_data.v4l2src_data.height,
+                                    config_data.v4l2src_data.framerate);
+    nvbin = gst_parse_bin_from_description(binstr, TRUE, NULL);
+    g_free(binstr);
+    return nvbin;
+}
+#endif
+
 static GstElement *video_src() {
     GstCaps *srcCaps;
-    gchar *capBuf;
-    GstElement *teesrc, *source, *capsfilter;
+    GstElement *teesrc, *capsfilter;
 
     capsfilter = gst_element_factory_make("capsfilter", NULL);
     g_print("device: %s, Type: %s, W: %d, H: %d , format: %s\n",
@@ -243,6 +272,22 @@ static GstElement *video_src() {
             config_data.v4l2src_data.height,
             config_data.v4l2src_data.format);
 
+
+
+#if defined(HAS_JETSON_NANO)
+    GstElement *nvbin = get_nvbin();
+    teesrc = gst_element_factory_make("tee", NULL);
+    srcCaps = gst_caps_from_string("video/x-raw");
+    g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), nvbin, capsfilter, teesrc, NULL);
+    if (!gst_element_link_many(nvbin, capsfilter, teesrc, NULL)) {
+        g_error("Failed to link elements nvarguscamerasrc src\n");
+        return NULL;
+    }
+
+#else
+    GstElement *srcvconvert, *queue, *source;
+    gchar *capBuf;
     capBuf = g_strdup_printf("%s, width=%d, height=%d, framerate=(fraction)%d/1",
                              config_data.v4l2src_data.type,
                              config_data.v4l2src_data.width,
@@ -253,21 +298,6 @@ static GstElement *video_src() {
 
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
     gst_caps_unref(srcCaps);
-
-#if defined(HAS_JETSON_NANO)
-    teesrc = gst_element_factory_make("tee", NULL);
-    // for jetson nano caps 'video/x-raw(memory:NVMM),width=3820, height=2464, framerate=21/1, format=NV12'
-    source = gst_element_factory_make("nvarguscamerasrc", NULL);
-    g_object_set(source, "sensor_id", 0, NULL);
-
-    gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, teesrc, NULL);
-    if (!gst_element_link_many(source, capsfilter, teesrc, NULL)) {
-        g_error("Failed to link elements nvarguscamerasrc src\n");
-        return NULL;
-    }
-
-#else
-    GstElement *srcvconvert, *queue;
     teesrc = gst_element_factory_make("tee", NULL);
     source = gst_element_factory_make("v4l2src", NULL);
     g_object_set(G_OBJECT(source),
@@ -331,8 +361,7 @@ static GstElement *get_audio_device() {
     if (gst_element_factory_find("pulsesrc")) {
         source = gst_element_factory_make("pulsesrc", NULL);
         gchar *path = get_shellcmd_results("pactl list sources short | grep Ncs | awk '{print $2}'");
-        if(path == NULL)
-        {
+        if (path == NULL) {
             path = get_shellcmd_results("pactl list sources short | grep input | head -n1 | awk '{print $2}'");
         }
         g_object_set(G_OBJECT(source), "device", path, NULL);
@@ -1684,7 +1713,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     item->stop_webrtc = &stop_udpsrc_webrtc;
 
     create_data_channel((gpointer)item);
-#if 0
+#if 1
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->sendpipe), GST_DEBUG_GRAPH_SHOW_ALL, "udpsrc_webrtc");
 #endif
 }
@@ -1731,7 +1760,7 @@ int start_av_udpsink() {
         }
         link_request_src_pad(audio_source, aqueue);
     }
-
+    gst_debug_bin_to_dot_file_with_ts(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "udpsink_webrtc");
     return 0;
 }
 
@@ -2173,18 +2202,29 @@ static gchar *get_hlssink_string(gchar *outdir, gchar *location) {
     g_free(tmp2);
     return hlssinkstr;
 }
+
+static gchar *get_hlssink_bin(const gchar *opencv_plugin)
+{
+    const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
+    gchar *binstr = g_strdup_printf(" queue  ! videoconvert ! %s ! video/x-raw,width=1024,height=576 ! "
+                                    " %s ! videoconvert ! nvvidconv ! video/x-raw(memory:NVMM),width=1024,height=576,format=I420,pixel-aspect-ratio=1/1 ! "
+                                    "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ",
+                                    opencv_plugin, clock);
+    return binstr;
+}
+
 int motion_hlssink() {
     GstElement *motionbin;
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/motion", NULL);
     _mkdir(outdir, 0755);
     gchar *hlssinkstr = get_hlssink_string(outdir, "/motion-%05d.ts");
     gchar *tmp2 = g_strconcat(outdir, "/motioncells", NULL);
-    const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
-
-    gchar *binstr = g_strdup_printf(" queue ! nvvidconv ! video/x-raw ! videoconvert  ! motioncells datafile=%s ! video/x-raw ! "
-                                    " %s ! videoconvert  ! nvvidconv ! video/x-raw(memory:NVMM) ! "
-                                    "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ! %s ",
-                                    tmp2, clock, hlssinkstr);
+    gchar *tmp = g_strdup_printf("motioncells datafile=%s ", tmp2);
+    gchar *hlsbin = get_hlssink_bin(tmp);
+    gchar *binstr = g_strdup_printf(" %s ! %s ",
+                                    hlsbin, hlssinkstr);
+    g_free(hlsbin);
+    g_free(tmp);
     // g_print("cmdline: %s\n", binstr);
     GError *error = NULL;
     motionbin = gst_parse_bin_from_description(binstr, TRUE, &error);
@@ -2262,17 +2302,16 @@ int cvtracker_hlssink() {
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/cvtracker", NULL);
     _mkdir(outdir, 0755);
     gchar *hlssinkstr = get_hlssink_string(outdir, "/cvtracker-%05d.ts");
-    const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
 
-    gchar *binstr = g_strdup_printf(" queue ! nvvidconv ! video/x-raw ! videoconvert  ! cvtracker ! video/x-raw ! "
-                                    " %s ! videoconvert  ! nvvidconv ! video/x-raw(memory:NVMM) ! "
-                                    "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ! %s ",
-                                    clock, hlssinkstr);
+    gchar *hlsbin = get_hlssink_bin("cvtracker");
+    gchar *binstr = g_strdup_printf(" %s ! %s ",
+                                    hlsbin, hlssinkstr);
+    g_free(hlsbin);
     // g_print("cmdline: %s\n", binstr);
     GError *error = NULL;
     trackerbin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
-        gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
+        gchar *message = g_strdup_printf("Unable to tracker bin: %s\n", error->message);
         g_print("%s", message);
         g_free(message);
         g_error_free(error);
@@ -2338,23 +2377,23 @@ int facedetect_hlssink() {
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/face", NULL);
     _mkdir(outdir, 0755);
     gchar *hlssinkstr = get_hlssink_string(outdir, "/facedetect-%05d.ts");
-    const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
     gchar *facestr = g_strdup_printf("facedetect name=face0 eyes-profile=%s mouth-profile=%s nose-profile=%s profile=%s",
                                      "/usr/local/share/opencv4/haarcascades/haarcascade_eye.xml",
                                      "/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_alt2.xml",
                                      "/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_alt2.xml",
                                      "/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_alt2.xml");
 
-    gchar *binstr = g_strdup_printf(" queue ! nvvidconv ! video/x-raw ! videoconvert  ! %s ! video/x-raw ! "
-                                    " %s ! videoconvert  ! nvvidconv ! video/x-raw(memory:NVMM) ! "
-                                    "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ! %s ",
-                                    facestr, clock, hlssinkstr);
+    gchar *hlsbin = get_hlssink_bin(facestr);
+    gchar *binstr = g_strdup_printf(" %s ! %s ",
+                                    hlsbin, hlssinkstr);
+    g_free(hlsbin);
+
     g_free(facestr);
     // g_print("cmdline: %s\n", binstr);
     GError *error = NULL;
     facebin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
-        gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
+        gchar *message = g_strdup_printf("Unable to face bin: %s\n", error->message);
         g_print("%s", message);
         g_free(message);
         g_error_free(error);
@@ -2423,17 +2462,16 @@ int edgedect_hlssink() {
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/edge", NULL);
     _mkdir(outdir, 0755);
     gchar *hlssinkstr = get_hlssink_string(outdir, "/edgedetect%05d.ts");
-    const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
 
-    gchar *binstr = g_strdup_printf(" queue ! nvvidconv ! video/x-raw ! videoconvert  ! edgedetect threshold1=80 threshold2=240 ! video/x-raw ! "
-                                    " %s ! videoconvert  ! nvvidconv ! video/x-raw(memory:NVMM) ! "
-                                    "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ! %s ",
-                                    clock, hlssinkstr);
+    gchar *hlsbin = get_hlssink_bin("edgedetect threshold1=80 threshold2=240");
+    gchar *binstr = g_strdup_printf(" %s ! %s ",
+                                    hlsbin, hlssinkstr);
+    g_free(hlsbin);
     // g_print("cmdline: %s\n", binstr);
     GError *error = NULL;
     edgebin = gst_parse_bin_from_description(binstr, TRUE, &error);
     if (error) {
-        gchar *message = g_strdup_printf("Unable to motion bin: %s\n", error->message);
+        gchar *message = g_strdup_printf("Unable to edge bin: %s\n", error->message);
         g_print("%s", message);
         g_free(message);
         g_error_free(error);
@@ -2572,6 +2610,9 @@ GstElement *create_instance() {
 
     if (config_data.hls_onoff.edge_hlssink)
         edgedect_hlssink();
+
+    if (config_data.hls_onoff.cvtracker_hlssink)
+        cvtracker_hlssink();
 
     if (config_data.hls_onoff.facedetect_hlssink)
         facedetect_hlssink();
