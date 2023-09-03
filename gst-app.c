@@ -282,14 +282,14 @@ static GstElement *get_hardware_h264_encoder() {
     guint bitrate = 8000;
     if (config_data.v4l2src_data.height == 1080) {
         if (config_data.v4l2src_data.framerate >= 60)
-            bitrate = 10000000;
-        else
             bitrate = 8000000;
+        else
+            bitrate = 4000000;
     } else if (config_data.v4l2src_data.height == 720) {
         if (config_data.v4l2src_data.framerate >= 60)
             bitrate = 5000000;
         else
-            bitrate = 4000000;
+            bitrate = 3000000;
     }
     // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
     if (gst_element_factory_find("vah264lpenc")) {
@@ -305,8 +305,9 @@ static GstElement *get_hardware_h264_encoder() {
         encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
         g_object_set(G_OBJECT(encoder), "control-rate", 0,
                      "maxperf-enable", TRUE,
-                     "profile", 4,
-                     "preset-level", 4,
+                     "iframeinterval", "1000",
+                     "vbv-size", 50,
+                     "qp-range", "1,51:1,51:1,51",
                      "bitrate", bitrate, NULL);
     } else if (gst_element_factory_find("v4l2h264enc")) {
         encoder = gst_element_factory_make("v4l2h264enc", NULL);
