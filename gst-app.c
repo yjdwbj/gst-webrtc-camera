@@ -1743,6 +1743,8 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " rtpopusdepay ! rtpopuspay ! queue leaky=1 ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                            " queue leaky=1 ! %s.",
                                            config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr, webrtc_name);
         cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
@@ -2315,7 +2317,7 @@ int motion_hlssink() {
         return -1;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/motion", NULL);
-    encoder = get_hardware_h264_encoder();
+    encoder = config_data.h265enc ? get_hardware_h265_encoder() : get_hardware_h264_encoder();
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
     MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
@@ -2396,7 +2398,7 @@ int cvtracker_hlssink() {
         return -1;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/cvtracker", NULL);
-    encoder = get_hardware_h264_encoder();
+    encoder = config_data.h265enc ? get_hardware_h265_encoder() : get_hardware_h264_encoder();
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
     MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
@@ -2487,7 +2489,7 @@ int facedetect_hlssink() {
     MAKE_ELEMENT_AND_ADD(facedetect, "facedetect");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
     g_object_set(queue, "leaky", 1, NULL);
-    encoder = get_hardware_h264_encoder();
+    encoder = config_data.h265enc ? get_hardware_h265_encoder() : get_hardware_h264_encoder();
 
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
@@ -2566,7 +2568,7 @@ int edgedect_hlssink() {
     MAKE_ELEMENT_AND_ADD(clock, "clockoverlay");
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
     g_object_set(post_queue, "leaky", 1, NULL);
-    encoder = get_hardware_h264_encoder();
+    encoder = config_data.h265enc ? get_hardware_h265_encoder() : get_hardware_h264_encoder();
 
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
