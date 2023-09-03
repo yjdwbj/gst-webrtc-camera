@@ -97,12 +97,6 @@ struct _GstConfigData {
     struct _webrtc webrtc;
 };
 
-static const gchar *video_encodecs[] = {
-    "h264",
-    "h265",
-    "vp9",
-    "vp8"};
-
 // } config_data_init = {
 //     .v4l2src_data.device = "/dev/vidoe0",
 //     .v4l2src_data.width = 1280,

@@ -216,17 +216,18 @@ static GstElement *get_hardware_vp9_encoder() {
     // https://developers.google.com/media/vp9/bitrate-modes/
     GstElement *encoder;
     // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
-    if (gst_element_factory_find("msdkvp9enc")) {
+    if (gst_element_factory_find("vaapivp9enc")) {
+        encoder = gst_element_factory_make("vaapivp9enc", NULL);
+    } else if (gst_element_factory_find("msdkvp9enc")) {
         // Intel MSDK VP9 encoder
         encoder = gst_element_factory_make("msdkvp9enc", NULL);
-        g_object_set(G_OBJECT(encoder), "rate-control", 1, NULL);
+        g_object_set(G_OBJECT(encoder), "rate-control", 3, NULL);
     } else if (gst_element_factory_find("qsvvp9enc")) {
         encoder = gst_element_factory_make("qsvvp9enc", NULL);
-        g_object_set(G_OBJECT(encoder), "rate-control", 3, NULL);
-    } else if (gst_element_factory_find("vaapivp9enc")) {
-        encoder = gst_element_factory_make("vaapivp9enc", NULL);
     } else if (gst_element_factory_find("nvv4l2vp9enc")) {
         encoder = gst_element_factory_make("nvv4l2vp9enc", NULL);
+    } else if (gst_element_factory_find("omxvp9enc")) {
+        encoder = gst_element_factory_make("omxvp9enc", NULL);
     } else if (gst_element_factory_find("vp9enc")) {
         encoder = gst_element_factory_make("vp9enc", NULL);
     } else {
@@ -300,8 +301,13 @@ static GstElement *get_hardware_h264_encoder() {
         encoder = gst_element_factory_make("vaapih264enc", NULL);
         g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
     } else if (gst_element_factory_find("nvv4l2h264enc")) {
+        // https://docs.nvidia.com/jetson/archives/r34.1/DeveloperGuide/text/SD/Multimedia/AcceleratedGstreamer.html#supported-h-264-h-265-vp9-av1-encoder-features-with-gstreamer-1-0
         encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
-        g_object_set(G_OBJECT(encoder), "control-rate", 1, "maxperf-enable", TRUE, "bitrate", bitrate, NULL);
+        g_object_set(G_OBJECT(encoder), "control-rate", 0,
+                     "maxperf-enable", TRUE,
+                     "profile", 4,
+                     "preset-level", 4,
+                     "bitrate", bitrate, NULL);
     } else if (gst_element_factory_find("v4l2h264enc")) {
         encoder = gst_element_factory_make("v4l2h264enc", NULL);
     } else if (gst_element_factory_find("x264enc")) {
@@ -521,7 +527,7 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
 
     klassname =
         gst_element_class_get_metadata(klass, GST_ELEMENT_METADATA_KLASS);
-
+    // g_print("class name:%s\n", klassname);
 #if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(src, "src_%u");
     sink_pad = g_str_has_suffix(klassname, "WebRTC") ? gst_element_request_pad_simple(dst, "sink_%u") : gst_element_get_static_pad(dst, "sink");
@@ -1191,7 +1197,7 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
     gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 leaky-type=1  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " rtph%sdepay ! %sparse !  queue leaky=1 ! mux. ",
-                                       vid_str,upenc,config_data.videnc,config_data.videnc);
+                                       vid_str, upenc, config_data.videnc, config_data.videnc);
     g_free(upenc);
 
     if (config_data.audio.enable) {
@@ -1994,7 +2000,7 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
                                        " rtp%sdepay ! %sparse ! rtp%spay  ! queue leaky=2 !"
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " queue leaky=2 ! %s. ",
-                                       item->hash_id, upenc,config_data.videnc,config_data.videnc,config_data.videnc, upenc, webrtc_name);
+                                       item->hash_id, upenc, config_data.videnc, config_data.videnc, config_data.videnc, upenc, webrtc_name);
     g_free(upenc);
 
     if (audio_source != NULL) {
@@ -2124,8 +2130,7 @@ int start_av_appsink() {
     /* Configure udpsink */
     g_object_set(video_sink, "sync", FALSE, "async", FALSE,
                  "emit-signals", TRUE, "drop", TRUE, "max-buffers", 100, NULL);
-    if(g_str_has_prefix(config_data.videnc,"h26"))
-    {
+    if (g_str_has_prefix(config_data.videnc, "h26")) {
         g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
     }
 
@@ -2174,7 +2179,7 @@ int splitfile_sink() {
     GstElement *splitmuxsink, *videoparse, *vqueue;
     gchar *tmpfile;
 
-    gchar *outdir = g_strconcat(config_data.root_dir, "/mp4", NULL);
+    gchar *outdir = g_strconcat(config_data.root_dir, "/mkv", NULL);
     MAKE_ELEMENT_AND_ADD(splitmuxsink, "splitmuxsink");
     gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
     MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
@@ -2186,13 +2191,13 @@ int splitfile_sink() {
         g_error("Failed to link elements splitmuxsink.\n");
         return -1;
     }
-    tmpfile = g_strconcat(outdir, "/segment-%05d.mp4", NULL);
+    tmpfile = g_strconcat(outdir, "/segment-%05d.mkv", NULL);
     g_object_set(splitmuxsink,
                  "async-handling", TRUE,
                  "location",
                  tmpfile,
-                 //  "muxer", matroskamux,
-                 //  "async-finalize", TRUE, "muxer-factory", "matroskamux",
+                 //   "muxer", matroskamux,
+                 "async-finalize", TRUE, "muxer-factory", "matroskamux",
                  "max-size-time", (guint64)600 * GST_SECOND, // 600000000000,
                  NULL);
     g_free(tmpfile);
@@ -2203,7 +2208,30 @@ int splitfile_sink() {
 
     // add audio to muxer.
     if (audio_source != NULL) {
-        link_request_src_pad(audio_source, splitmuxsink);
+        GstPad *src_pad, *sink_pad;
+        GstPadLinkReturn lret;
+
+#if GST_VERSION_MINOR >= 20
+        src_pad = gst_element_request_pad_simple(audio_source, "src_%u");
+        sink_pad = gst_element_request_pad_simple(splitmuxsink, "audio_%u");
+#else
+        src_pad = gst_element_get_request_pad(audio_source, "src_%u");
+        sink_pad = gst_element_get_request_pad(splitmuxsink, "audio_%u");
+#endif
+
+        if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
+            gchar *sname = gst_pad_get_name(src_pad);
+            gchar *dname = gst_pad_get_name(sink_pad);
+            g_print("Src pad %s link to sink pad %s failed . return: %d\n", sname, dname, lret);
+            get_pad_caps_info(src_pad);
+            get_pad_caps_info(sink_pad);
+            g_free(sname);
+            g_free(dname);
+            return -1;
+        }
+        gst_object_unref(sink_pad);
+        gst_object_unref(src_pad);
+        return 0;
     }
 
     return 0;
@@ -2334,10 +2362,12 @@ static gchar *get_hlssink_string(gchar *outdir, gchar *location) {
 
 static gchar *get_hlssink_bin(const gchar *opencv_plugin) {
     const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
+    gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
     gchar *binstr = g_strdup_printf(" queue  ! videoconvert ! %s ! video/x-raw,width=1024,height=576 ! "
                                     " %s ! videoconvert ! nvvidconv ! video/x-raw(memory:NVMM),width=1024,height=576,format=I420,pixel-aspect-ratio=1/1 ! "
-                                    "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ",
-                                    opencv_plugin, clock);
+                                    "nvv4l2%senc ! queue ! %sparse ! mpegtsmux ",
+                                    opencv_plugin, clock, upenc, upenc);
+    g_free(upenc);
     return binstr;
 }
 
@@ -2378,7 +2408,7 @@ int motion_hlssink() {
         return -1;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/motion", NULL);
-    encoder  = get_video_encoder_by_name(config_data.videnc);
+    encoder = get_video_encoder_by_name(config_data.videnc);
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
     gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
@@ -2734,29 +2764,30 @@ GstElement *create_instance() {
     if (!is_initial)
         _initial_device();
     start_av_fakesink();
-
-    if (config_data.udp.enable)
-        udp_multicastsink();
-
     if (config_data.splitfile_sink)
         splitfile_sink();
 
-    if (config_data.hls_onoff.av_hlssink)
-        av_hlssink();
+    if (g_str_has_prefix(config_data.videnc, "h26")) {
+        // mpegtsmux not support video/x-vp9
+        if (config_data.udp.enable)
+            udp_multicastsink();
 
-    if (config_data.hls_onoff.edge_hlssink)
-        edgedect_hlssink();
+        if (config_data.hls_onoff.av_hlssink)
+            av_hlssink();
 
-    if (config_data.hls_onoff.cvtracker_hlssink)
-        cvtracker_hlssink();
+        if (config_data.hls_onoff.edge_hlssink)
+            edgedect_hlssink();
 
-    if (config_data.hls_onoff.facedetect_hlssink)
-        facedetect_hlssink();
+        if (config_data.hls_onoff.cvtracker_hlssink)
+            cvtracker_hlssink();
 
-    if (config_data.hls_onoff.motion_hlssink) {
-        motion_hlssink();
+        if (config_data.hls_onoff.facedetect_hlssink)
+            facedetect_hlssink();
+
+        if (config_data.hls_onoff.motion_hlssink) {
+            motion_hlssink();
+        }
     }
-
     if (config_data.app_sink) {
         start_av_appsink();
     }

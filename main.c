@@ -32,6 +32,11 @@ static GMainLoop *loop;
 static GstElement *pipeline;
 extern GstConfigData config_data;
 
+static const gchar *video_encodecs[] = {
+    "h264",
+    "h265",
+    "vp9"};
+
 // static GThread *inotify_watch = NULL;
 
 static void _get_cpuid() {
@@ -331,6 +336,9 @@ int main(int argc, char *argv[]) {
     }
 
 #if defined(HAS_JETSON_NANO)
+    GstRegistry *registry;
+    registry = gst_registry_get();
+    gst_registry_scan_path(registry, "/usr/local/lib/aarch64-linux-gnu/gstreamer-1.0");
     g_print("You defined running on Jetson nano\n");
     const gchar *nvlibs[] = {
         "nvarguscamerasrc",
