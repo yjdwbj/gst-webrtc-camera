@@ -61,7 +61,7 @@ struct _GstConfigData {
         gchar *type;
         gchar *format;
     } v4l2src_data;
-    gboolean h265enc;        // default h264enc; h265enc has been tested on Microsoft win10's Edge browser.
+    gchar *videnc;           // i.e; h264,h265,vp9
     gchar *root_dir;         // streams output root path;
     gboolean showdot;        // generate gstreamer pipeline graphs;
     gboolean splitfile_sink; // splitmuxsink save multipart file.
@@ -96,6 +96,12 @@ struct _GstConfigData {
     gboolean sysinfo; // show system info brief
     struct _webrtc webrtc;
 };
+
+static const gchar *video_encodecs[] = {
+    "h264",
+    "h265",
+    "vp9",
+    "vp8"};
 
 // } config_data_init = {
 //     .v4l2src_data.device = "/dev/vidoe0",

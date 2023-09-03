@@ -1,5 +1,5 @@
 {
-  "h265enc": true,
+  "videnc": "h264",
   "http": {
     "port": 57778,
     "host": "127.0.0.1",

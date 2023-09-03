@@ -125,9 +125,9 @@ message_cb(GstBus *bus, GstMessage *message, gpointer user_data) {
 void sigintHandler(int unused) {
     g_print("You ctrl-c-ed! Sending EoS\n");
     gboolean ret = gst_element_send_event(pipeline, gst_event_new_eos());
-    g_print("send Eos ret: %s .\n", ret ? "true": "false");
+    g_print("send Eos ret: %s .\n", ret ? "true" : "false");
     g_main_loop_quit(loop);
-    //exit(0);
+    // exit(0);
 }
 
 static void read_config_json(gchar *fullpath) {
@@ -135,6 +135,7 @@ static void read_config_json(gchar *fullpath) {
     JsonNode *root;
     JsonObject *root_obj, *object;
     GError *error;
+    gboolean has_valid_enc = FALSE;
     error = NULL;
     parser = json_parser_new();
     json_parser_load_from_file(parser, fullpath, &error);
@@ -171,11 +172,25 @@ static void read_config_json(gchar *fullpath) {
     config_data.hls_onoff.facedetect_hlssink = json_object_get_boolean_member(object, "facedetect_hlssink");
     config_data.hls_onoff.cvtracker_hlssink = json_object_get_boolean_member(object, "cvtracker_hlssink");
 
+    config_data.videnc = g_strdup(json_object_get_string_member(root_obj, "videnc"));
+
+    int len = sizeof(video_encodecs) / sizeof(gchar *);
+    for (int i = 0; i < len; i++) {
+        if (g_str_has_suffix(config_data.videnc, video_encodecs[i])) {
+            has_valid_enc = TRUE;
+            break;
+        }
+    }
+
+    if (!has_valid_enc) {
+        gst_println("Unsupported video encoding, please use the default h264. ");
+        config_data.videnc = "h264";
+    }
+
     config_data.root_dir = g_strdup(json_object_get_string_member(root_obj, "rootdir"));
 
     config_data.showdot = json_object_get_boolean_member(root_obj, "showdot");
     config_data.sysinfo = json_object_get_boolean_member(root_obj, "sysinfo");
-    config_data.h265enc = json_object_get_boolean_member(root_obj, "h265enc");
 
     config_data.rec_len = json_object_get_int_member(root_obj, "rec_len");
     config_data.motion_rec = json_object_get_boolean_member(root_obj, "motion_rec");
@@ -315,7 +330,6 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-
 #if defined(HAS_JETSON_NANO)
     g_print("You defined running on Jetson nano\n");
     const gchar *nvlibs[] = {
@@ -345,7 +359,7 @@ int main(int argc, char *argv[]) {
     //     load_deepstream_plugin(deepstream[i]);
     // }
 
-    load_plugin_func("/usr/lib/aarch64-linux-gnu/gstreamer-1.0","pango");
+    load_plugin_func("/usr/lib/aarch64-linux-gnu/gstreamer-1.0", "pango");
     // load_plugin_func("/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdv.so");
 #endif
     gst_segtrap_set_enabled(TRUE);

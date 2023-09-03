@@ -38,8 +38,6 @@ static volatile int cmd_recording = 0;
 static int record_time = 7;
 static volatile gboolean reading_inotify = TRUE;
 
-static gboolean has_h265 = FALSE;
-
 static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t cmd_mtx = PTHREAD_MUTEX_INITIALIZER;
 
@@ -214,6 +212,31 @@ static gchar *get_basic_sysinfo() {
     return line;
 }
 
+static GstElement *get_hardware_vp9_encoder() {
+    // https://developers.google.com/media/vp9/bitrate-modes/
+    GstElement *encoder;
+    // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
+    if (gst_element_factory_find("msdkvp9enc")) {
+        // Intel MSDK VP9 encoder
+        encoder = gst_element_factory_make("msdkvp9enc", NULL);
+        g_object_set(G_OBJECT(encoder), "rate-control", 1, NULL);
+    } else if (gst_element_factory_find("qsvvp9enc")) {
+        encoder = gst_element_factory_make("qsvvp9enc", NULL);
+        g_object_set(G_OBJECT(encoder), "rate-control", 3, NULL);
+    } else if (gst_element_factory_find("vaapivp9enc")) {
+        encoder = gst_element_factory_make("vaapivp9enc", NULL);
+    } else if (gst_element_factory_find("nvv4l2vp9enc")) {
+        encoder = gst_element_factory_make("nvv4l2vp9enc", NULL);
+    } else if (gst_element_factory_find("vp9enc")) {
+        encoder = gst_element_factory_make("vp9enc", NULL);
+    } else {
+        return NULL;
+    }
+
+    gst_bin_add(GST_BIN(pipeline), encoder);
+    return encoder;
+}
+
 static GstElement *get_hardware_h265_encoder() {
     // https://www.avaccess.com/blogs/guides/h264-vs-h265-difference/
     // https://x265.readthedocs.io/en/master/presets.html
@@ -231,8 +254,11 @@ static GstElement *get_hardware_h265_encoder() {
             bitrate = 1000000;
     }
     // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
-    if (gst_element_factory_find("vaapih265enc")) {
-        has_h265 = TRUE;
+    if (gst_element_factory_find("vah265lpenc")) {
+        // VA-API H.265 Low Power Encoder in Intel(R) Gen Graphics
+        encoder = gst_element_factory_make("vah265lpenc", NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
+    } else if (gst_element_factory_find("vaapih265enc")) {
         encoder = gst_element_factory_make("vaapih265enc", NULL);
         g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
     } else if (gst_element_factory_find("nvv4l2h265enc")) {
@@ -265,15 +291,12 @@ static GstElement *get_hardware_h264_encoder() {
             bitrate = 4000000;
     }
     // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
-    if (gst_element_factory_find("vaapih265enc")) {
-        has_h265 = TRUE;
-        encoder = gst_element_factory_make("vaapih265enc", NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 2 / 1000, NULL);
-    } else if (gst_element_factory_find("nvv4l2h265enc")) {
-        encoder = gst_element_factory_make("nvv4l2h265enc", NULL);
-        has_h265 = TRUE;
-        g_object_set(G_OBJECT(encoder), "control-rate", 1, "maxperf-enable", TRUE, "bitrate", bitrate / 2, NULL);
+    if (gst_element_factory_find("vah264lpenc")) {
+        // VA-API H.264 Low Power Encoder in Intel(R) Gen Graphics
+        encoder = gst_element_factory_make("vah264lpenc", NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
     } else if (gst_element_factory_find("vaapih264enc")) {
+        // VA-API H264 encoder
         encoder = gst_element_factory_make("vaapih264enc", NULL);
         g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
     } else if (gst_element_factory_find("nvv4l2h264enc")) {
@@ -291,6 +314,18 @@ static GstElement *get_hardware_h264_encoder() {
 
     gst_bin_add(GST_BIN(pipeline), encoder);
     return encoder;
+}
+
+static GstElement *get_video_encoder_by_name(gchar *name) {
+    if (g_str_has_prefix(name, "h264")) {
+        return get_hardware_h264_encoder();
+    } else if (g_str_has_prefix(name, "h265")) {
+        return get_hardware_h265_encoder();
+    } else if (g_str_has_prefix(name, "vp9")) {
+        return get_hardware_vp9_encoder();
+    } else {
+        return get_hardware_h264_encoder();
+    }
 }
 
 #if defined(HAS_JETSON_NANO)
@@ -369,7 +404,8 @@ static GstElement *get_video_src() {
         GstElement *jpegparse, *jpegdec;
         jpegparse = gst_element_factory_make("jpegparse", NULL);
 
-        jpegdec = gst_element_factory_find("vaapijpegdec") ? gst_element_factory_make("vaapijpegdec", NULL) : gst_element_factory_make("jpegdec", NULL);
+        jpegdec = gst_element_factory_find("vajpegdec") ? gst_element_factory_make("vajpegdec", NULL) : gst_element_factory_find("vaapijpegdec") ? gst_element_factory_make("vaapijpegdec", NULL)
+                                                                                                                                                 : gst_element_factory_make("jpegdec", NULL);
         if (!jpegdec || !jpegparse) {
             g_printerr("video_src all elements could be created.\n");
             return NULL;
@@ -574,7 +610,7 @@ static GstElement *create_textbins() {
 
 static GstElement *get_encoder_src() {
     GstElement *encoder, *teesrc;
-    encoder = config_data.h265enc ? get_hardware_h265_encoder() : get_hardware_h264_encoder();
+    encoder = get_video_encoder_by_name(config_data.videnc);
     if (!encoder) {
         g_printerr("encoder source all elements could not be created.\n");
         // g_printerr("encoder %x ; clock %x.\n", encoder, clock);
@@ -830,10 +866,12 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(filename);
     g_free(timestr);
-    gchar *video_src = g_strdup_printf("udpsrc port=%d address=%s  ! "
+    gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  name=video_save ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! queue leaky=1 ! mux. ",
-                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, config_data.h265enc ? "H265" : "H264");
+                                       " rtp%sdepay ! %sparse !  queue leaky=1 ! mux. ",
+                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc);
+    g_free(upenc);
     if (config_data.audio.enable) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
@@ -930,10 +968,12 @@ static int start_udpsrc_rec(gpointer user_data) {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(outdir);
 
+    gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  name=video_save ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! queue leaky=1 ! mux. ",
-                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, config_data.h265enc ? "H265" : "H264");
+                                       " rtp%sdepay ! %sparse ! queue leaky=1 ! mux. ",
+                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc);
+    g_free(upenc);
 
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
@@ -1147,11 +1187,12 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
     g_free(timestr);
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(outdir);
-
+    gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
     gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 leaky-type=1  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse !  queue leaky=1 ! mux. ",
-                                       vid_str, config_data.h265enc ? "H265" : "H264");
+                                       " rtph%sdepay ! %sparse !  queue leaky=1 ! mux. ",
+                                       vid_str,upenc,config_data.videnc,config_data.videnc);
+    g_free(upenc);
 
     if (config_data.audio.enable) {
         gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3  leaky-type=1  ! "
@@ -1252,10 +1293,12 @@ start_appsrc_record() {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(outdir);
 
+    gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
     gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 leaky-type=1  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse !  queue leaky=1 ! mux. ",
-                                       vid_str, config_data.h265enc ? "H265" : "H264");
+                                       " rtp%sdepay ! %sparse ! queue leaky=1 ! mux. ",
+                                       vid_str, upenc, config_data.videnc, config_data.videnc);
+    g_free(upenc);
 
     if (config_data.audio.enable) {
         gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 leaky-type=1 ! "
@@ -1731,15 +1774,13 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     // gchar *turn_srv = NULL;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, item->hash_id);
     g_print("webrtc_name----------> : %s\n", webrtc_name);
-    gchar *video_src =
-        config_data.h265enc ? g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
-                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H265,payload=(int)96 ! "
-                                              " queue leaky=1 ! %s. ",
-                                              config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, webrtc_name)
-                            : g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
-                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                              " queue leaky=1 ! %s. ",
-                                              config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, webrtc_name);
+
+    gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 !  %s. ",
+                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, webrtc_name);
+    g_free(upenc);
+
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
@@ -1782,10 +1823,15 @@ int start_av_udpsink() {
     if (!_check_initial_status())
         return -1;
     GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *videoparse;
+
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(pqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(video_pay, config_data.h265enc ? "rtph265pay" : "rtph264pay");
-    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
+    gchar *tmpname = g_strdup_printf("rtp%spay", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(video_pay, tmpname);
+    g_free(tmpname);
+    tmpname = g_strdup_printf("%sparse", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(videoparse, tmpname);
+    g_free(tmpname);
     MAKE_ELEMENT_AND_ADD(video_sink, "udpsink");
 
     /* Configure udpsink */
@@ -1794,7 +1840,9 @@ int start_av_udpsink() {
                  "host", config_data.webrtc.udpsink.addr,
                  "auto-multicast", config_data.webrtc.udpsink.multicast, NULL);
 
-    g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
+    if (g_str_has_prefix(config_data.videnc, "h26")) {
+        g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
+    }
     g_object_set(vqueue, "max-size-time", 100000000, NULL);
 
     if (!gst_element_link_many(vqueue, videoparse, video_pay, pqueue, video_sink, NULL)) {
@@ -1877,8 +1925,12 @@ int start_av_fakesink() {
     GstElement *vtee, *atee;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(pqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(video_pay, config_data.h265enc ? "rtph265pay" : "rtph264pay");
-    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
+    gchar *tmpname = g_strdup_printf("rtp%spay", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(video_pay, tmpname);
+    g_free(tmpname);
+    tmpname = g_strdup_printf("%sparse", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(videoparse, tmpname);
+    g_free(tmpname);
     MAKE_ELEMENT_AND_ADD(video_sink, "fakesink");
     vtee = gst_element_factory_make("tee", FSINK_VNAME);
     gst_bin_add(GST_BIN(pipeline), vtee);
@@ -1886,7 +1938,9 @@ int start_av_fakesink() {
     /* Configure udpsink */
     g_object_set(video_sink, "async", FALSE, NULL);
 
-    g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
+    if (g_str_has_prefix(config_data.videnc, "h26")) {
+        g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
+    }
     g_object_set(vqueue, "max-size-time", 100000000, "leaky", 1, NULL);
 
     if (!gst_element_link_many(vqueue, videoparse, video_pay, pqueue, vtee, NULL)) {
@@ -1934,19 +1988,14 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     gchar *webrtc_name = g_strdup_printf("webrtc_appsrc_%" G_GUINT64_FORMAT, item->hash_id);
     // vcaps = gst_caps_from_string("video/x-h264,stream-format=(string)avc,alignment=(string)au,width=(int)1280,height=(int)720,framerate=(fraction)30/1,profile=(string)main");
     // acaps = gst_caps_from_string("audio/x-opus, channels=(int)1,channel-mapping-family=(int)1");
-    gchar *video_src =
-        config_data.h265enc ? g_strdup_printf("appsrc  name=video_%" G_GUINT64_FORMAT " format=3 leaky-type=2 ! "
-                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H265,payload=(int)96 ! "
-                                              " rtph265depay ! h265parse ! rtph265pay config-interval=-1 ! queue leaky=2 !"
-                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H265,payload=(int)96 ! "
-                                              " queue leaky=2 ! %s. ",
-                                              item->hash_id, webrtc_name)
-                            : g_strdup_printf("appsrc  name=video_%" G_GUINT64_FORMAT " format=3 leaky-type=2 ! "
-                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                              " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! queue leaky=2 !"
-                                              " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                              " queue leaky=2 ! %s. ",
-                                              item->hash_id, webrtc_name);
+    gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
+    gchar *video_src = g_strdup_printf("appsrc  name=video_%" G_GUINT64_FORMAT " format=3 leaky-type=2 ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
+                                       " rtp%sdepay ! %sparse ! rtp%spay  ! queue leaky=2 !"
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
+                                       " queue leaky=2 ! %s. ",
+                                       item->hash_id, upenc,config_data.videnc,config_data.videnc,config_data.videnc, upenc, webrtc_name);
+    g_free(upenc);
 
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("appsrc name=audio_%" G_GUINT64_FORMAT "  format=3 leaky-type=2 ! "
@@ -2064,14 +2113,22 @@ int start_av_appsink() {
         return -1;
     GstElement *aqueue, *vqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *videoparse;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(video_pay, config_data.h265enc ? "rtph265pay" : "rtph264pay");
-    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
+    gchar *tmpname = g_strdup_printf("rtp%spay", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(video_pay, tmpname);
+    g_free(tmpname);
+    tmpname = g_strdup_printf("%sparse", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(videoparse, tmpname);
+    g_free(tmpname);
     video_sink = gst_element_factory_make("appsink", "video_sink");
 
     /* Configure udpsink */
     g_object_set(video_sink, "sync", FALSE, "async", FALSE,
                  "emit-signals", TRUE, "drop", TRUE, "max-buffers", 100, NULL);
-    g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
+    if(g_str_has_prefix(config_data.videnc,"h26"))
+    {
+        g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
+    }
+
     g_object_set(vqueue, "leaky", 1, NULL);
     gst_bin_add(GST_BIN(pipeline), video_sink);
 
@@ -2119,7 +2176,9 @@ int splitfile_sink() {
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/mp4", NULL);
     MAKE_ELEMENT_AND_ADD(splitmuxsink, "splitmuxsink");
-    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
+    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
+    g_free(parsestr);
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
 
     g_object_set(vqueue, "leaky", 1, NULL);
@@ -2171,7 +2230,9 @@ int av_hlssink() {
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls", NULL);
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
+    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
+    g_free(parsestr);
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
     g_object_set(vqueue, "leaky", 1, NULL);
@@ -2317,10 +2378,12 @@ int motion_hlssink() {
         return -1;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/motion", NULL);
-    encoder = config_data.h265enc ? get_hardware_h265_encoder() : get_hardware_h264_encoder();
+    encoder  = get_video_encoder_by_name(config_data.videnc);
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
+    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
+    g_free(parsestr);
     MAKE_ELEMENT_AND_ADD(queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
@@ -2398,10 +2461,12 @@ int cvtracker_hlssink() {
         return -1;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/cvtracker", NULL);
-    encoder = config_data.h265enc ? get_hardware_h265_encoder() : get_hardware_h264_encoder();
+    encoder = get_video_encoder_by_name(config_data.videnc);
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
+    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
+    g_free(parsestr);
     MAKE_ELEMENT_AND_ADD(queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
@@ -2481,7 +2546,9 @@ int facedetect_hlssink() {
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/face", NULL);
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
+    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
+    g_free(parsestr);
     MAKE_ELEMENT_AND_ADD(queue, "queue");
     MAKE_ELEMENT_AND_ADD(post_queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
@@ -2489,7 +2556,7 @@ int facedetect_hlssink() {
     MAKE_ELEMENT_AND_ADD(facedetect, "facedetect");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
     g_object_set(queue, "leaky", 1, NULL);
-    encoder = config_data.h265enc ? get_hardware_h265_encoder() : get_hardware_h264_encoder();
+    encoder = get_video_encoder_by_name(config_data.videnc);
 
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
@@ -2559,7 +2626,9 @@ int edgedect_hlssink() {
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/edge", NULL);
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    MAKE_ELEMENT_AND_ADD(videoparse, config_data.h265enc ? "h265parse" : "h264parse");
+    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
+    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
+    g_free(parsestr);
     MAKE_ELEMENT_AND_ADD(post_queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
@@ -2568,7 +2637,7 @@ int edgedect_hlssink() {
     MAKE_ELEMENT_AND_ADD(clock, "clockoverlay");
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
     g_object_set(post_queue, "leaky", 1, NULL);
-    encoder = config_data.h265enc ? get_hardware_h265_encoder() : get_hardware_h264_encoder();
+    encoder = get_video_encoder_by_name(config_data.videnc);
 
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
