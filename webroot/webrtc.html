@@ -140,9 +140,7 @@
           .catch((err) => {
             console.log(`${err.name}: ${err.message}`);
           });
-
       }
-
     }
 
     function toggleCanvas(show) {
@@ -395,7 +393,6 @@
               const data = e.target.result.slice(localdc.bufferedAmount, bufferedAmount);
               localdc.send(data);
             }
-
           };
           fileReader.readAsArrayBuffer(blob);
         };
@@ -540,13 +537,6 @@
       createWebrtcRecv();
       return new Promise((resolve, reject) => {
         websocketConnection = new WebSocket(wsUrl);
-        websocketConnection.onopen = () => {
-          resolve(websocketConnection);
-        }
-        websocketConnection.onerror = (err) => {
-          reject(err);
-        }
-
         websocketConnection.addEventListener("message", onServerMessage);
         websocketConnection.addEventListener("close", () => {
           reconnectTimerId = setTimeout(() => {
@@ -559,9 +549,13 @@
             });
           }, 5000);
         });
-
-      })
-
+        websocketConnection.onopen = () => {
+          resolve(websocketConnection);
+        }
+        websocketConnection.onerror = (err) => {
+          reject(err);
+        }
+      });
     }
 
     // visualizer handle

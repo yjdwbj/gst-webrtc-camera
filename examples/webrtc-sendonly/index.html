@@ -17,6 +17,7 @@
     var webrtcPeerConnection;
     var webrtcConfiguration;
     var reportError;
+    var reconnectTimerId;
 
     const turn_config = {
       'iceServers': [{
@@ -91,17 +92,48 @@
       if (wsPort)
         wsPort = ":" + wsPort;
       var wsUrl = "ws://" + wsHost + wsPort + "/" + wsPath;
-      websocketConnection = new WebSocket(wsUrl);
-      websocketConnection.addEventListener("message", onServerMessage);
-    }
 
-    window.addEventListener("load", (event) => {
       webrtcPeerConnection = new RTCPeerConnection(stun_config);
       webrtcPeerConnection.ontrack = onAddRemoteStream;
       webrtcPeerConnection.onicecandidate = onIceCandidate;
       webrtcPeerConnection.addTransceiver('video', { 'direction': 'recvonly' });
       webrtcPeerConnection.addTransceiver('audio', { 'direction': 'recvonly' });
-      playStream(null, null, null);
+      if (reconnectTimerId)
+        clearTimeout(reconnectTimerId);
+      return new Promise((resolve, reject) => {
+        websocketConnection = new WebSocket(wsUrl);
+        websocketConnection.onopen = () => {
+          resolve(websocketConnection);
+        }
+        websocketConnection.onerror = (err) => {
+          reject(err);
+        }
+        websocketConnection.addEventListener("message", onServerMessage);
+        websocketConnection.addEventListener("close", () => {
+          reconnectTimerId = setTimeout(() => {
+            console.log("reconnect websockets");
+            playStream(null, null, null).then(() => {
+              if (reconnectTimerId)
+                clearTimeout(reconnectTimerId);
+            }).catch(err => {
+              console.log("ws error: " + err);
+            });
+          }, 5000);
+        });
+      });
+    }
+
+    window.addEventListener("load", (event) => {
+      playStream(null, null, null).then(()=>{
+        if (reconnectTimerId)
+          clearTimeout(reconnectTimerId);
+      }).catch( err=>{
+        console.log("ws error: " + err);
+        reconnectTimerId = setTimeout(() => {
+          console.log("reconnect websockets");
+          playStream(null, null, null);
+        }, 5000);
+      });
     });
 
   </script>

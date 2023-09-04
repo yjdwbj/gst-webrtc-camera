@@ -30,7 +30,7 @@
 #include <sys/types.h>
 
 static GstElement *pipeline;
-static GstElement *video_source, *audio_source, *video_encoder, *va_pp;
+static GstElement *video_source, *audio_source, *video_encoder;
 static gboolean is_initial = FALSE;
 
 static volatile int threads_running = 0;
@@ -672,53 +672,6 @@ static GstElement *get_encoder_src() {
     link_request_src_pad(video_source, queue);
 #endif
     return teesrc;
-}
-
-static GstElement *vaapi_postproc() {
-    GstElement *vaapipostproc, *capsfilter, *clock, *tee;
-    gchar *capBuf;
-
-    if (!gst_element_factory_find("vaapipostproc")) {
-        return video_source;
-    }
-    vaapipostproc = gst_element_factory_make("vaapipostproc", NULL);
-    capsfilter = gst_element_factory_make("capsfilter", NULL);
-    clock = gst_element_factory_make("clockoverlay", NULL);
-    tee = gst_element_factory_make("tee", NULL);
-
-    if (!vaapipostproc || !capsfilter || !clock || !tee) {
-        g_printerr("splitfile_sink not all elements could be created.\n");
-        return NULL;
-    }
-    gst_bin_add_many(GST_BIN(pipeline), clock, capsfilter, vaapipostproc, tee, NULL);
-    if (!gst_element_link_many(vaapipostproc, capsfilter, clock, tee, NULL)) {
-        g_error("Failed to link elements vaapi post proc.\n");
-        return NULL;
-    }
-
-    g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
-
-    // GstCaps *srcCaps = _getVideoCaps("video/x-raw", "NV12", 30, 1280, 720);
-    // GstCaps *srcCaps = _getVideoCaps(
-    //     config_data.v4l2src_data.type,
-    //     config_data.v4l2src_data.format,
-    //     config_data.v4l2src_data.framerate,
-    //     config_data.v4l2src_data.width,
-    //     config_data.v4l2src_data.height);
-
-    capBuf = g_strdup_printf("%s, width=%d, height=%d, framerate=(fraction)%d/1",
-                             "video/x-raw",
-                             config_data.v4l2src_data.width,
-                             config_data.v4l2src_data.height,
-                             config_data.v4l2src_data.framerate);
-    GstCaps *srcCaps = gst_caps_from_string(capBuf);
-    g_free(capBuf);
-    g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
-    gst_caps_unref(srcCaps);
-
-    g_object_set(G_OBJECT(vaapipostproc), "format", 23, NULL);
-    link_request_src_pad(video_source, vaapipostproc);
-    return tee;
 }
 
 static void *_inotify_thread(void *filename) {
@@ -2253,10 +2206,10 @@ static void set_hlssink_object(GstElement *hlssink, gchar *outdir, gchar *locati
 }
 
 int av_hlssink() {
-    GstElement *hlssink, *videoparse, *mpegtsmux, *vqueue;
+    GstElement *hlssink, *videoparse, *mpegtsmux, *vqueue, *encoder;
     if (!_check_initial_status())
         return -1;
-
+    encoder = get_hardware_h264_encoder();
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls", NULL);
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
     gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
@@ -2275,7 +2228,7 @@ int av_hlssink() {
     _mkdir(outdir, 0755);
     g_free(outdir);
 
-    link_request_src_pad(video_encoder, vqueue);
+    link_request_src_pad(encoder, vqueue);
     // add audio to muxer.
     if (audio_source != NULL) {
         GstElement *aqueue, *opusparse;
@@ -2294,11 +2247,12 @@ int av_hlssink() {
 }
 
 int udp_multicastsink() {
-    GstElement *udpsink, *rtpmp2tpay, *vqueue, *mpegtsmux, *bin;
+    GstElement *udpsink, *rtpmp2tpay, *vqueue, *mpegtsmux, *bin,*encoder;
     GstPad *sub_sink_apad, *sub_sink_vpad;
     GstElement *aqueue;
     if (!_check_initial_status())
         return -1;
+    encoder = get_hardware_h264_encoder();
     bin = gst_bin_new("udp_bin");
     SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, udpsink, "udpsink");
     SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, rtpmp2tpay, "rtpmp2tpay");
@@ -2326,7 +2280,7 @@ int udp_multicastsink() {
     gst_element_set_state(bin, GST_STATE_PAUSED);
     // gst_element_set_locked_state(udpsink, TRUE);
 
-    link_request_src_pad(video_encoder, bin);
+    link_request_src_pad(encoder, bin);
 
     if (audio_source != NULL) {
         SUB_BIN_MAKE_ELEMENT_AND_ADD(bin, aqueue, "queue");
@@ -2363,12 +2317,10 @@ static gchar *get_hlssink_string(gchar *outdir, gchar *location) {
 
 static gchar *get_hlssink_bin(const gchar *opencv_plugin) {
     const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
-    gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
     gchar *binstr = g_strdup_printf(" queue  ! videoconvert ! %s ! video/x-raw,width=1024,height=576 ! "
                                     " %s ! videoconvert ! nvvidconv ! video/x-raw(memory:NVMM),width=1024,height=576,format=I420,pixel-aspect-ratio=1/1 ! "
-                                    "nvv4l2%senc ! queue ! %sparse ! mpegtsmux ",
-                                    opencv_plugin, clock, upenc, upenc);
-    g_free(upenc);
+                                    "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ",
+                                    opencv_plugin, clock);
     return binstr;
 }
 
@@ -2409,12 +2361,10 @@ int motion_hlssink() {
         return -1;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/motion", NULL);
-    encoder = get_video_encoder_by_name(config_data.videnc);
+    encoder = get_hardware_h264_encoder();
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
-    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
-    g_free(parsestr);
+    MAKE_ELEMENT_AND_ADD(videoparse, "h264parse");
     MAKE_ELEMENT_AND_ADD(queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
@@ -2453,7 +2403,7 @@ int motion_hlssink() {
     g_free(tmp2);
     _mkdir(outdir, 0755);
     g_free(outdir);
-    return link_request_src_pad(va_pp, pre_convert);
+    return link_request_src_pad(video_source, pre_convert);
 }
 #endif
 
@@ -2492,12 +2442,10 @@ int cvtracker_hlssink() {
         return -1;
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/cvtracker", NULL);
-    encoder = get_video_encoder_by_name(config_data.videnc);
+    encoder = get_hardware_h264_encoder();
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
-    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
-    g_free(parsestr);
+    MAKE_ELEMENT_AND_ADD(videoparse, "h264parse");
     MAKE_ELEMENT_AND_ADD(queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
@@ -2530,7 +2478,7 @@ int cvtracker_hlssink() {
     _mkdir(outdir, 0755);
     g_free(outdir);
 
-    return link_request_src_pad(va_pp, pre_convert);
+    return link_request_src_pad(video_source, pre_convert);
 }
 #endif
 
@@ -2577,9 +2525,7 @@ int facedetect_hlssink() {
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/face", NULL);
 
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
-    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
-    g_free(parsestr);
+    MAKE_ELEMENT_AND_ADD(videoparse, "h264parse");
     MAKE_ELEMENT_AND_ADD(queue, "queue");
     MAKE_ELEMENT_AND_ADD(post_queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
@@ -2587,7 +2533,7 @@ int facedetect_hlssink() {
     MAKE_ELEMENT_AND_ADD(facedetect, "facedetect");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
     g_object_set(queue, "leaky", 1, NULL);
-    encoder = get_video_encoder_by_name(config_data.videnc);
+    encoder = get_hardware_h264_encoder();
 
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
@@ -2617,7 +2563,7 @@ int facedetect_hlssink() {
 
     _mkdir(outdir, 0755);
     g_free(outdir);
-    return link_request_src_pad(va_pp, queue);
+    return link_request_src_pad(video_source, queue);
 }
 #endif
 
@@ -2657,9 +2603,7 @@ int edgedect_hlssink() {
 
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls/edge", NULL);
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
-    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
-    g_free(parsestr);
+    MAKE_ELEMENT_AND_ADD(videoparse, "h264parse");
     MAKE_ELEMENT_AND_ADD(post_queue, "queue");
     MAKE_ELEMENT_AND_ADD(pre_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
@@ -2668,7 +2612,7 @@ int edgedect_hlssink() {
     MAKE_ELEMENT_AND_ADD(clock, "clockoverlay");
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
     g_object_set(post_queue, "leaky", 1, NULL);
-    encoder = get_video_encoder_by_name(config_data.videnc);
+    encoder = get_hardware_h264_encoder();
 
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
@@ -2697,7 +2641,7 @@ int edgedect_hlssink() {
 
     _mkdir(outdir, 0755);
     g_free(outdir);
-    return link_request_src_pad(va_pp, pre_convert);
+    return link_request_src_pad(video_source, pre_convert);
 }
 #endif
 
@@ -2734,12 +2678,6 @@ static void _initial_device() {
         }
     }
 
-    va_pp = vaapi_postproc();
-    if (va_pp == NULL) {
-        g_printerr("unable to open vaapi post proc.\n");
-    }
-
-    // mkv_mux = get_mkv_mux();
     is_initial = TRUE;
 }
 

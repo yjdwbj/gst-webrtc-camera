@@ -543,7 +543,7 @@ static void start_http(AppData *app) {
     g_object_unref(auth_domain);
 
     soup_server_listen_all(app->soup_server, app->port,
-                           (SoupServerListenOptions)0, NULL);
+                           SOUP_SERVER_LISTEN_HTTPS, NULL);
 
     gst_print("WebRTC page link: http://127.0.0.1:%d/\n", app->port);
 }
@@ -690,14 +690,14 @@ int main(int argc, char *argv[]) {
         g_free(tmp);
     }
 
-    app->pipeline = gst_parse_launch(cmdline, &error);
+    app->pipeline = gst_parse_launch(cmdline, NULL);
 
-    if (error) {
-        gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
-        g_print("%s", message);
-        g_free(message);
-        g_error_free(error);
-    }
+    // if (error) {
+    //     gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
+    //     g_print("%s", message);
+    //     g_free(message);
+    //     g_error_free(error);
+    // }
 
     g_free(cmdline);
     g_free(textoverlay);
