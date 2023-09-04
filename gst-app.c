@@ -369,6 +369,7 @@ static GstElement *get_video_src() {
     teesrc = gst_element_factory_make("tee", NULL);
     srcCaps = gst_caps_from_string("video/x-raw");
     g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
+    gst_caps_unref(srcCaps);
     gst_bin_add_many(GST_BIN(pipeline), nvbin, capsfilter, teesrc, NULL);
     if (!gst_element_link_many(nvbin, capsfilter, teesrc, NULL)) {
         g_error("Failed to link elements nvarguscamerasrc src\n");
@@ -411,8 +412,15 @@ static GstElement *get_video_src() {
         GstElement *jpegparse, *jpegdec;
         jpegparse = gst_element_factory_make("jpegparse", NULL);
 
-        jpegdec = gst_element_factory_find("vajpegdec") ? gst_element_factory_make("vajpegdec", NULL) : gst_element_factory_find("vaapijpegdec") ? gst_element_factory_make("vaapijpegdec", NULL)
-                                                                                                                                                 : gst_element_factory_make("jpegdec", NULL);
+        if (gst_element_factory_find("vajpegdec"))
+            jpegdec = gst_element_factory_make("vajpegdec", NULL);
+        else if (gst_element_factory_find("vaapijpegdec"))
+            jpegdec = gst_element_factory_make("vaapijpegdec", NULL);
+        else if (gst_element_factory_find("v4l2jpegdec"))
+            jpegdec = gst_element_factory_make("v4l2jpegdec", NULL);
+        else
+            jpegdec = gst_element_factory_make("jpegdec", NULL);
+
         if (!jpegdec || !jpegparse) {
             g_printerr("video_src all elements could be created.\n");
             return NULL;
@@ -1744,8 +1752,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay ! rtpopuspay ! queue leaky=1 ! "
-                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " rtpopusdepay ! rtpopuspay !  "
                                            " queue leaky=1 ! %s.",
                                            config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr, webrtc_name);
         cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
@@ -2247,7 +2254,7 @@ int av_hlssink() {
 }
 
 int udp_multicastsink() {
-    GstElement *udpsink, *rtpmp2tpay, *vqueue, *mpegtsmux, *bin,*encoder;
+    GstElement *udpsink, *rtpmp2tpay, *vqueue, *mpegtsmux, *bin, *encoder;
     GstPad *sub_sink_apad, *sub_sink_vpad;
     GstElement *aqueue;
     if (!_check_initial_status())

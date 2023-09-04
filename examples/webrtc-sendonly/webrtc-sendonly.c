@@ -38,11 +38,13 @@ struct _APPData {
     gchar *user;
     gchar *password;
     int port;
+    gchar *udphost; // for udpsink and udpsrc
+    int udpport;
 };
 
 static AppData gs_app = {
     NULL, NULL, NULL, NULL,
-    "/dev/video0", "video/x-raw,width=800,height=600,format=YUY2,framerate=25/1", NULL, "test", "test1234", 57778};
+    "/dev/video0", "video/x-raw,width=800,height=600,format=YUY2,framerate=25/1", NULL, "test", "test1234", 57778, "224.1.1.5", 5000};
 
 static void start_http(AppData *app);
 
@@ -76,6 +78,7 @@ struct _ReceiverEntry {
     GstElement *webrtcbin;
 };
 
+#if 0
 static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
     GstPad *src_pad, *sink_pad;
     GstPadLinkReturn lret;
@@ -100,14 +103,17 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
     gst_object_unref(src_pad);
     return lret;
 }
+#endif
 
 void destroy_receiver_entry(gpointer receiver_entry_ptr) {
     ReceiverEntry *receiver_entry = (ReceiverEntry *)receiver_entry_ptr;
 
     g_assert(receiver_entry != NULL);
-    gst_element_set_state(receiver_entry->webrtcbin, GST_STATE_NULL);
-    gst_bin_remove(GST_BIN(receiver_entry->pipeline), receiver_entry->webrtcbin);
-    gst_object_unref(receiver_entry->webrtcbin);
+    gst_element_set_state(GST_ELEMENT(receiver_entry->pipeline),
+                          GST_STATE_NULL);
+
+    gst_object_unref(GST_OBJECT(receiver_entry->webrtcbin));
+    gst_object_unref(GST_OBJECT(receiver_entry->pipeline));
 
     if (receiver_entry->connection != NULL)
         g_object_unref(G_OBJECT(receiver_entry->connection));
@@ -118,49 +124,51 @@ void destroy_receiver_entry(gpointer receiver_entry_ptr) {
 ReceiverEntry *
 create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     ReceiverEntry *receiver_entry;
-    GstElement *h264src, *audiosrc;
+    gchar *cmdline = NULL;
 
     receiver_entry = g_new0(ReceiverEntry, 1);
     receiver_entry->connection = connection;
 
     g_object_ref(G_OBJECT(connection));
-
     g_signal_connect(G_OBJECT(connection), "message",
                      G_CALLBACK(soup_websocket_message_cb), (gpointer)receiver_entry);
 
-    // gchar *cmdline = "webrtcbin name=webrtcbin stun-server=stun://stun.l.google.com:19302 "
-    //                  "udpsrc port=6000 ! application/x-rtp,media=video,encoding-name=H264,payload=96 ! "
-    //                  " rtph264depay ! h264parse ! rtph264pay config-interval=-1 ! "
-    //                  " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96  ! queue ! webrtcbin. ";
-    receiver_entry->webrtcbin = gst_element_factory_make("webrtcbin", NULL);
-    g_assert(receiver_entry->webrtcbin != NULL);
-
-    g_object_set(receiver_entry->webrtcbin, "stun-server", STUN_SERVER, NULL);
-
-    gst_bin_add(GST_BIN(app->pipeline), receiver_entry->webrtcbin);
-    receiver_entry->pipeline = app->pipeline;
-
-    h264src = gst_bin_get_by_name(GST_BIN(app->pipeline), "h264src");
-    g_assert(h264src != NULL);
-    link_request_src_pad(h264src, receiver_entry->webrtcbin);
-    gst_object_unref(h264src);
-
+    // gchar *turn_srv = NULL;
+    gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (intptr_t)(receiver_entry->connection));
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 !  %s. ",
+                                       app->udpport, app->udphost, webrtc_name);
     if (app->audio_dev != NULL) {
-        audiosrc = gst_bin_get_by_name(GST_BIN(app->pipeline), "audio");
-        g_assert(audiosrc != NULL);
-        link_request_src_pad(audiosrc, receiver_entry->webrtcbin);
-        gst_object_unref(audiosrc);
-    }
+        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " rtpopusdepay ! rtpopuspay !  "
+                                           " queue leaky=1 ! %s.",
+                                           app->udpport + 1, app->udphost, webrtc_name);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, STUN_SERVER, audio_src, video_src);
+        g_print("webrtc cmdline: %s \n", cmdline);
+        g_free(audio_src);
+        g_free(video_src);
+    } else {
 
+        // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
+        // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s", webrtc_name, STUN_SERVER, video_src);
+        // g_free(turn_srv);
+    }
+    g_print("webrtc cmdline: %s\n", cmdline);
+    receiver_entry->pipeline = gst_parse_launch(cmdline, NULL);
+    gst_element_set_state(receiver_entry->pipeline, GST_STATE_READY);
+    g_free(cmdline);
+
+    receiver_entry->webrtcbin = gst_bin_get_by_name(GST_BIN(receiver_entry->pipeline), webrtc_name);
+    g_free(webrtc_name);
     g_signal_connect(receiver_entry->webrtcbin, "on-negotiation-needed",
                      G_CALLBACK(on_negotiation_needed_cb), (gpointer)receiver_entry);
 
     g_signal_connect(receiver_entry->webrtcbin, "on-ice-candidate",
                      G_CALLBACK(on_ice_candidate_cb), (gpointer)receiver_entry);
 
-    if (gst_element_set_state(receiver_entry->webrtcbin, GST_STATE_PLAYING) ==
-        GST_STATE_CHANGE_FAILURE)
-        g_print("Error starting pipeline");
+    gst_element_set_state(receiver_entry->pipeline, GST_STATE_PLAYING);
 
     return receiver_entry;
 }
@@ -430,7 +438,7 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                      G_CALLBACK(soup_websocket_closed_cb), app);
 
     receiver_entry = create_receiver_entry(connection, app);
-    g_hash_table_replace(app->receiver_entry_table, connection, receiver_entry);
+    g_hash_table_insert(app->receiver_entry_table, connection, receiver_entry);
 }
 
 #define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
@@ -622,13 +630,16 @@ static GOptionEntry entries[] = {
     {"password", 'p', 0, G_OPTION_ARG_STRING, &gs_app.password,
      "Password for http digest auth, Default: test1234", "PASSWORD"},
     {"port", 0, 0, G_OPTION_ARG_INT, &gs_app.port, "Port to listen on (default: 57778 )", "PORT"},
+    {"udphost", 0, 0, G_OPTION_ARG_STRING, &gs_app.udphost, "Address for udpsink (default : 224.1.1.5)", "ADDR"},
+    {"udpport", 0, 0, G_OPTION_ARG_INT, &gs_app.udpport, "Port for udpsink (default: 5000 )", "PORT"},
     {NULL}};
 
 int main(int argc, char *argv[]) {
     GOptionContext *context;
     gchar *contents;
-    GError *error;
+    GError *error = NULL;
     gchar *strvcaps;
+    gchar *enc = NULL;
 
     context = g_option_context_new("- gstreamer webrtc camera");
     g_option_context_add_main_entries(context, entries, NULL);
@@ -652,8 +663,13 @@ int main(int argc, char *argv[]) {
 
     const gchar *clockstr = "clockoverlay time-format=\"%D %H:%M:%S\"";
     contents = get_basic_sysinfo();
-    const gchar *enc = gst_element_factory_find("vaapih264enc") ? "vaapih264enc" : gst_element_factory_find("v4l2h264enc") ? "v4l2h264enc output-io-mode=2"
-                                                                                                                           : " video/x-raw,format=I420 ! x264enc ! h264parse";
+    if (gst_element_factory_find("vaapih264enc"))
+        enc = g_strdup("vaapih264enc");
+    else if (gst_element_factory_find("v4l2h264enc"))
+        enc = g_strdup(" videoconvert ! v4l2h264enc");
+    else
+        enc = g_strdup(" video/x-raw,format=I420 ! x264enc ! h264parse");
+
     gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
     GstCaps *vcaps = gst_caps_from_string(app->video_caps);
     GstStructure *structure = gst_caps_get_structure(vcaps, 0);
@@ -664,40 +680,41 @@ int main(int argc, char *argv[]) {
     } else {
         gchar *jpegdec = NULL;
         if (gst_element_factory_find("v4l2jpegdec")) {
-            jpegdec = g_strdup("v4l2jpegdec capture-io-mode=2");
+            jpegdec = g_strdup("v4l2jpegdec");
         } else {
             jpegdec = g_strdup("jpegdec");
         }
-        strvcaps = g_strdup_printf("image/jpeg,width=1280,height=720,framerate=30/1,format=NV12 ! jpegparse ! %s ", jpegdec);
+        strvcaps = g_strdup_printf("%s ! jpegparse ! %s ", app->video_caps, jpegdec);
         g_free(jpegdec);
     }
 
     gchar *cmdline = g_strdup_printf(
-        "v4l2src device=%s io-mode=2 ! %s ! videoconvert ! %s ! %s ! %s ! rtph264pay config-interval=-1 ! "
+        "v4l2src device=%s ! %s ! videoconvert ! %s ! %s ! %s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
         " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-        " queue leaky=1 ! tee name=h264src h264src. ! fakesink async=false ",
-        app->video_dev, strvcaps, clockstr, textoverlay, enc);
+        " queue leaky=1  ! udpsink port=%d host=%s async=false sync=false ",
+        app->video_dev, strvcaps, clockstr, textoverlay, enc, app->udpport, app->udphost);
     g_free(strvcaps);
-    g_print("video cmdline: %s\n", cmdline);
+    g_free(enc);
 
     if (app->audio_dev != NULL) {
         gchar *tmp = g_strdup_printf("alsasrc device=%s ! audioconvert ! opusenc ! rtpopuspay ! "
                                      " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                     " queue leaky=1 ! tee name=audio audio. ! fakesink async=false %s",
-                                     app->audio_dev, cmdline);
+                                     " queue leaky=1 ! udpsink port=%d host=%s async=false sync=false  %s",
+                                     app->audio_dev, app->udpport + 1, app->udphost, cmdline);
         g_free(cmdline);
         cmdline = g_strdup(tmp);
         g_free(tmp);
     }
 
-    app->pipeline = gst_parse_launch(cmdline, NULL);
+    g_print("pipeline: %s\n", cmdline);
+    app->pipeline = gst_parse_launch(cmdline, &error);
 
-    // if (error) {
-    //     gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
-    //     g_print("%s", message);
-    //     g_free(message);
-    //     g_error_free(error);
-    // }
+    if (error) {
+        gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
+        g_print("%s", message);
+        g_free(message);
+        g_error_free(error);
+    }
 
     g_free(cmdline);
     g_free(textoverlay);

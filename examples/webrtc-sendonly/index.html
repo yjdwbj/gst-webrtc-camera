@@ -91,7 +91,7 @@
       var wsPath = (path != undefined) ? path : "ws";
       if (wsPort)
         wsPort = ":" + wsPort;
-      var wsUrl = "ws://" + wsHost + wsPort + "/" + wsPath;
+      var wsUrl = "wss://" + wsHost + wsPort + "/" + wsPath;
 
       webrtcPeerConnection = new RTCPeerConnection(stun_config);
       webrtcPeerConnection.ontrack = onAddRemoteStream;
