@@ -1,0 +1,63 @@
+{
+  "videnc": "h264",
+  "http": {
+    "port": 57778,
+    "host": "127.0.0.1",
+    "user": "test",
+    "password": "testsoup"
+  },
+  "v4l2src": {
+    "width": 1920,
+    "height": 1080,
+    "framerate": 30,
+    "io_mode": 2,
+    "device": "/dev/video0",
+    "type": "video/x-raw(memory:NVMM)",
+    "format": "NV12"
+  },
+  "audio": {
+    "enable": false,
+    "path": 0,
+    "buf_time": 5000000,
+    "device": "hw0"
+  },
+  "rootdir": "./",
+  "showdot": true,
+  "udp": {
+    "enable": false,
+    "port": 5000,
+    "host": "127.0.0.1",
+    "multicast": false
+  },
+  "webrtc": {
+    "enable": true,
+    "turn": {
+      "url": "192.168.1.100:3478",
+      "user": "test",
+      "pwd": "test123"
+    },
+    "stun":"stun://stun.l.google.com:19302",
+    "udpsink": {
+      "port": 7000,
+      "addr": "224.1.1.2",
+      "multicast": false
+    }
+  },
+  "splitfile_sink": false,
+  "app_sink": false,
+  "motion_rec": false,
+  "sysinfo": false,
+  "rec_len": 20,
+  "hls_onoff": {
+    "av_hlssink": false,
+    "motion_hlssink": true,
+    "edge_hlssink": true,
+    "cvtracker_hlssink": true,
+    "facedetect_hlssink": false
+  },
+  "hls": {
+    "duration": 10,
+    "files": 10,
+    "showtext": true
+  }
+}
