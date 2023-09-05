@@ -136,7 +136,8 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     // gchar *turn_srv = NULL;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (intptr_t)(receiver_entry->connection));
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 !  %s. ",
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " rtph264depay ! rtph264pay config-interval=-1  aggregate-mode=1 ! %s. ",
                                        app->udpport, app->udphost, webrtc_name);
     if (app->audio_dev != NULL) {
         gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
@@ -666,7 +667,7 @@ int main(int argc, char *argv[]) {
     if (gst_element_factory_find("vaapih264enc"))
         enc = g_strdup("vaapih264enc");
     else if (gst_element_factory_find("v4l2h264enc"))
-        enc = g_strdup(" videoconvert ! v4l2h264enc");
+        enc = g_strdup(" video/x-raw,format=I420 ! v4l2h264enc");
     else
         enc = g_strdup(" video/x-raw,format=I420 ! x264enc ! h264parse");
 

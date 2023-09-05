@@ -1744,8 +1744,10 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     g_print("webrtc_name----------> : %s\n", webrtc_name);
 
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 !  %s. ",
+    // here must have rtph264depay and rtph264pay to be compatible with  mobile browser.
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  onvif-no-rate-contro=true ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
+                                       " rtph264depay ! rtph264pay config-interval=-1  aggregate-mode=1 !  %s. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, webrtc_name);
     g_free(upenc);
 
