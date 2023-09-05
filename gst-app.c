@@ -2373,7 +2373,7 @@ int motion_hlssink() {
 #else
 int motion_hlssink() {
     GstElement *hlssink, *videoparse, *pre_convert, *post_convert;
-    GstElement *queue, *motioncells, *encoder, *mpegtsmux;
+    GstElement *queue, *motioncells, *encoder, *mpegtsmux, *clock;
     if (!_check_initial_status())
         return -1;
 
@@ -2387,12 +2387,14 @@ int motion_hlssink() {
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(motioncells, "motioncells");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
+    MAKE_ELEMENT_AND_ADD(clock, "clockoverlay");
+    g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
     g_object_set(queue, "leaky", 1, NULL);
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
         MAKE_ELEMENT_AND_ADD(textoverlay, "textoverlay");
         if (!gst_element_link_many(pre_convert, motioncells, post_convert,
-                                   textoverlay, encoder, queue, videoparse,
+                                   textoverlay, clock, encoder, queue, videoparse,
                                    mpegtsmux, hlssink, NULL)) {
             g_error("Failed to link elements motion sink.\n");
             return -1;
@@ -2402,9 +2404,8 @@ int motion_hlssink() {
                      "halignment", 0, // left
                      NULL);
     } else {
-        if (!gst_element_link_many(pre_convert, motioncells, post_convert,
-                                   encoder, queue, videoparse,
-                                   mpegtsmux, hlssink, NULL)) {
+        if (!gst_element_link_many(pre_convert, motioncells, post_convert, clock,
+                                   encoder, queue, videoparse, mpegtsmux, hlssink, NULL)) {
             g_error("Failed to link elements motion sink.\n");
             return -1;
         }
@@ -2431,13 +2432,15 @@ int cvtracker_hlssink() {
     _mkdir(outdir, 0755);
     gchar *hlssinkstr = get_hlssink_string(outdir, "/cvtracker-%05d.ts");
 
-    gchar *hlsbin = get_hlssink_bin("cvtracker");
+    gchar *hlsbin = get_hlssink_bin("cvtracker object-initial-x=600 object-initial-y=300 object-initial-height=100 object-initial-width=100");
+
     gchar *binstr = g_strdup_printf(" %s ! %s ",
                                     hlsbin, hlssinkstr);
     g_free(hlsbin);
     // g_print("cmdline: %s\n", binstr);
     GError *error = NULL;
     trackerbin = gst_parse_bin_from_description(binstr, TRUE, &error);
+
     if (error) {
         gchar *message = g_strdup_printf("Unable to tracker bin: %s\n", error->message);
         g_print("%s", message);
@@ -2454,7 +2457,8 @@ int cvtracker_hlssink() {
 #else
 int cvtracker_hlssink() {
     GstElement *hlssink, *videoparse, *pre_convert, *post_convert;
-    GstElement *queue, *cvtracker, *encoder, *mpegtsmux;
+    GstElement *queue, *cvtracker, *encoder, *mpegtsmux, *clock;
+
     if (!_check_initial_status())
         return -1;
 
@@ -2468,12 +2472,14 @@ int cvtracker_hlssink() {
     MAKE_ELEMENT_AND_ADD(post_convert, "videoconvert");
     MAKE_ELEMENT_AND_ADD(cvtracker, "cvtracker");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
-    g_object_set(queue, "leaky", 1, NULL);
+    MAKE_ELEMENT_AND_ADD(clock, "clockoverlay");
+    g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
+    g_object_set(cvtracker, "object-initial-x", 600, "object-initial-y", 300, "object-initial-height", 100, "object-initial-width", 100, NULL);
     if (config_data.hls.showtext) {
         GstElement *textoverlay;
         MAKE_ELEMENT_AND_ADD(textoverlay, "textoverlay");
         if (!gst_element_link_many(pre_convert, cvtracker, post_convert,
-                                   textoverlay, encoder, queue, videoparse,
+                                   textoverlay, clock, encoder, queue, videoparse,
                                    mpegtsmux, hlssink, NULL)) {
             g_error("Failed to link elements cvtracker sink.\n");
             return -1;
@@ -2483,8 +2489,7 @@ int cvtracker_hlssink() {
                      "halignment", 0, // left
                      NULL);
     } else {
-        if (!gst_element_link_many(pre_convert, cvtracker, post_convert,
-                                   encoder, queue, videoparse,
+        if (!gst_element_link_many(pre_convert, cvtracker, post_convert, clock, encoder, queue, videoparse,
                                    mpegtsmux, hlssink, NULL)) {
             g_error("Failed to link elements motion sink.\n");
             return -1;
@@ -2723,26 +2728,24 @@ GstElement *create_instance() {
     if (config_data.splitfile_sink)
         splitfile_sink();
 
-    if (g_str_has_prefix(config_data.videnc, "h26")) {
-        // mpegtsmux not support video/x-vp9
-        if (config_data.udp.enable)
-            udp_multicastsink();
+    // mpegtsmux not support video/x-vp9
+    if (config_data.udp.enable)
+        udp_multicastsink();
 
-        if (config_data.hls_onoff.av_hlssink)
-            av_hlssink();
+    if (config_data.hls_onoff.av_hlssink)
+        av_hlssink();
 
-        if (config_data.hls_onoff.edge_hlssink)
-            edgedect_hlssink();
+    if (config_data.hls_onoff.edge_hlssink)
+        edgedect_hlssink();
 
-        if (config_data.hls_onoff.cvtracker_hlssink)
-            cvtracker_hlssink();
+    if (config_data.hls_onoff.cvtracker_hlssink)
+        cvtracker_hlssink();
 
-        if (config_data.hls_onoff.facedetect_hlssink)
-            facedetect_hlssink();
+    if (config_data.hls_onoff.facedetect_hlssink)
+        facedetect_hlssink();
 
-        if (config_data.hls_onoff.motion_hlssink) {
-            motion_hlssink();
-        }
+    if (config_data.hls_onoff.motion_hlssink) {
+        motion_hlssink();
     }
     if (config_data.app_sink) {
         start_av_appsink();
