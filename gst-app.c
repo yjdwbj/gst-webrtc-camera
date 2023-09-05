@@ -1739,16 +1739,24 @@ static void stop_udpsrc_webrtc(gpointer user_data) {
 
 void start_udpsrc_webrtcbin(WebrtcItem *item) {
     gchar *cmdline = NULL;
+    gchar *video_src = NULL;
     // gchar *turn_srv = NULL;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, item->hash_id);
     g_print("webrtc_name----------> : %s\n", webrtc_name);
 
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
     // here must have rtph264depay and rtph264pay to be compatible with  mobile browser.
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  onvif-no-rate-contro=true ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                       " rtph264depay ! rtph264pay config-interval=-1  aggregate-mode=1 !  %s. ",
-                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, webrtc_name);
+
+    if (g_str_has_prefix(config_data.videnc, "h26"))
+        video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  ! "
+                                    " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
+                                    " rtp%sdepay ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
+                                    config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc, webrtc_name);
+    else
+        video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  ! "
+                                    " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
+                                    " %s. ",
+                                    config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, webrtc_name);
     g_free(upenc);
 
     if (audio_source != NULL) {
