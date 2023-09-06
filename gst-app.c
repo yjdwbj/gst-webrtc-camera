@@ -835,13 +835,13 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     g_free(filename);
     g_free(timestr);
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  name=video_save ! "
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo  name=video_save ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " rtp%sdepay ! %sparse !  queue leaky=1 ! mux. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc);
     g_free(upenc);
     if (config_data.audio.enable) {
-        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
+        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo name=audio_save  ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                            " rtpopusdepay ! opusparse ! queue leaky=1 ! mux.",
                                            config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
@@ -937,14 +937,14 @@ static int start_udpsrc_rec(gpointer user_data) {
     g_free(outdir);
 
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  name=video_save ! "
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo name=video_save ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " rtp%sdepay ! %sparse ! queue leaky=1 ! mux. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc);
     g_free(upenc);
 
     if (audio_source != NULL) {
-        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s name=audio_save  ! "
+        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo  name=audio_save  ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                            " rtpopusdepay ! opusparse ! queue leaky=1 ! mux.",
                                            config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
@@ -1748,19 +1748,19 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     // here must have rtph264depay and rtph264pay to be compatible with  mobile browser.
 
     if (g_str_has_prefix(config_data.videnc, "h26"))
-        video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  ! "
+        video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                     " rtp%sdepay ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
                                     config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc, webrtc_name);
     else
-        video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  ! "
+        video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                     " %s. ",
                                     config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, webrtc_name);
     g_free(upenc);
 
     if (audio_source != NULL) {
-        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
+        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                            " rtpopusdepay ! rtpopuspay !  "
                                            " queue leaky=1 ! %s.",
@@ -1815,7 +1815,8 @@ int start_av_udpsink() {
     g_object_set(video_sink, "sync", FALSE, "async", FALSE,
                  "port", config_data.webrtc.udpsink.port,
                  "host", config_data.webrtc.udpsink.addr,
-                 "auto-multicast", config_data.webrtc.udpsink.multicast, NULL);
+                 "multicast-iface","lo",
+                 "auto-multicast",config_data.webrtc.udpsink.multicast, NULL);
 
     if (g_str_has_prefix(config_data.videnc, "h26")) {
         g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
@@ -1836,6 +1837,7 @@ int start_av_udpsink() {
         g_object_set(audio_sink, "sync", FALSE, "async", FALSE,
                      "port", config_data.webrtc.udpsink.port + 1,
                      "host", config_data.webrtc.udpsink.addr,
+                     "multicast-iface", "lo",
                      "auto-multicast", config_data.webrtc.udpsink.multicast, NULL);
         g_object_set(audio_pay, "pt", 97, NULL);
         /* link to upstream. */
@@ -2432,7 +2434,7 @@ int cvtracker_hlssink() {
     _mkdir(outdir, 0755);
     gchar *hlssinkstr = get_hlssink_string(outdir, "/cvtracker-%05d.ts");
 
-    gchar *hlsbin = get_hlssink_bin("cvtracker object-initial-x=600 object-initial-y=300 object-initial-height=100 object-initial-width=100");
+    gchar *hlsbin = get_hlssink_bin("cvtracker object-initial-x=400 object-initial-y=200 object-initial-height=100 object-initial-width=100");
 
     gchar *binstr = g_strdup_printf(" %s ! %s ",
                                     hlsbin, hlssinkstr);

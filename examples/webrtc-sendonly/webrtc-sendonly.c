@@ -24,7 +24,6 @@
 
 #define SOUP_HTTP_PORT 57778
 #define STUN_SERVER "stun://stun.l.google.com:19302"
-#define TURN_SERVER "turn://test:test123@192.168.1.100:3478"
 
 typedef struct _APPData AppData;
 struct _APPData {
@@ -44,7 +43,7 @@ struct _APPData {
 
 static AppData gs_app = {
     NULL, NULL, NULL, NULL,
-    "/dev/video0", "video/x-raw,width=800,height=600,format=YUY2,framerate=25/1", NULL, "test", "test1234", 57778, "224.1.1.5", 5000};
+    "/dev/video0", "video/x-raw,width=800,height=600,format=YUY2,framerate=25/1", NULL, "test", "test1234", 57778, "127.0.0.1", 5000};
 
 static void start_http(AppData *app);
 
@@ -135,12 +134,12 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
 
     // gchar *turn_srv = NULL;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (intptr_t)(receiver_entry->connection));
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  ! "
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! rtph264pay config-interval=-1  aggregate-mode=1 ! %s. ",
                                        app->udpport, app->udphost, webrtc_name);
     if (app->audio_dev != NULL) {
-        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s ! "
+        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                            " rtpopusdepay ! rtpopuspay !  "
                                            " queue leaky=1 ! %s.",
@@ -692,7 +691,7 @@ int main(int argc, char *argv[]) {
     gchar *cmdline = g_strdup_printf(
         "v4l2src device=%s ! %s ! videoconvert ! %s ! %s ! %s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
         " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-        " queue leaky=1  ! udpsink port=%d host=%s async=false sync=false ",
+        " queue leaky=1  ! udpsink port=%d host=%s multicast-iface=lo async=false sync=false ",
         app->video_dev, strvcaps, clockstr, textoverlay, enc, app->udpport, app->udphost);
     g_free(strvcaps);
     g_free(enc);
@@ -700,7 +699,7 @@ int main(int argc, char *argv[]) {
     if (app->audio_dev != NULL) {
         gchar *tmp = g_strdup_printf("alsasrc device=%s ! audioconvert ! opusenc ! rtpopuspay ! "
                                      " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                     " queue leaky=1 ! udpsink port=%d host=%s async=false sync=false  %s",
+                                     " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=lo async=false sync=false  %s",
                                      app->audio_dev, app->udpport + 1, app->udphost, cmdline);
         g_free(cmdline);
         cmdline = g_strdup(tmp);
