@@ -35,6 +35,7 @@ struct _webrtc {
         gchar *url;
         gchar *user;
         gchar *pwd;
+        gboolean enable;
     } turn;
     const gchar *stun;
     struct _udpsink {

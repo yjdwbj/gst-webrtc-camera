@@ -800,6 +800,16 @@ void udpsrc_cmd_rec_stop(gpointer user_data) {
 
 int get_record_state() { return cmd_recording ? 1 : 0; }
 
+
+static gchar *udpsrc_audio_cmdline(const gchar *sink)
+{
+    gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo ! "
+                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                       " rtpopusdepay ! rtpopuspay !  queue leaky=1 ! %s.",
+                                       config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr, sink);
+    return audio_src;
+}
+
 void udpsrc_cmd_rec_start(gpointer user_data) {
     /**
      * @brief I want to create a module for recording, but it cannot be dynamically added and deleted while the pipeline is running。
@@ -835,16 +845,13 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     g_free(filename);
     g_free(timestr);
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo  name=video_save ! "
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " rtp%sdepay ! %sparse !  queue leaky=1 ! mux. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc);
     g_free(upenc);
     if (config_data.audio.enable) {
-        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo name=audio_save  ! "
-                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay ! opusparse ! queue leaky=1 ! mux.",
-                                           config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
+        gchar *audio_src = udpsrc_audio_cmdline("mux");
         cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
         g_free(audio_src);
     } else {
@@ -937,17 +944,14 @@ static int start_udpsrc_rec(gpointer user_data) {
     g_free(outdir);
 
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo name=video_save ! "
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " rtp%sdepay ! %sparse ! queue leaky=1 ! mux. ",
                                        config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc);
     g_free(upenc);
 
     if (audio_source != NULL) {
-        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo  name=audio_save  ! "
-                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay ! opusparse ! queue leaky=1 ! mux.",
-                                           config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr);
+        gchar *audio_src = udpsrc_audio_cmdline("mux");
         cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
         g_free(audio_src);
     } else {
@@ -1658,6 +1662,17 @@ on_remove_decodebin_stream(GstElement *srcbin, GstPad *pad,
     g_free(name);
 }
 
+static void webrtcbin_add_turn(GstElement *webrtcbin)
+{
+    gboolean ret;
+    gchar *url = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user,
+                                 config_data.webrtc.turn.pwd,
+                                 config_data.webrtc.turn.url);
+    g_signal_emit_by_name(webrtcbin, "add-turn-server",
+                          url, ret);
+    g_free(url);
+}
+
 static void start_recv_webrtcbin(gpointer user_data) {
     WebrtcItem *item = (WebrtcItem *)user_data;
     // gchar *turn_srv;
@@ -1671,6 +1686,9 @@ static void start_recv_webrtcbin(gpointer user_data) {
 
     item->recv.recvbin = gst_element_factory_make("webrtcbin", bin_name);
     g_object_set(item->recv.recvbin, "stun-server", config_data.webrtc.stun, NULL);
+    if (config_data.webrtc.turn.enable) {
+        webrtcbin_add_turn(item->recv.recvbin);
+    }
     // g_free(turn_srv);
     g_free(pipe_name);
     g_free(bin_name);
@@ -1760,11 +1778,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     g_free(upenc);
 
     if (audio_source != NULL) {
-        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo ! "
-                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                           " rtpopusdepay ! rtpopuspay !  "
-                                           " queue leaky=1 ! %s.",
-                                           config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr, webrtc_name);
+        gchar *audio_src = udpsrc_audio_cmdline(webrtc_name);
         cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
         g_print("webrtc cmdline: %s \n", cmdline);
         g_free(audio_src);
@@ -1783,6 +1797,9 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     g_free(cmdline);
 
     item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
+    if (config_data.webrtc.turn.enable) {
+        webrtcbin_add_turn(item->sendbin);
+    }
     g_free(webrtc_name);
     item->record.get_rec_state = &get_record_state;
     item->record.start = &udpsrc_cmd_rec_start;
@@ -1815,8 +1832,8 @@ int start_av_udpsink() {
     g_object_set(video_sink, "sync", FALSE, "async", FALSE,
                  "port", config_data.webrtc.udpsink.port,
                  "host", config_data.webrtc.udpsink.addr,
-                 "multicast-iface","lo",
-                 "auto-multicast",config_data.webrtc.udpsink.multicast, NULL);
+                 "multicast-iface", "lo",
+                 "auto-multicast", config_data.webrtc.udpsink.multicast, NULL);
 
     if (g_str_has_prefix(config_data.videnc, "h26")) {
         g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
@@ -1847,7 +1864,7 @@ int start_av_udpsink() {
         }
         link_request_src_pad(audio_source, aqueue);
     }
-#if 1
+#if 0
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "udpsink_webrtc");
 #endif
     return 0;
@@ -1869,6 +1886,9 @@ void start_webrtcbin(WebrtcItem *item) {
     g_print("webrtc_name: %s\n", webrtc_name);
     item->sendbin = gst_element_factory_make("webrtcbin", webrtc_name);
     g_object_set(item->sendbin, "stun-server", config_data.webrtc.stun, NULL);
+    if (config_data.webrtc.turn.enable) {
+        webrtcbin_add_turn(item->sendbin);
+    }
     g_free(webrtc_name);
     g_assert(item->sendbin != NULL);
     gst_bin_add(GST_BIN(pipeline), item->sendbin);
@@ -1999,6 +2019,9 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     g_free(cmdline);
 
     item->sendbin = gst_bin_get_by_name(GST_BIN(item->sendpipe), webrtc_name);
+    if (config_data.webrtc.turn.enable) {
+        webrtcbin_add_turn(item->sendbin);
+    }
     g_free(webrtc_name);
 
     webrtc_name = g_strdup_printf("video_%" G_GUINT64_FORMAT, item->hash_id);

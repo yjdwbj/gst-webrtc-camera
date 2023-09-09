@@ -234,6 +234,7 @@ static void read_config_json(gchar *fullpath) {
         config_data.webrtc.turn.url = g_strdup(json_object_get_string_member(turn_obj, "url"));
         config_data.webrtc.turn.user = g_strdup(json_object_get_string_member(turn_obj, "user"));
         config_data.webrtc.turn.pwd = g_strdup(json_object_get_string_member(turn_obj, "pwd"));
+        config_data.webrtc.turn.enable = json_object_get_boolean_member(turn_obj, "enable");
 
         turn_obj = json_object_get_object_member(object, "udpsink");
         config_data.webrtc.udpsink.port = json_object_get_int_member(turn_obj, "port");
