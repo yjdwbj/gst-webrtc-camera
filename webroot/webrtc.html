@@ -82,6 +82,11 @@
     let mediaRecorder;
     let elapseTimer;
 
+    // video snapshot
+    let screenShot;
+    let videoCanvas;
+    let videoContent;
+
     // var vConsole = new window.VConsole();
     const turn_config = {
       'iceServers': [{
@@ -267,6 +272,7 @@
       };
     }
 
+
     // buttons control
     window.onload = function () {
       listCamerasAndMicrophone();
@@ -274,6 +280,7 @@
       startRecord = document.getElementById('startRecord');
       enableTalk = document.getElementById('enableTalk');
       sendVoice = document.getElementById('sendVoice');
+      screenShot = document.getElementById('screenShot');
 
       canvas = document.getElementById('visualizer');
       canvasCtx = canvas.getContext('2d');
@@ -281,6 +288,8 @@
       startRecord.disabled = true;
       enableTalk.disabled = true;
       sendVoice.disabled = true;
+      screenShot.disabled = true;
+
       document.querySelector('.visualizer').style['display'] = "none";
 
       startWatch.addEventListener('click', (event) => {
@@ -444,6 +453,35 @@
         sendVoice.innerHTML = isVoiceRecord ? "Send Voice" : "Start Voice";
         enableTalk.disabled = isVoiceRecord;
       });
+
+      screenShot.addEventListener('click', (evt) => {
+        evt.preventDefault();
+        const video = document.querySelector('video');
+        console.log(`vidoe node name: ${video.nodeName}`);
+        videoContent.fillRect(0, 0, videoCanvas.width, videoCanvas.height);
+        // Grab the image from the video
+        videoContent.drawImage(video, 0, 0, videoCanvas.width, videoCanvas.height);
+        var m = new Date();
+        var dateString = "ScreenShot-" +
+          m.getUTCFullYear() +
+          ("0" + (m.getUTCMonth() + 1)).slice(-2) +
+          ("0" + m.getUTCDate()).slice(-2) + "_" +
+          ("0" + m.getUTCHours()).slice(-2) +
+          ("0" + m.getUTCMinutes()).slice(-2) +
+          ("0" + m.getUTCSeconds()).slice(-2) + ".png";
+        let fileName = dateString;
+        fileName = prompt('Enter a name for image save?', dateString);
+        if (fileName != null) {
+          var link = document.createElement('a');
+          link.download = fileName;
+          link.href = videoCanvas.toDataURL('image/png',1.0);
+          link.click();
+        } else {
+          console.log("cancel save image!");
+        }
+
+      });
+
     }
 
     // recvonly webrtc
@@ -483,15 +521,27 @@
       startRecord.innerHTML = isRecord ? "Stop Record" : "Start Record";
     }
 
+
+
     function onAddRemoteStream(event) {
       // var el = document.createElement(event.track.kind)
-      const el = document.getElementById('video0');
+      const el = document.querySelector('video');
       el.srcObject = event.streams[0]
       el.autoplay = true
       el.controls = true
+      videoCanvas = document.getElementById('screenshot');
+      videoContent = videoCanvas.getContext('2d');
+
+      el.addEventListener('loadedmetadata', function () {
+        videoCanvas.width = el.videoWidth;
+        videoCanvas.height = el.videoHeight;
+        console.log(`video size width ${videoCanvas.width}, height: ${videoCanvas.height}`);
+      }, false);
+
 
       // enable other two buttons
       changeButtonState(startRecord, false);
+      changeButtonState(screenShot, false);
       changeButtonState(enableTalk, hasCamera ? false : true);
       changeButtonState(sendVoice, hasMicroPhone ? false : true);
 
@@ -624,12 +674,14 @@
         <canvas class="w-75" id="visualizer"></canvas>
       </div>
       <div id="elapse"></div>
+      <canvas style="display: none;" id="screenshot"></canvas>
       <section class="main-controls">
         <div class="mt-3" id="buttons">
           <button type="button" class="btn btn-info" id="startWatch">Start</button>
           <button type="button" class="btn btn-light" id="startRecord">Start Record</button>
           <button type="button" class="btn btn-light" id="enableTalk">Video on</button>
           <button type="button" class="btn btn-light" id="sendVoice">Start Voice</button>
+          <button type="button" class="btn btn-light" id="screenShot">ScreenShot</button>
         </div>
       </section>
     </div>

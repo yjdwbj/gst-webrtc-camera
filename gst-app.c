@@ -1669,7 +1669,7 @@ static void webrtcbin_add_turn(GstElement *webrtcbin)
                                  config_data.webrtc.turn.pwd,
                                  config_data.webrtc.turn.url);
     g_signal_emit_by_name(webrtcbin, "add-turn-server",
-                          url, ret);
+                          url, &ret);
     g_free(url);
 }
 
