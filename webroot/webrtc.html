@@ -316,24 +316,24 @@
               }, 200);
             }
           }
-
-          document.getElementById('ctrls').innerHTML += '<button type="button" class="btn btn-primary" id="resetCtrls">Reset</button>'
-          setTimeout(() => {
-            document.getElementById('resetCtrls').addEventListener('click', (evt) => {
-              localdc.send(JSON.stringify({
-                "type": "v4l2", "reset": true
-              }));
-              for (let [key, value] of Object.entries(userCtrls)) {
-                if (value.type == 1) {
-                  document.getElementById(key).value = value.default;
-                } else if (value.type == 2) {
-                  document.getElementById(key).checked  = value.default > 0;
+          if (Object.keys(userCtrls).length) {
+            document.getElementById('ctrls').innerHTML += '<button type="button" class="btn btn-primary" id="resetCtrls">Reset</button>'
+            setTimeout(() => {
+              document.getElementById('resetCtrls').addEventListener('click', (evt) => {
+                localdc.send(JSON.stringify({
+                  "type": "v4l2", "reset": true
+                }));
+                for (let [key, value] of Object.entries(userCtrls)) {
+                  if (value.type == 1) {
+                    document.getElementById(key).value = value.default;
+                  } else if (value.type == 2) {
+                    document.getElementById(key).checked = value.default > 0;
+                  }
                 }
-              }
-            });
-          }, 200);
+              });
+            }, 200);
+          }
         }
-
       };
 
       localdc.onopen = () => {

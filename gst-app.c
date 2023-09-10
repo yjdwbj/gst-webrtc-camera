@@ -1785,7 +1785,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     // here must have rtph264depay and rtph264pay to be compatible with  mobile browser.
 
     if (g_str_has_prefix(config_data.videnc, "h26"))
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(5, 6, 16)
+#if defined(HAS_JETSON_NANO)
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                     " rtp%sdepay ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",

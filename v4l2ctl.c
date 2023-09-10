@@ -116,12 +116,12 @@ int reset_user_ctrls(const gchar *device) {
     }
     queryctrl.id = V4L2_CTRL_CLASS_USER | V4L2_CTRL_FLAG_NEXT_CTRL;
     while (0 == ioctl(fd, VIDIOC_QUERYCTRL, &queryctrl)) {
+        // jetson nano b01 imx219 only have  Camera class controls, Not yet support it. V4L2_CTRL_CLASS_CAMERA		0x009a0000
         if (V4L2_CTRL_ID2CLASS(queryctrl.id) != V4L2_CTRL_CLASS_USER)
             break;
         if (queryctrl.flags & V4L2_CTRL_FLAG_DISABLED)
             continue;
-        if (queryctrl.id < V4L2_CID_BASE)
-        {
+        if (queryctrl.id < V4L2_CID_BASE) {
             queryctrl.id |= V4L2_CTRL_FLAG_NEXT_CTRL;
             continue;
         }
