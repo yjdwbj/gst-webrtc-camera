@@ -30,6 +30,7 @@
 #include <sys/types.h>
 
 #include "v4l2ctl.h"
+#include <linux/version.h>
 
 static GstElement *pipeline;
 static GstElement *video_source, *audio_source, *video_encoder;
@@ -201,16 +202,24 @@ static gchar *get_shellcmd_results(const gchar *shellcmd) {
     return val;
 }
 
+#include <sys/utsname.h>
 static gchar *get_basic_sysinfo() {
     // g_file_get_contents("/etc/lsb-release", &contents, NULL, NULL);
+    struct utsname buffer;
+    memset(&buffer, 0, sizeof(buffer));
+    uname(&buffer);
+
     gchar *cpumodel = get_shellcmd_results("cat /proc/cpuinfo | grep 'model name' | head -n1 | awk -F ':' '{print \"CPU:\"$2}'");
     gchar *memsize = get_shellcmd_results("free -h | awk 'NR==2{print $1$2}'");
-    gchar *kerstr = get_shellcmd_results("uname -a");
-    gchar *line = g_strconcat(cpumodel, "\t", memsize, kerstr, NULL);
+    // gchar *kerstr = get_shellcmd_results("uname -a");
+    gchar *line = g_strconcat(cpumodel, "\t", memsize, "\n",
+                              buffer.sysname, "\t", buffer.nodename, "\t",
+                              buffer.release, "\t", buffer.version, "\t",
+                              buffer.machine, NULL);
 
     g_free(cpumodel);
     g_free(memsize);
-    g_free(kerstr);
+    // g_free(kerstr);
     return line;
 }
 
@@ -1596,7 +1605,7 @@ data_channel_on_message_string(GObject *dc, gchar *str, gpointer user_data) {
     } else if (!g_strcmp0(type_string, "v4l2")) {
         if (json_object_has_member(root_json_object, "reset")) {
             gboolean isTrue = json_object_get_boolean_member(root_json_object, "reset");
-            if(isTrue)
+            if (isTrue)
                 reset_user_ctrls(config_data.v4l2src_data.device);
         } else if (json_object_has_member(root_json_object, "ctrl")) {
             JsonObject *ctrl_object = json_object_get_object_member(root_json_object, "ctrl");
@@ -1776,10 +1785,17 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     // here must have rtph264depay and rtph264pay to be compatible with  mobile browser.
 
     if (g_str_has_prefix(config_data.videnc, "h26"))
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(5, 6, 16)
+        video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  ! "
+                                    " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
+                                    " rtp%sdepay ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
+                                    config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc, webrtc_name);
+#else
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                     " rtp%sdepay ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
                                     config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc, webrtc_name);
+#endif
     else
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "

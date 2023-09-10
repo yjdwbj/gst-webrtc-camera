@@ -86,6 +86,7 @@
     let screenShot;
     let videoCanvas;
     let videoContent;
+    let ctrlPanel;
 
     // v4l2 user ctrls
 
@@ -354,6 +355,7 @@
       enableTalk = document.getElementById('enableTalk');
       sendVoice = document.getElementById('sendVoice');
       screenShot = document.getElementById('screenShot');
+      ctrlPanel = document.getElementById('ctrlPanel');
 
       canvas = document.getElementById('visualizer');
       canvasCtx = canvas.getContext('2d');
@@ -362,6 +364,8 @@
       enableTalk.disabled = true;
       sendVoice.disabled = true;
       screenShot.disabled = true;
+      ctrlPanel.disabled = true;
+
 
       document.querySelector('.visualizer').style['display'] = "none";
 
@@ -605,7 +609,7 @@
       el.srcObject = event.streams[0]
       el.autoplay = true
       el.controls = true
-      videoCanvas = document.getElementById('screenshot');
+      videoCanvas = document.getElementById('videoCanvas');
       videoContent = videoCanvas.getContext('2d');
 
       el.addEventListener('loadedmetadata', function () {
@@ -620,6 +624,7 @@
       changeButtonState(screenShot, false);
       changeButtonState(enableTalk, hasCamera ? false : true);
       changeButtonState(sendVoice, hasMicroPhone ? false : true);
+      changeButtonState(ctrlPanel, false);
 
       document.getElementById('loading').style['display'] = "none";
     }
@@ -750,7 +755,7 @@
         <canvas class="w-75" id="visualizer"></canvas>
       </div>
       <div id="elapse"></div>
-      <canvas style="display: none;" id="screenshot"></canvas>
+      <canvas style="display: none;" id="videoCanvas"></canvas>
       <section class="main-controls">
         <div class="mt-3" id="buttons">
           <button type="button" class="btn btn-info" id="startWatch">Start</button>
@@ -758,8 +763,8 @@
           <button type="button" class="btn btn-light" id="enableTalk">Video on</button>
           <button type="button" class="btn btn-light" id="sendVoice">Start Voice</button>
           <button type="button" class="btn btn-light" id="screenShot">ScreenShot</button>
-          <button class="btn btn-info" type="button" data-bs-toggle="offcanvas" data-bs-target="#offcanvasRight"
-            aria-controls="offcanvasRight">Control Panel</button>
+          <button class="btn btn-light" type="button" data-bs-toggle="offcanvas" data-bs-target="#offcanvasRight"
+            aria-controls="offcanvasRight" id="ctrlPanel">Control Panel</button>
         </div>
       </section>
       <div class="offcanvas offcanvas-end overflow-hidden" tabindex="-1" id="offcanvasRight"
