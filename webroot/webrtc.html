@@ -245,7 +245,7 @@
           if (evt.target.value == 'on') {
             sval = evt.target.checked ? 1 : 0;
           } else {
-            sval = value.converted ? (0 - parseInt(value.max, 10) / 2) + parseInt(evt.target.value, 10) : parseInt(evt.target.value, 10);
+            sval = value.converted ? parseInt(evt.target.value, 10) - (0 - parseInt(value.max, 10) / 2) : parseInt(evt.target.value, 10);
             // console.log("target  is convertd: " + value.converted + " value change is: " + evt.target.value + " sval: " + sval);
           }
           localdc.send(JSON.stringify({
@@ -316,6 +316,7 @@
               }, 200);
             }
           }
+          // console.log(JSON.stringify(userCtrls));
           if (Object.keys(userCtrls).length) {
             document.getElementById('ctrls').innerHTML += '<button type="button" class="btn btn-primary" id="resetCtrls">Reset</button>'
             setTimeout(() => {
@@ -325,7 +326,11 @@
                 }));
                 for (let [key, value] of Object.entries(userCtrls)) {
                   if (value.type == 1) {
-                    document.getElementById(key).value = value.default;
+                    if (value.converted) {
+                      document.getElementById(key).value = parseInt(value.default, 10) - (0 - parseInt(value.max, 10) / 2);
+                    } else {
+                      document.getElementById(key).value = value.default;
+                    }
                   } else if (value.type == 2) {
                     document.getElementById(key).checked = value.default > 0;
                   }
