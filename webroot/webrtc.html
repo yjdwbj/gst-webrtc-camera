@@ -87,6 +87,10 @@
     let videoCanvas;
     let videoContent;
 
+    // v4l2 user ctrls
+
+    let userCtrls;
+
     // var vConsole = new window.VConsole();
     const turn_config = {
       'iceServers': [{
@@ -232,6 +236,25 @@
       };
     }
 
+    function sendUserCtrl(evt) {
+      const name = evt.target.id;
+      for (let [key, value] of Object.entries(userCtrls)) {
+        if (key == name) {
+          let sval;
+          if (evt.target.value == 'on') {
+            sval = evt.target.checked ? 1 : 0;
+          } else {
+            sval = value.converted ? (0 - parseInt(value.max, 10) / 2) + parseInt(evt.target.value, 10) : parseInt(evt.target.value, 10);
+            // console.log("target  is convertd: " + value.converted + " value change is: " + evt.target.value + " sval: " + sval);
+          }
+          localdc.send(JSON.stringify({
+            "type": "v4l2",
+            "ctrl": { id: value.id, value: sval }
+          }));
+        }
+      }
+    }
+
     function createWebrtcRecv() {
       console.log("create webrtc receive peer.");
       webrtcPeerConnection = new RTCPeerConnection(stun_config);
@@ -260,6 +283,56 @@
         if (msg.notify) {
           alert(msg.notify);
         }
+        if (msg.ctrls) {
+          userCtrls = msg.ctrls;
+          document.getElementById('ctrls').innerHTML = '';
+          for (let [key, value] of Object.entries(userCtrls)) {
+            // convert -10, 10 to 0 - 20 for input range.
+            if (value.min < 0) {
+              userCtrls[key].max = Math.abs(value.min) + parseInt(value.max, 10);
+              userCtrls[key].value = Math.abs(value.min) + parseInt(value.value, 10);
+              userCtrls[key].converted = true;
+              userCtrls[key].min = 0;
+            }
+            let div;
+            let min = userCtrls[key].min;
+            let max = userCtrls[key].max;
+            let step = userCtrls[key].step;
+            let cval = userCtrls[key].value;
+            if (value.type == 1) {
+              div = '<li class="list-group-item"><label for="' + key + '" class="form-label">' + key + '</label>' +
+                '<input type="range" class="form-range" value="' + cval + '"  min="' + min + ' " max="' + max + '" step="' + step + '" id="' + key + '"></li>';
+            } else if (value.type == 2) {
+              div = '<li class="list-group-item"><div class="custom-control custom-switch">' +
+                '<input type="checkbox" class="custom-control-input" ' + (cval == 1 ? 'checked' : '') + ' id="' + key + '">' +
+                '<label class="custom-control-label" for="' + key + '">' + key + '</label></div></li>';
+            }
+            if (div != null) {
+              document.getElementById('ctrls').innerHTML += div;
+              setTimeout(() => {
+                console.log("run timeout");
+                document.getElementById(key).addEventListener('change', sendUserCtrl);
+              }, 200);
+            }
+          }
+
+          document.getElementById('ctrls').innerHTML += '<button type="button" class="btn btn-primary" id="resetCtrls">Reset</button>'
+          setTimeout(() => {
+            document.getElementById('resetCtrls').addEventListener('click', (evt) => {
+              localdc.send(JSON.stringify({
+                "type": "v4l2", "reset": true
+              }));
+              for (let [key, value] of Object.entries(userCtrls)) {
+                if (value.type == 1) {
+                  document.getElementById(key).value = value.default;
+                } else if (value.type == 2) {
+                  document.getElementById(key).checked  = value.default > 0;
+                }
+              }
+            });
+          }, 200);
+        }
+
       };
 
       localdc.onopen = () => {
@@ -384,7 +457,7 @@
           lowWaterMark = chunkSize;
           highWaterMark = blob.size;
           localdc.send(JSON.stringify({
-            "type": "cmd", "cmd": "sendfile",
+            "type": "sendfile",
             "file": { 'type': 'audio/ogg; codecs=opus', 'size': blob.size, "name": "voice-" + performance.now() + ".ogg" }
           }));
           // localdc.binaryType = 'arraybuffer';
@@ -474,7 +547,7 @@
         if (fileName != null) {
           var link = document.createElement('a');
           link.download = fileName;
-          link.href = videoCanvas.toDataURL('image/png',1.0);
+          link.href = videoCanvas.toDataURL('image/png', 1.0);
           link.click();
         } else {
           console.log("cancel save image!");
@@ -496,6 +569,9 @@
     async function onIncomingSDP(sdp) {
       console.log("Incoming SDP: " + JSON.stringify(sdp));
       if (sdp.type === "offer") {
+        const showsdp = document.getElementById('showsdp');
+        showsdp.value = '';
+        showsdp.value = sdp.sdp;
         await webrtcPeerConnection.setRemoteDescription(sdp).catch(reportError);
         webrtcPeerConnection.createAnswer().then(onLocalDescription).catch(reportError);
       } else {
@@ -682,8 +758,36 @@
           <button type="button" class="btn btn-light" id="enableTalk">Video on</button>
           <button type="button" class="btn btn-light" id="sendVoice">Start Voice</button>
           <button type="button" class="btn btn-light" id="screenShot">ScreenShot</button>
+          <button class="btn btn-info" type="button" data-bs-toggle="offcanvas" data-bs-target="#offcanvasRight"
+            aria-controls="offcanvasRight">Control Panel</button>
         </div>
       </section>
+      <div class="offcanvas offcanvas-end overflow-hidden" tabindex="-1" id="offcanvasRight"
+        aria-labelledby="offcanvasRightLabel">
+        <div class="offcanvas-header">
+          <label>Control Panel</label>
+          <button type="button" class="btn-close text-reset" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+        </div>
+        <div class="offcanvas-body d-flex flex-column py-0">
+          <div class="card">
+            <div class="card-header">
+              video user contorls
+            </div>
+            <div class="card-body m-0 p-0">
+              <ul class="list-group" id="ctrls">
+              </ul>
+            </div>
+          </div>
+          <div class="card flex-grow-1">
+            <div class="card-header">
+              SDP info
+            </div>
+            <div class="card-body m-0 p-0">
+              <textarea id="showsdp" class="w-100 h-100 m-0"></textarea>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </body>

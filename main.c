@@ -320,6 +320,7 @@ int main(int argc, char *argv[]) {
         read_config_json(fullpath);
         g_free(fullpath);
     }
+    // reset_user_ctrls(config_data.v4l2src_data.device);
 
     _get_cpuid();
 

@@ -29,6 +29,8 @@
 #include <sys/inotify.h>
 #include <sys/types.h>
 
+#include "v4l2ctl.h"
+
 static GstElement *pipeline;
 static GstElement *video_source, *audio_source, *video_encoder;
 static gboolean is_initial = FALSE;
@@ -800,9 +802,7 @@ void udpsrc_cmd_rec_stop(gpointer user_data) {
 
 int get_record_state() { return cmd_recording ? 1 : 0; }
 
-
-static gchar *udpsrc_audio_cmdline(const gchar *sink)
-{
+static gchar *udpsrc_audio_cmdline(const gchar *sink) {
     gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo ! "
                                        " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                        " rtpopusdepay ! rtpopuspay !  queue leaky=1 ! %s.",
@@ -1413,11 +1413,15 @@ data_channel_on_error(GObject *dc, gpointer user_data) {
 
 static void
 data_channel_on_open(GObject *dc, gpointer user_data) {
+#if 0
     GBytes *bytes = g_bytes_new("data", strlen("data"));
-    gst_print("data channel opened\n");
-    g_signal_emit_by_name(dc, "send-string", "Hi! from GStreamer");
     g_signal_emit_by_name(dc, "send-data", bytes);
     g_bytes_unref(bytes);
+#endif
+    gst_print("data channel opened\n");
+    gchar *videoCtrls = get_device_json(config_data.v4l2src_data.device);
+    g_signal_emit_by_name(dc, "send-string", videoCtrls);
+    g_free(videoCtrls);
 }
 
 static void
@@ -1577,21 +1581,28 @@ data_channel_on_message_string(GObject *dc, gchar *str, gpointer user_data) {
     }
     type_string = json_object_get_string_member(root_json_object, "type");
 
-    if (json_object_has_member(root_json_object, type_string)) {
-        const gchar *cmd_type_string;
-        cmd_type_string = json_object_get_string_member(root_json_object, type_string);
-        if (!g_strcmp0(cmd_type_string, "sendfile")) {
-            JsonObject *file_object = json_object_get_object_member(root_json_object, "file");
-            // const gchar *file_type = json_object_get_string_member(file_object, "type");
+    if (!g_strcmp0(type_string, "sendfile")) {
+        JsonObject *file_object = json_object_get_object_member(root_json_object, "file");
+        // const gchar *file_type = json_object_get_string_member(file_object, "type");
 
-            item_entry->dcfile.filename = g_strdup_printf("/tmp/%s", json_object_get_string_member(file_object, "name"));
-            item_entry->dcfile.fsize = json_object_get_int_member(file_object, "size");
-            g_print("recv msg file: %s\n", item_entry->dcfile.filename);
-            item_entry->dcfile.fd = open(item_entry->dcfile.filename, O_RDWR | O_CREAT, 0644);
-            item_entry->dcfile.pos = 0;
+        item_entry->dcfile.filename = g_strdup_printf("/tmp/%s", json_object_get_string_member(file_object, "name"));
+        item_entry->dcfile.fsize = json_object_get_int_member(file_object, "size");
+        g_print("recv msg file: %s\n", item_entry->dcfile.filename);
+        item_entry->dcfile.fd = open(item_entry->dcfile.filename, O_RDWR | O_CREAT, 0644);
+        item_entry->dcfile.pos = 0;
 
-            // g_print("recv sendfile, name: %s, size: %ld, type: %s\n", file_name, file_size, file_type);
-            goto cleanup;
+        // g_print("recv sendfile, name: %s, size: %ld, type: %s\n", file_name, file_size, file_type);
+        goto cleanup;
+    } else if (!g_strcmp0(type_string, "v4l2")) {
+        if (json_object_has_member(root_json_object, "reset")) {
+            gboolean isTrue = json_object_get_boolean_member(root_json_object, "reset");
+            if(isTrue)
+                reset_user_ctrls(config_data.v4l2src_data.device);
+        } else if (json_object_has_member(root_json_object, "ctrl")) {
+            JsonObject *ctrl_object = json_object_get_object_member(root_json_object, "ctrl");
+            gint64 id = json_object_get_int_member(ctrl_object, "id");
+            gint64 value = json_object_get_int_member(ctrl_object, "value");
+            set_ctrl_value(config_data.v4l2src_data.device, id, value);
         }
     }
 cleanup:
@@ -1662,8 +1673,7 @@ on_remove_decodebin_stream(GstElement *srcbin, GstPad *pad,
     g_free(name);
 }
 
-static void webrtcbin_add_turn(GstElement *webrtcbin)
-{
+static void webrtcbin_add_turn(GstElement *webrtcbin) {
     gboolean ret;
     gchar *url = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user,
                                  config_data.webrtc.turn.pwd,
