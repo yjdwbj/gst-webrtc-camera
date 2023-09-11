@@ -39,9 +39,9 @@
       height: 100%;
     }
   </style>
-  <h2 class="text-center">Gsteramer HLS 直播流服务</h2>
-  <div class="container-fluid p-0 m-0">
-    <div class="row row-cols-2">
+  <h2 class="text-center" id="title">Gsteramer HLS 直播流服务</h2>
+  <div class="container-fluid p-0 m-0 d-flex justify-content-center">
+    <div class="row row-cols-2 w-75">
       <div class="card col p-1 m-0">
         <div class="card-header text-center">WebRTC</div>
         <div class="card-body p-0 m-0"><video class="video-block w-100 h-100" id="webrtc" autoplay controls></video>
@@ -126,6 +126,14 @@
         }
       }
 
+      function inIframe() {
+        try {
+          return window.self !== window.top;
+        } catch (e) {
+          return true;
+        }
+      }
+
       async function onIceCandidate(event) {
         if (event.candidate == null)
           return;
@@ -170,7 +178,10 @@
       remotepc.addTransceiver('video', { 'direction': 'sendrecv' });
       remotepc.addTransceiver('audio', { 'direction': 'sendrecv' });
 
+      if(inIframe())
+        document.getElementById('title').remove();
       playStream(null, null, null);
+
     });
   </script>
 </body>

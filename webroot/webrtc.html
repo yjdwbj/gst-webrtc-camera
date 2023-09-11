@@ -351,6 +351,14 @@
       };
     }
 
+    function inIframe() {
+      try {
+        return window.self !== window.top;
+      } catch (e) {
+        return true;
+      }
+    }
+
 
     // buttons control
     window.onload = function () {
@@ -370,6 +378,9 @@
       sendVoice.disabled = true;
       screenShot.disabled = true;
       ctrlPanel.disabled = true;
+
+      if (inIframe())
+        document.getElementById('title').remove();
 
 
       document.querySelector('.visualizer').style['display'] = "none";
@@ -748,7 +759,7 @@
 
 <body>
   <div>
-    <h1 class="text-center">Gstreamer Webrtc Camera</h1>
+    <h1 class="text-center" id="title">Gstreamer Webrtc Camera</h1>
     <div class="text-center " id="container">
       <video class="w-75" id="video0" playsinline autoplay></video>
       <div class="text-center mb-5" id="loading" style="display:none">

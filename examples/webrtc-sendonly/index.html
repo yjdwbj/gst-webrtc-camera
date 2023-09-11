@@ -83,6 +83,14 @@
       }
     }
 
+    function inIframe() {
+      try {
+        return window.self !== window.top;
+      } catch (e) {
+        return true;
+      }
+    }
+
 
     function playStream(hostname, port, path) {
       var l = window.location;
@@ -124,10 +132,12 @@
     }
 
     window.addEventListener("load", (event) => {
-      playStream(null, null, null).then(()=>{
+      if (inIframe())
+        document.getElementById('title').remove();
+      playStream(null, null, null).then(() => {
         if (reconnectTimerId)
           clearTimeout(reconnectTimerId);
-      }).catch( err=>{
+      }).catch(err => {
         console.log("ws error: " + err);
         reconnectTimerId = setTimeout(() => {
           console.log("reconnect websockets");
@@ -141,7 +151,7 @@
 
 <body>
   <div>
-    <h2 class="text-center">Gsteramer HLS 直播流服务</h2>
+    <h2 class="text-center" id="title">Gsteramer HLS 直播流服务</h2>
     <div class="text-center container-fluid p-0 m-0">
       <video class="w-75" id="video0" playsinline autoplay></video>
     </div>
