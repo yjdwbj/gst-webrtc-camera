@@ -90,6 +90,6 @@ typedef void (*webrtc_callback)(WebrtcItem *item);
 
 typedef struct _RecordItem RecordItem;
 
-void start_http(webrtc_callback fn, int port);
+void start_http(webrtc_callback fn, int port, int clients);
 
 #endif // _SOUP_H

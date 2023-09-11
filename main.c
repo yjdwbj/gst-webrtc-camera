@@ -395,9 +395,9 @@ int main(int argc, char *argv[]) {
 
     // webrtcbin priority use appsink.
     if (config_data.app_sink) {
-        start_http(&start_appsrc_webrtcbin, config_data.http.port);
+        start_http(&start_appsrc_webrtcbin, config_data.http.port, config_data.clients);
     } else {
-        start_http(&start_udpsrc_webrtcbin, config_data.http.port);
+        start_http(&start_udpsrc_webrtcbin, config_data.http.port, config_data.clients);
     }
 
     // start_http(&start_webrtcbin, config_data.http.port);

@@ -22,6 +22,7 @@
 
 #include "soup.h"
 #include "data_struct.h"
+#include "sql.h"
 #include <gst/gst.h>
 #include <gst/gstbin.h>
 
@@ -29,7 +30,7 @@ gchar *video_priority = NULL;
 gchar *audio_priority = NULL;
 
 #define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
-
+static int client_limit = 3;
 static gchar *
 get_string_from_json_object(JsonObject *object) {
     JsonNode *root;
@@ -458,7 +459,7 @@ static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
     CustomSoupData *data = (CustomSoupData *)user_data;
 
     GHashTable *webrtc_connected_table = data->webrtc_connected_table;
-    if (g_hash_table_size(webrtc_connected_table) > config_data.clients) {
+    if (g_hash_table_size(webrtc_connected_table) > client_limit) {
         soup_message_set_status(msg, SOUP_STATUS_INSUFFICIENT_STORAGE);
         gchar *txt = "The maximum number of connections has been reached.";
         soup_message_set_response(msg, "text/plain",
@@ -589,18 +590,45 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
                      SoupMessage *msg,
                      const char *username,
                      gpointer data) {
+    JsonParser *parser;
+    JsonNode *root;
+    JsonObject *root_obj;
+    GError *error;
+    gchar *ret;
+    error = NULL;
+    parser = json_parser_new();
+    gchar *rawjson = get_user_auth(username);
+
+    if (rawjson == NULL)
+        return rawjson;
+
+    json_parser_load_from_data(parser, rawjson, strlen(rawjson), &error);
+    if (error) {
+        g_print("Unable to parse file '%s': %s\n", rawjson, error->message);
+        g_error_free(error);
+        g_object_unref(parser);
+        return NULL;
+    }
+
+    root = json_parser_get_root(parser);
+    g_assert(root != NULL);
+    root_obj = json_node_get_object(root);
+    g_free(rawjson);
     if (strcmp(username, config_data.http.user) != 0)
         return NULL;
 
-    return soup_auth_domain_digest_encode_password(username,
-                                                   HTTP_AUTH_DOMAIN_REALM,
-                                                   config_data.http.password);
+    ret = soup_auth_domain_digest_encode_password(username,
+                                                  HTTP_AUTH_DOMAIN_REALM,
+                                                  json_object_get_string_member(root_obj, "pwd"));
+    g_object_unref(parser);
+    return ret;
 }
 
-void start_http(webrtc_callback fn, int port) {
+void start_http(webrtc_callback fn, int port, int clients) {
     SoupServer *soup_server;
     SoupAuthDomain *auth_domain;
     CustomSoupData *data;
+    client_limit = clients;
     data = g_new0(CustomSoupData, 1);
     GHashTable *webrtc_connected_table;
 

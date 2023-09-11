@@ -2,7 +2,7 @@
  * Copyright (C) 2023 chunyang liu <yjdwbj@gmail.com>
  *
  *
- * v4l2ctl.h: set user controls of video
+ * sql.h: store user and login logs.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -20,18 +20,11 @@
  * Boston, MA 02110-1301, USA.
  */
 
-#ifndef _V4L2CTL_H
-#define _V4L2CTL_H
-#include <errno.h>
-#include <fcntl.h>
-#include <linux/videodev2.h>
-#include <stdio.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
+#ifndef _SQLITE3_H
+#define _SQLITE3_H
 #include <glib.h>
 
-gchar *get_device_json(const gchar* device);
-int set_ctrl_value(const gchar *device,int ctrl_id, int ctrl_val);
-int reset_user_ctrls(const gchar *device);
+gchar* get_user_auth(const gchar *username);
+int add_access_log(const gchar *sql);
 
-#endif // _V4L2CTL_H
+#endif // _SQLITE3_H
