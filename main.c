@@ -198,6 +198,7 @@ static void read_config_json(gchar *fullpath) {
     config_data.sysinfo = json_object_get_boolean_member(root_obj, "sysinfo");
 
     config_data.rec_len = json_object_get_int_member(root_obj, "rec_len");
+    config_data.clients = json_object_get_int_member(root_obj, "clients");
     config_data.motion_rec = json_object_get_boolean_member(root_obj, "motion_rec");
 
     object = json_object_get_object_member(root_obj, "audio");

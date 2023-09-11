@@ -458,7 +458,7 @@ static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
     CustomSoupData *data = (CustomSoupData *)user_data;
 
     GHashTable *webrtc_connected_table = data->webrtc_connected_table;
-    if (g_hash_table_size(webrtc_connected_table) > 3) {
+    if (g_hash_table_size(webrtc_connected_table) > config_data.clients) {
         soup_message_set_status(msg, SOUP_STATUS_INSUFFICIENT_STORAGE);
         gchar *txt = "The maximum number of connections has been reached.";
         soup_message_set_response(msg, "text/plain",

@@ -23,6 +23,7 @@
   },
   "rootdir": "./",
   "showdot": true,
+  "clients": 4,
   "udp": {
     "enable": false,
     "port": 5000,

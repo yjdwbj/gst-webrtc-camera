@@ -62,6 +62,7 @@ struct _GstConfigData {
         gchar *type;
         gchar *format;
     } v4l2src_data;
+    int clients;             // How many clients can be allowed to connect to the server.
     gchar *videnc;           // i.e; h264,h265,vp9
     gchar *root_dir;         // streams output root path;
     gboolean showdot;        // generate gstreamer pipeline graphs;
