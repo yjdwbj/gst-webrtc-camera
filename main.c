@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "sql.h"
 
 static GMainLoop *loop;
 static GstElement *pipeline;
@@ -373,6 +374,7 @@ int main(int argc, char *argv[]) {
     load_plugin_func("/usr/lib/aarch64-linux-gnu/gstreamer-1.0", "pango");
     // load_plugin_func("/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdv.so");
 #endif
+    init_db();
     gst_segtrap_set_enabled(TRUE);
     loop = g_main_loop_new(NULL, FALSE);
 

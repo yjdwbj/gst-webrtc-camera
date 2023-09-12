@@ -13,6 +13,7 @@
 
   <link href="bootstrap.min.css" rel="stylesheet">
   <script src="bootstrap.bundle.min.js"></script>
+  <script src="jquery.min.js"></script>
   <!-- <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script> -->
   <style>
     * {
@@ -397,6 +398,13 @@
         playStream(null, null, null).then((ws) => {
           if (reconnectTimerId)
             clearTimeout(reconnectTimerId);
+
+          $.getJSON('https://api.ipify.org?format=jsonp&callback=?', function (data) {
+            console.log(JSON.stringify(data, null, 2));
+            let info = { client: { ip: data.ip, useragent: navigator.userAgent, path: document.location.pathname, origin: document.location.origin } };
+            websocketConnection.send(JSON.stringify(info));
+          });
+
         }).catch((err) => {
           console.log("err is: " + err);
           reconnectTimerId = setTimeout(() => {

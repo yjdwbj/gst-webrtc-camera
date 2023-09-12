@@ -71,7 +71,7 @@ static void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
     gst_promise_unref(local_desc_promise);
 
     sdp_string = gst_sdp_message_as_text(offer->sdp);
-    g_print("Negotiation offer created:\n%s\n", sdp_string);
+    // g_print("Negotiation offer created:\n%s\n", sdp_string);
 
     sdp_json = json_object_new();
     json_object_set_string_member(sdp_json, "type", "sdp");
@@ -233,6 +233,21 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
         goto unknown_message;
 
     root_json_object = json_node_get_object(root_json);
+
+    if (json_object_has_member(root_json_object, "client")) {
+        g_print("Received message without type field\n");
+        JsonObject *client = json_object_get_object_member(root_json_object, "client");
+        gchar *sql = g_strdup_printf("INSERT INTO webrtc_log(hashid,host,origin,path,useragent) "
+                                     "VALUES(%" G_GUINT64_FORMAT ",'%s','%s','%s','%s');",
+                                     webrtc_entry->hash_id,
+                                     json_object_get_string_member(client, "ip"),
+                                     json_object_get_string_member(client, "origin"),
+                                     json_object_get_string_member(client, "path"),
+                                     json_object_get_string_member(client, "useragent"));
+        add_webrtc_access_log(sql);
+        g_free(sql);
+        goto cleanup;
+    }
 
     if (!json_object_has_member(root_json_object, "type")) {
         g_print("Received message without type field\n");
@@ -399,96 +414,17 @@ static void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
     GST_DEBUG("Closed websocket connection %p, connected size: %d\n", (gpointer)connection, g_hash_table_size(webrtc_connected_table));
 }
 
-#include <sys/stat.h>
-static void
-do_get(SoupServer *server, SoupMessage *msg, const char *path) {
-    struct stat st;
-
-    if (stat(path, &st) == -1) {
-        if (errno == EPERM)
-            soup_message_set_status(msg, SOUP_STATUS_FORBIDDEN);
-        else if (errno == ENOENT)
-            soup_message_set_status(msg, SOUP_STATUS_NOT_FOUND);
-        else
-            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
-        return;
-    }
-
-    if (msg->method == SOUP_METHOD_GET) {
-        GMappedFile *mapping;
-        SoupBuffer *buffer;
-
-        mapping = g_mapped_file_new(path, FALSE, NULL);
-        if (!mapping) {
-            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
-            return;
-        }
-
-        buffer = soup_buffer_new_with_owner(g_mapped_file_get_contents(mapping),
-                                            g_mapped_file_get_length(mapping),
-                                            mapping, (GDestroyNotify)g_mapped_file_unref);
-        soup_message_body_append_buffer(msg->response_body, buffer);
-        soup_buffer_free(buffer);
-    } else /* msg->method == SOUP_METHOD_HEAD */ {
-        char *length;
-
-        /* We could just use the same code for both GET and
-         * HEAD (soup-message-server-io.c will fix things up).
-         * But we'll optimize and avoid the extra I/O.
-         */
-        length = g_strdup_printf("%lu", (gulong)st.st_size);
-        soup_message_headers_append(msg->response_headers,
-                                    "Content-Length", length);
-        g_free(length);
-    }
-
-    soup_message_set_status(msg, SOUP_STATUS_OK);
-}
-
 typedef struct {
     webrtc_callback fn;
     GHashTable *webrtc_connected_table;
 
 } CustomSoupData;
 
-static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
-                              SoupMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
-                              G_GNUC_UNUSED SoupClientContext *client_context,
-                              G_GNUC_UNUSED gpointer user_data) {
-    char *file_path;
-    CustomSoupData *data = (CustomSoupData *)user_data;
-
-    GHashTable *webrtc_connected_table = data->webrtc_connected_table;
-    if (g_hash_table_size(webrtc_connected_table) > client_limit) {
-        soup_message_set_status(msg, SOUP_STATUS_INSUFFICIENT_STORAGE);
-        gchar *txt = "The maximum number of connections has been reached.";
-        soup_message_set_response(msg, "text/plain",
-                                  SOUP_MEMORY_STATIC, txt, strlen(txt));
-        return;
-    }
-
-    if (msg->method == SOUP_METHOD_GET || msg->method == SOUP_METHOD_HEAD) {
-        if (g_strcmp0(path, "/") == 0) {
-            soup_message_set_redirect(msg, SOUP_STATUS_MOVED_PERMANENTLY,
-                                      "/webroot/index.html");
-            return;
-        }
-        file_path = g_strdup_printf(".%s", path);
-        do_get(soup_server, msg, file_path);
-    } else {
-        soup_message_set_status(msg, SOUP_STATUS_NOT_IMPLEMENTED);
-        gchar *txt = "what you want?";
-        soup_message_set_response(msg, "text/plain",
-                                  SOUP_MEMORY_STATIC, txt, strlen(txt));
-    }
-
-    g_free(file_path);
-}
-
 static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                                    SoupWebsocketConnection *connection, G_GNUC_UNUSED const char *path,
                                    G_GNUC_UNUSED SoupClientContext *client_context, gpointer user_data) {
     WebrtcItem *webrtc_entry;
+
     CustomSoupData *data = (CustomSoupData *)user_data;
 
     GHashTable *webrtc_connected_table = data->webrtc_connected_table;
@@ -498,6 +434,7 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                      G_CALLBACK(soup_websocket_closed_cb), (gpointer)webrtc_connected_table);
     webrtc_entry = g_new0(WebrtcItem, 1);
     webrtc_entry->connection = connection;
+    webrtc_entry->client = client_context;
     webrtc_entry->send_channel = NULL;
     webrtc_entry->receive_channel = NULL;
     webrtc_entry->hash_id = (intptr_t)(webrtc_entry->connection);
@@ -517,14 +454,17 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
 
     if (webrtc_entry->sendpipe)
         gst_element_set_state(webrtc_entry->sendpipe, GST_STATE_PLAYING);
-
-    g_hash_table_insert(webrtc_connected_table, connection, webrtc_entry);
-    g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
+    // g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
 }
 
 static void destroy_webrtc_table(gpointer entry_ptr) {
     WebrtcItem *webrtc_entry = (WebrtcItem *)entry_ptr;
     g_assert(webrtc_entry != NULL);
+    const gchar *host = soup_client_context_get_host(webrtc_entry->client);
+    gchar *sql = g_strdup_printf("INSERT INTO webrtc_log(hashid,host,flag) VALUES(%" G_GUINT64_FORMAT ",'%s',%d)",
+                                 webrtc_entry->hash_id, host, 1);
+    add_webrtc_access_log(sql);
+    g_free(sql);
 
     if (webrtc_entry->stop_webrtc != NULL) {
         webrtc_entry->stop_webrtc(webrtc_entry);
@@ -583,6 +523,124 @@ request_started_callback(SoupServer *server, SoupMessage *msg,
                      G_CALLBACK(wrote_headers_callback), data);
 }
 #endif
+
+#include <sys/stat.h>
+static void
+do_get(SoupServer *server, SoupMessage *msg, const char *path) {
+    struct stat st;
+
+    if (stat(path, &st) == -1) {
+        if (errno == EPERM)
+            soup_message_set_status(msg, SOUP_STATUS_FORBIDDEN);
+        else if (errno == ENOENT)
+            soup_message_set_status(msg, SOUP_STATUS_NOT_FOUND);
+        else
+            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+        return;
+    }
+
+    if (msg->method == SOUP_METHOD_GET) {
+        GMappedFile *mapping;
+        SoupBuffer *buffer;
+
+        mapping = g_mapped_file_new(path, FALSE, NULL);
+        if (!mapping) {
+            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            return;
+        }
+
+        buffer = soup_buffer_new_with_owner(g_mapped_file_get_contents(mapping),
+                                            g_mapped_file_get_length(mapping),
+                                            mapping, (GDestroyNotify)g_mapped_file_unref);
+        soup_message_body_append_buffer(msg->response_body, buffer);
+        soup_buffer_free(buffer);
+    } else /* msg->method == SOUP_METHOD_HEAD */ {
+        char *length;
+
+        /* We could just use the same code for both GET and
+         * HEAD (soup-message-server-io.c will fix things up).
+         * But we'll optimize and avoid the extra I/O.
+         */
+        length = g_strdup_printf("%lu", (gulong)st.st_size);
+        soup_message_headers_append(msg->response_headers,
+                                    "Content-Length", length);
+        g_free(length);
+    }
+
+    soup_message_set_status(msg, SOUP_STATUS_OK);
+}
+
+static gchar *get_auth_value_by_key(const gchar *auth, const gchar *key) {
+    char **pairs, *eq, *name, *value, *realm = NULL;
+    int i;
+    pairs = g_strsplit(auth, ",", -1);
+    for (i = 0; pairs[i]; i++) {
+        name = pairs[i];
+        eq = strchr(name, '=');
+        if (eq) {
+            *eq = '\0';
+            value = eq + 1;
+        } else
+            value = NULL;
+        if (g_str_has_suffix(name, key)) {
+            eq = strchr(++value, '"'); // ++ for skip first '"', strchr for last '"'
+            if (eq)
+                *eq = '\0';
+            realm = g_strdup(value);
+            break;
+        }
+        // g_print("name: %s, value: %s\n", name, value);
+    }
+    g_free(pairs);
+    return realm;
+}
+
+static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
+                              SoupMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
+                              G_GNUC_UNUSED SoupClientContext *client_context,
+                              G_GNUC_UNUSED gpointer user_data) {
+    char *file_path;
+    CustomSoupData *data = (CustomSoupData *)user_data;
+#if 0
+    SoupMessageHeadersIter iter;
+    const char *name, *value;
+
+    g_print("%s %s HTTP/1.%d\n", msg->method, path,
+            soup_message_get_http_version(msg));
+    soup_message_headers_iter_init(&iter, msg->request_headers);
+    while (soup_message_headers_iter_next(&iter, &name, &value))
+        g_print("%s: %s\n", name, value);
+    if (msg->request_body->length)
+        g_print("%s\n", msg->request_body->data);
+#endif
+
+    GHashTable *webrtc_connected_table = data->webrtc_connected_table;
+    if (g_hash_table_size(webrtc_connected_table) > client_limit) {
+        soup_message_set_status(msg, SOUP_STATUS_INSUFFICIENT_STORAGE);
+        gchar *txt = "The maximum number of connections has been reached.";
+        soup_message_set_response(msg, "text/plain",
+                                  SOUP_MEMORY_STATIC, txt, strlen(txt));
+        return;
+    }
+
+    if (msg->method == SOUP_METHOD_GET || msg->method == SOUP_METHOD_POST || msg->method == SOUP_METHOD_HEAD) {
+        if (g_strcmp0(path, "/") == 0) {
+            soup_message_set_redirect(msg, SOUP_STATUS_MOVED_PERMANENTLY,
+                                      "/webroot/index.html");
+            return;
+        }
+        file_path = g_strdup_printf(".%s", path);
+        do_get(soup_server, msg, file_path);
+    } else {
+        soup_message_set_status(msg, SOUP_STATUS_NOT_IMPLEMENTED);
+        gchar *txt = "what you want?";
+        soup_message_set_response(msg, "text/plain",
+                                  SOUP_MEMORY_STATIC, txt, strlen(txt));
+    }
+
+    g_free(file_path);
+}
+
 extern GstConfigData config_data;
 
 static char *
@@ -593,11 +651,42 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
     JsonParser *parser;
     JsonNode *root;
     JsonObject *root_obj;
-    GError *error;
+    GError *error = NULL;
     gchar *ret;
-    error = NULL;
+    const gchar *user;
+
+    const gchar *auth = soup_message_headers_get_one(msg->request_headers, "authorization");
+    if (auth == NULL)
+        return NULL;
+    // g_print("auth:  %s\n", auth);
+    gchar *uri = get_auth_value_by_key(auth, "uri");
+    if (g_str_has_suffix(uri, ".html")) {
+        // add http access to database http_log table.
+        gchar *dname = get_auth_value_by_key(auth, "username");
+        const gchar *useragent = soup_message_headers_get_one(msg->request_headers, "User-Agent");
+        // Cloudflare proxy and nginx.
+        const gchar *ipaddr = soup_message_headers_get_one(msg->request_headers, "X-Forwarded-For");
+
+        gchar *sql = g_strdup_printf("INSERT INTO http_log(host,method,path,username,useragent,ipaddr)"
+                                     "VALUES('%s','%s','%s','%s','%s','%s');",
+                                     soup_message_headers_get_one(msg->request_headers, "Host"),
+                                     msg->method,
+                                     uri, dname, useragent, ipaddr == NULL ? "" : ipaddr);
+        g_free(dname);
+        g_free(uri);
+        add_http_access_log(sql);
+        g_free(sql);
+    }
+
+    gchar *realm = get_auth_value_by_key(auth, "realm");
+
+    if (realm == NULL)
+        return NULL;
+
     parser = json_parser_new();
-    gchar *rawjson = get_user_auth(username);
+    gchar *rawjson = get_user_auth(username, realm);
+
+    g_print("rawjson: %s\n", rawjson);
 
     if (rawjson == NULL)
         return rawjson;
@@ -611,16 +700,20 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
     }
 
     root = json_parser_get_root(parser);
-    g_assert(root != NULL);
+
+    if (root == NULL)
+        return NULL;
     root_obj = json_node_get_object(root);
     g_free(rawjson);
-    if (strcmp(username, config_data.http.user) != 0)
+    user = json_object_get_string_member(root_obj, "name");
+    if (user == NULL)
         return NULL;
 
     ret = soup_auth_domain_digest_encode_password(username,
-                                                  HTTP_AUTH_DOMAIN_REALM,
+                                                  realm,
                                                   json_object_get_string_member(root_obj, "pwd"));
     g_object_unref(parser);
+    g_free(realm);
     return ret;
 }
 
@@ -726,8 +819,8 @@ void start_http(webrtc_callback fn, int port, int clients) {
         NULL);
     // soup_auth_domain_add_path(auth_domain, "/Digest");
     // soup_auth_domain_add_path(auth_domain, "/Any");
-    soup_auth_domain_add_path(auth_domain, "/");
-    // soup_auth_domain_remove_path(auth_domain, "/Any/Not"); // not need to auth path
+    soup_auth_domain_add_path(auth_domain, "/webroot");
+    // soup_auth_domain_remove_path(auth_domain, "/favicon.ico"); // not need to auth path
     soup_server_add_auth_domain(soup_server, auth_domain);
     g_object_unref(auth_domain);
 
