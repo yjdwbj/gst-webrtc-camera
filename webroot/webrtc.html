@@ -400,7 +400,6 @@
             clearTimeout(reconnectTimerId);
 
           $.getJSON('https://api.ipify.org?format=jsonp&callback=?', function (data) {
-            console.log(JSON.stringify(data, null, 2));
             let info = { client: { ip: data.ip, useragent: navigator.userAgent, path: document.location.pathname, origin: document.location.origin } };
             websocketConnection.send(JSON.stringify(info));
           });

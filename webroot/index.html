@@ -112,6 +112,11 @@
       function onServerMessage(event) {
         var msg;
 
+        $.getJSON('https://api.ipify.org?format=jsonp&callback=?', function (data) {
+          let info = { client: { ip: data.ip, useragent: navigator.userAgent, path: document.location.pathname, origin: document.location.origin } };
+          websocketConnection.send(JSON.stringify(info));
+        });
+
         try {
           msg = JSON.parse(event.data);
         } catch (e) {

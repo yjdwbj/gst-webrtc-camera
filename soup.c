@@ -461,8 +461,8 @@ static void destroy_webrtc_table(gpointer entry_ptr) {
     WebrtcItem *webrtc_entry = (WebrtcItem *)entry_ptr;
     g_assert(webrtc_entry != NULL);
     const gchar *host = soup_client_context_get_host(webrtc_entry->client);
-    gchar *sql = g_strdup_printf("INSERT INTO webrtc_log(hashid,host,flag) VALUES(%" G_GUINT64_FORMAT ",'%s',%d)",
-                                 webrtc_entry->hash_id, host, 1);
+    gchar *sql = g_strdup_printf("UPDATE webrtc_log outdate =CURRENT_TIMESTAMP WHERE hashid=%" G_GUINT64_FORMAT ";",
+                                 webrtc_entry->hash_id);
     add_webrtc_access_log(sql);
     g_free(sql);
 
@@ -658,7 +658,7 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
     const gchar *auth = soup_message_headers_get_one(msg->request_headers, "authorization");
     if (auth == NULL)
         return NULL;
-    // g_print("auth:  %s\n", auth);
+    g_print("auth:  %s\n", auth);
     gchar *uri = get_auth_value_by_key(auth, "uri");
     if (g_str_has_suffix(uri, ".html")) {
         // add http access to database http_log table.
@@ -706,12 +706,14 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
     root_obj = json_node_get_object(root);
     g_free(rawjson);
     user = json_object_get_string_member(root_obj, "name");
+
     if (user == NULL)
         return NULL;
-
-    ret = soup_auth_domain_digest_encode_password(username,
-                                                  realm,
-                                                  json_object_get_string_member(root_obj, "pwd"));
+    ret = g_strdup(json_object_get_string_member(root_obj, "pwd"));
+    // ret = soup_auth_domain_digest_encode_password(username,
+    //                                               realm,
+    //                                               json_object_get_string_member(root_obj, "pwd"));
+    g_print("ret is ------------> : %s\n", ret);
     g_object_unref(parser);
     g_free(realm);
     return ret;

@@ -62,7 +62,7 @@ int init_db() {
                    "realm VARCHAR(64) NOT NULL DEFAULT 'lcy-gsteramer-camera',"
                    "role INTEGER,"
                    "active BOOL NOT NULL DEFAULT TRUE,"
-                   "UNIQUE(username) ON CONFLICT FAIL);");
+                   "UNIQUE(username,realm) ON CONFLICT FAIL);");
     rc = sqlite3_exec(db, sql, callback, 0, &errMsg);
     g_free(sql);
     if (rc != SQLITE_OK) {
