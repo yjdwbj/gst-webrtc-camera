@@ -182,14 +182,14 @@ static gchar *get_today_str() {
 
 static gchar *get_shellcmd_results(const gchar *shellcmd) {
     FILE *fp;
-    gchar *val;
+    gchar *val = NULL;
     char path[256];
 
     /* Open the command for reading. */
     fp = popen(shellcmd, "r");
     if (fp == NULL) {
         printf("Failed to run command\n");
-        exit(1);
+        return val;
     }
 
     /* Read the output a line at a time - output it. */
@@ -493,7 +493,8 @@ static GstElement *get_audio_device() {
             path = get_shellcmd_results("pactl list sources short | grep input | head -n1 | awk '{print $2}'");
         }
         g_object_set(G_OBJECT(source), "device", path, NULL);
-        free(path);
+        if(path != NULL)
+            free(path);
         return source;
     }
 

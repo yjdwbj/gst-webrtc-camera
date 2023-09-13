@@ -658,7 +658,7 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
     const gchar *auth = soup_message_headers_get_one(msg->request_headers, "authorization");
     if (auth == NULL)
         return NULL;
-    g_print("auth:  %s\n", auth);
+    // g_print("auth:  %s\n", auth);
     gchar *uri = get_auth_value_by_key(auth, "uri");
     if (g_str_has_suffix(uri, ".html")) {
         // add http access to database http_log table.
@@ -686,7 +686,7 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
     parser = json_parser_new();
     gchar *rawjson = get_user_auth(username, realm);
 
-    g_print("rawjson: %s\n", rawjson);
+    // g_print("rawjson: %s\n", rawjson);
 
     if (rawjson == NULL)
         return rawjson;
@@ -713,7 +713,7 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
     // ret = soup_auth_domain_digest_encode_password(username,
     //                                               realm,
     //                                               json_object_get_string_member(root_obj, "pwd"));
-    g_print("ret is ------------> : %s\n", ret);
+    // g_print("ret is ------------> : %s\n", ret);
     g_object_unref(parser);
     g_free(realm);
     return ret;
