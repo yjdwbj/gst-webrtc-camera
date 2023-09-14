@@ -159,7 +159,7 @@ gchar *get_online_user_list(const gchar *list) {
         return NULL;
     }
     g_free(sql);
-    g_print("get users: %s\n", data.ret);
+    // g_print("get users: %s\n", data.ret);
     return data.ret;
 }
 

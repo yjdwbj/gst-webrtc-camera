@@ -374,7 +374,6 @@ static GstElement *get_nvbin() {
     gchar *binstr = NULL;
     gchar *drvname = get_video_driver_name(config_data.v4l2src_data.device);
     // If the following parameters are not suitable, it will always block in BLOCKING MODE.
-    g_print("get device :%s , driver name: %s\n", config_data.v4l2src_data.device, drvname);
     if (g_str_has_prefix(drvname, "uvcvideo")) {
         if (g_str_has_prefix(config_data.v4l2src_data.type, "image")) {
             binstr = g_strdup_printf("v4l2src device=%s ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! "
@@ -472,8 +471,8 @@ static GstElement *get_video_src() {
 
     gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, teesrc, queue, NULL);
 
-    if (g_str_has_suffix(config_data.v4l2src_data.type, "jpeg")) {
-        GstElement *jpegparse, *jpegdec;
+    if (g_str_has_prefix(config_data.v4l2src_data.type, "image")) {
+        GstElement *jpegparse = NULL, *jpegdec = NULL;
 
         if (gst_element_factory_find("vajpegdec"))
             jpegdec = gst_element_factory_make("vajpegdec", NULL);
@@ -485,7 +484,6 @@ static GstElement *get_video_src() {
             jpegdec = gst_element_factory_make("jpegdec", NULL);
             jpegparse = gst_element_factory_make("jpegparse", NULL);
             srcvconvert = gst_element_factory_make("videoconvert", NULL);
-            gst_bin_add_many(GST_BIN(pipeline), jpegparse, srcvconvert, NULL);
         }
 
         if (!jpegdec) {
@@ -494,20 +492,20 @@ static GstElement *get_video_src() {
         }
         gst_bin_add(GST_BIN(pipeline), jpegdec);
         if (jpegparse != NULL) {
-            if (gst_element_factory_find("vaapipostproc")) {
-                GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
-                gst_bin_add(GST_BIN(pipeline), vapp);
-                if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, vapp, queue, srcvconvert, teesrc, NULL)) {
-                    g_error("Failed to link elements video mjpg src\n");
-                    return NULL;
-                }
-            } else {
-                if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, queue, srcvconvert, teesrc, NULL)) {
-                    g_error("Failed to link elements video mjpg src\n");
-                    return NULL;
-                }
+            gst_bin_add_many(GST_BIN(pipeline), jpegparse, srcvconvert, NULL);
+            // if (gst_element_factory_find("vaapipostproc")) {
+            //     GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
+            //     gst_bin_add(GST_BIN(pipeline), vapp);
+            //     if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, vapp, queue, srcvconvert, teesrc, NULL)) {
+            //         g_error("Failed to link elements video mjpg src\n");
+            //         return NULL;
+            //     }
+            // } else {
+            if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, queue, srcvconvert, teesrc, NULL)) {
+                g_error("Failed to link elements video mjpg src\n");
+                return NULL;
             }
-
+            // }
         } else {
             if (!gst_element_link_many(source, capsfilter, jpegdec, queue, teesrc, NULL)) {
                 g_error("Failed to link elements video mjpg src\n");
@@ -517,19 +515,19 @@ static GstElement *get_video_src() {
     } else {
         srcvconvert = gst_element_factory_make("videoconvert", NULL);
         gst_bin_add(GST_BIN(pipeline), srcvconvert);
-        if (gst_element_factory_find("vaapipostproc")) {
-            GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
-            gst_bin_add(GST_BIN(pipeline), vapp);
-            if (!gst_element_link_many(source, vapp, queue, srcvconvert, teesrc, NULL)) {
-                g_error("Failed to link elements video src\n");
-                return NULL;
-            }
-        } else {
-            if (!gst_element_link_many(source, queue, srcvconvert, teesrc, NULL)) {
-                g_error("Failed to link elements video src\n");
-                return NULL;
-            }
+        // if (gst_element_factory_find("vaapipostproc")) {
+        //     GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
+        //     gst_bin_add(GST_BIN(pipeline), vapp);
+        //     if (!gst_element_link_many(source, vapp, queue, srcvconvert, teesrc, NULL)) {
+        //         g_error("Failed to link elements video src\n");
+        //         return NULL;
+        //     }
+        // } else {
+        if (!gst_element_link_many(source, queue, srcvconvert, teesrc, NULL)) {
+            g_error("Failed to link elements video src\n");
+            return NULL;
         }
+        // }
     }
 #endif
     return teesrc;

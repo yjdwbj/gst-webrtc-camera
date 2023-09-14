@@ -210,8 +210,6 @@ static gchar *get_table_list() {
         list = tmp;
     }
     list[strlen(list) - 1] = ')';
-
-    g_print("list: %s\n", list);
     return list;
 }
 
