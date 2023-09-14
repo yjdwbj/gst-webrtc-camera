@@ -321,6 +321,8 @@ int main(int argc, char *argv[]) {
     if (fullpath != NULL) {
         read_config_json(fullpath);
         g_free(fullpath);
+        g_error("Not found config.json, exit!!!\n");
+        exit(1);
     }
     // reset_user_ctrls(config_data.v4l2src_data.device);
 

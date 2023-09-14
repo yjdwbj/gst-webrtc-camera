@@ -366,6 +366,12 @@ static GstElement *get_nvbin() {
 static GstElement *get_video_src() {
     GstCaps *srcCaps;
     GstElement *teesrc, *capsfilter;
+    gchar *path = get_shellcmd_results("pgrep X");
+    if(path != NULL)
+    {
+        g_setenv("XDG_SESSION_TYPE", "mate", TRUE);
+        g_free(path);
+    }
 
     capsfilter = gst_element_factory_make("capsfilter", NULL);
     g_print("device: %s, Type: %s, W: %d, H: %d , format: %s\n",

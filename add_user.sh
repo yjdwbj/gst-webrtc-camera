@@ -13,7 +13,7 @@ table="CREATE TABLE IF NOT EXISTS webrtc_user (
                    password VARCHAR(128) NOT NULL,
                    create_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                    realm VARCHAR(64) NOT NULL DEFAULT 'lcy-gsteramer-camera',
-                   role INTEGER,
+                   role INTEGER NOT NULL DEFAULT 999,
                    active BOOL NOT NULL DEFAULT TRUE,
                    UNIQUE(username,realm) ON CONFLICT FAIL);"
 echo ${table} | sqlite3 $1

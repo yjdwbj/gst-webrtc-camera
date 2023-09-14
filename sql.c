@@ -60,7 +60,7 @@ int init_db() {
                    "password VARCHAR(128) NOT NULL,"
                    "create_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
                    "realm VARCHAR(64) NOT NULL DEFAULT 'lcy-gsteramer-camera',"
-                   "role INTEGER,"
+                   "role INTEGER NOT NULL DEFAULT 999,"
                    "active BOOL NOT NULL DEFAULT TRUE,"
                    "UNIQUE(username,realm) ON CONFLICT FAIL);");
     rc = sqlite3_exec(db, sql, callback, 0, &errMsg);
@@ -72,6 +72,7 @@ int init_db() {
 
     sql = g_strdup("CREATE TABLE IF NOT EXISTS webrtc_log ("
                    "id INTEGER PRIMARY KEY,"
+                   "username VARCHAR(64),"
                    "hashid INTEGER NOT NULL,"
                    "host text NOT NULL,"
                    "origin text NOT NULL,"
@@ -115,7 +116,7 @@ gchar *get_user_auth(const gchar *username, const gchar *realm) {
         g_print("open db failed\n");
         init_db();
     }
-    gchar *sql = g_strdup_printf("SELECT json_object('name',username,'pwd',password,'active',active) "
+    gchar *sql = g_strdup_printf("SELECT json_object('uid',id,'name',username,'pwd',password,'active',active,'role',role) "
                                  "FROM webrtc_user WHERE username='%s' AND realm='%s';",
                                  username, realm);
     rc = sqlite3_exec(db, sql, callback, &data, &errMsg);

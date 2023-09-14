@@ -235,14 +235,14 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
     root_json_object = json_node_get_object(root_json);
 
     if (json_object_has_member(root_json_object, "client")) {
-        g_print("Received message without type field\n");
         JsonObject *client = json_object_get_object_member(root_json_object, "client");
-        gchar *sql = g_strdup_printf("INSERT INTO webrtc_log(hashid,host,origin,path,useragent) "
-                                     "VALUES(%" G_GUINT64_FORMAT ",'%s','%s','%s','%s');",
+        gchar *sql = g_strdup_printf("INSERT INTO webrtc_log(hashid,host,origin,path,username,useragent) "
+                                     "VALUES(%" G_GUINT64_FORMAT ",'%s','%s','%s','%s','%s');",
                                      webrtc_entry->hash_id,
                                      json_object_get_string_member(client, "ip"),
                                      json_object_get_string_member(client, "origin"),
                                      json_object_get_string_member(client, "path"),
+                                     json_object_get_string_member(client, "username"),
                                      json_object_get_string_member(client, "useragent"));
         add_webrtc_access_log(sql);
         g_free(sql);
@@ -460,8 +460,8 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
 static void destroy_webrtc_table(gpointer entry_ptr) {
     WebrtcItem *webrtc_entry = (WebrtcItem *)entry_ptr;
     g_assert(webrtc_entry != NULL);
-    const gchar *host = soup_client_context_get_host(webrtc_entry->client);
-    gchar *sql = g_strdup_printf("UPDATE webrtc_log outdate =CURRENT_TIMESTAMP WHERE hashid=%" G_GUINT64_FORMAT ";",
+    // const gchar *host = soup_client_context_get_host(webrtc_entry->client);
+    gchar *sql = g_strdup_printf("UPDATE webrtc_log outdate=CURRENT_TIMESTAMP WHERE hashid=%" G_GUINT64_FORMAT ";",
                                  webrtc_entry->hash_id);
     add_webrtc_access_log(sql);
     g_free(sql);
@@ -524,6 +524,41 @@ request_started_callback(SoupServer *server, SoupMessage *msg,
 }
 #endif
 
+static SoupBuffer *add_user_to_html(SoupBuffer *oldbuf, gchar const *meta) {
+    SoupBuffer *buffer = NULL;
+    GString *html = g_string_new(oldbuf->data);
+    soup_buffer_free(oldbuf);
+    g_string_replace(html, "{{tag}}", meta, 0);
+    buffer = soup_buffer_new(SOUP_MEMORY_COPY, html->str, html->len);
+    g_string_free(html, FALSE);
+    return buffer;
+}
+
+static gchar *get_auth_value_by_key(const gchar *auth, const gchar *key) {
+    char **pairs, *eq, *name, *value, *realm = NULL;
+    int i;
+    pairs = g_strsplit(auth, ",", -1);
+    for (i = 0; pairs[i]; i++) {
+        name = pairs[i];
+        eq = strchr(name, '=');
+        if (eq) {
+            *eq = '\0';
+            value = eq + 1;
+        } else
+            value = NULL;
+        if (g_str_has_suffix(name, key)) {
+            eq = strchr(++value, '"'); // ++ for skip first '"', strchr for last '"'
+            if (eq)
+                *eq = '\0';
+            realm = g_strdup(value);
+            break;
+        }
+        // g_print("name: %s, value: %s\n", name, value);
+    }
+    g_free(pairs);
+    return realm;
+}
+
 #include <sys/stat.h>
 static void
 do_get(SoupServer *server, SoupMessage *msg, const char *path) {
@@ -552,6 +587,22 @@ do_get(SoupServer *server, SoupMessage *msg, const char *path) {
         buffer = soup_buffer_new_with_owner(g_mapped_file_get_contents(mapping),
                                             g_mapped_file_get_length(mapping),
                                             mapping, (GDestroyNotify)g_mapped_file_unref);
+        if (g_str_has_suffix(path, ".html")) {
+            const gchar *auth = soup_message_headers_get_one(msg->request_headers, "Authorization");
+            if (auth != NULL) {
+                gchar *username = get_auth_value_by_key(auth, (const gchar *)"username");
+                const gchar *uid = soup_message_headers_get_one(msg->request_headers, "Uid");
+                const gchar *role = soup_message_headers_get_one(msg->request_headers, "Role");
+                gchar *meta = g_strdup_printf("<meta name=\"user\" uname=\"%s\" uid=\"%s\" role=\"%s\">\n",
+                                              username,
+                                              ++uid, // ++ just for skip empty char.
+                                              ++role);
+                // g_print("auth:  %s, username: %s\n", auth, username);
+                buffer = add_user_to_html(buffer, meta);
+                g_free(username);
+                g_free(meta);
+            }
+        }
         soup_message_body_append_buffer(msg->response_body, buffer);
         soup_buffer_free(buffer);
     } else /* msg->method == SOUP_METHOD_HEAD */ {
@@ -570,38 +621,13 @@ do_get(SoupServer *server, SoupMessage *msg, const char *path) {
     soup_message_set_status(msg, SOUP_STATUS_OK);
 }
 
-static gchar *get_auth_value_by_key(const gchar *auth, const gchar *key) {
-    char **pairs, *eq, *name, *value, *realm = NULL;
-    int i;
-    pairs = g_strsplit(auth, ",", -1);
-    for (i = 0; pairs[i]; i++) {
-        name = pairs[i];
-        eq = strchr(name, '=');
-        if (eq) {
-            *eq = '\0';
-            value = eq + 1;
-        } else
-            value = NULL;
-        if (g_str_has_suffix(name, key)) {
-            eq = strchr(++value, '"'); // ++ for skip first '"', strchr for last '"'
-            if (eq)
-                *eq = '\0';
-            realm = g_strdup(value);
-            break;
-        }
-        // g_print("name: %s, value: %s\n", name, value);
-    }
-    g_free(pairs);
-    return realm;
-}
-
 static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
                               SoupMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
                               G_GNUC_UNUSED SoupClientContext *client_context,
                               G_GNUC_UNUSED gpointer user_data) {
     char *file_path;
     CustomSoupData *data = (CustomSoupData *)user_data;
-#if 0
+#if 1
     SoupMessageHeadersIter iter;
     const char *name, *value;
 
@@ -710,6 +736,13 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
     if (user == NULL)
         return NULL;
     ret = g_strdup(json_object_get_string_member(root_obj, "pwd"));
+    gchar *uid = g_strdup_printf("% " G_GINT64_FORMAT, json_object_get_int_member(root_obj, "uid"));
+    soup_message_headers_append(msg->request_headers, "Uid", uid);
+    g_free(uid);
+
+    uid = g_strdup_printf("% " G_GINT64_FORMAT, json_object_get_int_member(root_obj, "role"));
+    soup_message_headers_append(msg->request_headers, "Role", uid);
+    g_free(uid);
     // ret = soup_auth_domain_digest_encode_password(username,
     //                                               realm,
     //                                               json_object_get_string_member(root_obj, "pwd"));
