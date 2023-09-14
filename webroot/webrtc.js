@@ -204,6 +204,19 @@
       }
     }
 
+function addOnlineUserList(data) {
+      document.getElementById('online-users').innerHTML = '';
+      data.forEach((item) => {
+        let div = '<li class="list-group-item d-flex justify-content-between align-items-start">' +
+                  '<div class="ms-2 me-auto">' +
+                  '<div class="fw-bold">'+ item.name + '</div>' +
+                  'login :' + item.indate + '</div>' +
+          '<span class="badge bg-primary rounded-pill">0</span></li>';
+        document.getElementById('online-users').innerHTML += div;
+      });
+    }
+
+
     function createWebrtcRecv() {
       console.log("create webrtc receive peer.");
       webrtcPeerConnection = new RTCPeerConnection(stun_config);
@@ -346,11 +359,11 @@
           if (reconnectTimerId)
             clearTimeout(reconnectTimerId);
 
-          $.getJSON('https://api.ipify.org?format=jsonp&callback=?', function (data) {
+          $.getJSON('https://api.ipify.org?format=json', function (data) {
               let info = {
                   client: {
                       ip: data.ip,
-                      username: document.querySelector('meta[name="user"]').uname,
+                      username: document.querySelector('meta[name="user"]').content,
                       useragent: navigator.userAgent,
                       path: document.location.pathname,
                       origin: document.location.origin
@@ -579,8 +592,6 @@
       startRecord.innerHTML = isRecord ? "Stop Record" : "Start Record";
     }
 
-
-
     function onAddRemoteStream(event) {
       // var el = document.createElement(event.track.kind)
       const el = document.querySelector('video');
@@ -623,12 +634,11 @@
         return;
       }
 
-      if (msg.record)
-        return recordCallBack(msg.record);
-
       switch (msg.type) {
         case "sdp": onIncomingSDP(msg.data); break;
         case "ice": onIncomingICE(msg.data); break;
+        case "record": recordCallBack(msg.data); break;
+        case "users": addOnlineUserList(msg.data); break;
         default: break;
       }
     }

@@ -130,6 +130,39 @@ gchar *get_user_auth(const gchar *username, const gchar *realm) {
     return data.ret;
 }
 
+gchar *get_online_user_list(const gchar *list) {
+    int rc;
+    gchar *errMsg;
+    struct _SQLdata data = {.ret = NULL};
+    rc = sqlite3_open(dbpath, &db);
+
+    if (rc != SQLITE_OK) {
+        g_print("open db failed\n");
+        init_db();
+    }
+    gchar *sql = g_strdup_printf("WITH json_users AS "
+                                 "(SELECT json_group_array( "
+                                 "json_object('id',webrtc_user.id, 'name', "
+                                 "webrtc_log.username, 'hashid', hashid,"
+                                 " 'indate', datetime(indate, 'localtime')) "
+                                 ") AS result "
+                                 "FROM webrtc_log "
+                                 "INNER JOIN webrtc_user "
+                                 "ON webrtc_user.username == webrtc_log.username "
+                                 "WHERE hashid IN %s ) "
+                                 "SELECT json_object('type',\"users\",'data',json(result)) FROM json_users;",
+                                 list);
+    rc = sqlite3_exec(db, sql, callback, &data, &errMsg);
+    sqlite3_close(db);
+    if (rc != SQLITE_OK) {
+        g_print("sql error: %s \n", errMsg);
+        return NULL;
+    }
+    g_free(sql);
+    g_print("get users: %s\n", data.ret);
+    return data.ret;
+}
+
 int add_http_access_log(const gchar *sql) {
     int rc;
     gchar *errMsg;

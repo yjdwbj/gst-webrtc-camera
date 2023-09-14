@@ -321,6 +321,7 @@ int main(int argc, char *argv[]) {
     if (fullpath != NULL) {
         read_config_json(fullpath);
         g_free(fullpath);
+    } else {
         g_error("Not found config.json, exit!!!\n");
         exit(1);
     }

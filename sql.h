@@ -24,7 +24,9 @@
 #define _SQLITE3_H
 #include <glib.h>
 
-gchar* get_user_auth(const gchar *username,const gchar *realm);
+gchar *get_user_auth(const gchar *username, const gchar *realm);
+gchar *get_online_user_list(const gchar *list);
+
 int add_http_access_log(const gchar *sql);
 int add_webrtc_access_log(const gchar *sql);
 

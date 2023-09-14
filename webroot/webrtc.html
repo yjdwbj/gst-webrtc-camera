@@ -52,6 +52,7 @@
     }
   </style>
 </head>
+
 <body>
   <div>
     <h1 class="text-center" id="title">Gstreamer Webrtc Camera</h1>
@@ -84,23 +85,42 @@
           <label>Control Panel</label>
           <button type="button" class="btn-close text-reset" data-bs-dismiss="offcanvas" aria-label="Close"></button>
         </div>
-        <div class="offcanvas-body d-flex flex-column py-0">
-          <div class="card">
-            <div class="card-header">
-              video user contorls
-            </div>
-            <div class="card-body m-0 p-0">
-              <ul class="list-group" id="ctrls">
-              </ul>
+        <ul class="nav nav-tabs" id="myTab" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="ctrl-panel" data-bs-toggle="tab" data-bs-target="#ctrl" type="button"
+              role="tab" aria-controls="ctrl" aria-selected="true">Control Panel</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="user-info" data-bs-toggle="tab" data-bs-target="#users" type="button"
+              role="tab" aria-controls="users" aria-selected="false">Online Users</button>
+          </li>
+        </ul>
+        <div class="tab-content h-100" id="myTabContent">
+          <div class="tab-pane fade show active" id="ctrl" role="tabpanel" aria-labelledby="ctrl-panel">
+            <div class="offcanvas-body d-flex flex-column py-0 h-100">
+              <div class="card">
+                <div class="card-header">
+                  video user contorls
+                </div>
+                <div class="card-body m-0 p-0">
+                  <ul class="list-group" id="ctrls">
+                  </ul>
+                </div>
+              </div>
+              <div class="card flex-grow-1">
+                <div class="card-header">
+                  SDP info
+                </div>
+                <div class="card-body m-0 p-0">
+                  <textarea id="showsdp" class="w-100 h-100 m-0"></textarea>
+                </div>
+              </div>
             </div>
           </div>
-          <div class="card flex-grow-1">
-            <div class="card-header">
-              SDP info
-            </div>
-            <div class="card-body m-0 p-0">
-              <textarea id="showsdp" class="w-100 h-100 m-0"></textarea>
-            </div>
+          <div class="tab-pane fade" id="users" role="tabpanel" aria-labelledby="user-info">
+            <ol class="list-group list-group-numbered" id="online-users">
+
+            </ol>
           </div>
         </div>
       </div>

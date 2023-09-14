@@ -29,6 +29,8 @@
 gchar *video_priority = NULL;
 gchar *audio_priority = NULL;
 
+static GHashTable *webrtc_connected_table;
+
 #define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
 static int client_limit = 3;
 static gchar *
@@ -197,6 +199,34 @@ handle_sdp_offer(WebrtcItem *webrtc_entry, const gchar *text) {
     gst_webrtc_session_description_free(offer);
 }
 
+static gchar *get_table_list() {
+    gchar *list = g_strdup("( ");
+    GList *item = g_hash_table_get_keys(webrtc_connected_table);
+    for (; item; item = item->next) {
+        gchar *td = g_strdup_printf("%" G_GUINT64_FORMAT ",", (intptr_t)(item->data));
+        gchar *tmp = g_strconcat(list, td, NULL);
+        g_free(list);
+        g_free(td);
+        list = tmp;
+    }
+    list[strlen(list) - 1] = ')';
+
+    g_print("list: %s\n", list);
+    return list;
+}
+
+static gchar *update_online_users()
+{
+    gchar *list = get_table_list();
+    gchar *userlist = get_online_user_list(list);
+    GList *item = g_hash_table_get_keys(webrtc_connected_table);
+    for (; item; item = item->next) {
+        soup_websocket_connection_send_text(item->data, userlist);
+    }
+    g_free(list);
+    g_free(userlist);
+}
+
 static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection,
                                       SoupWebsocketDataType data_type, GBytes *message, gpointer user_data) {
     gsize size;
@@ -246,6 +276,7 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
                                      json_object_get_string_member(client, "useragent"));
         add_webrtc_access_log(sql);
         g_free(sql);
+        update_online_users();
         goto cleanup;
     }
 
@@ -267,7 +298,8 @@ static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *con
                     JsonObject *res_json;
                     gchar *json_string;
                     res_json = json_object_new();
-                    json_object_set_string_member(res_json, "record", "started");
+                    json_object_set_string_member(res_json, "type", "record");
+                    json_object_set_string_member(res_json, "data", "started");
                     json_string = get_string_from_json_object(res_json);
                     json_object_unref(res_json);
 
@@ -454,17 +486,19 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
 
     if (webrtc_entry->sendpipe)
         gst_element_set_state(webrtc_entry->sendpipe, GST_STATE_PLAYING);
-    // g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
+    g_hash_table_insert(webrtc_connected_table, connection, webrtc_entry);
 }
 
 static void destroy_webrtc_table(gpointer entry_ptr) {
     WebrtcItem *webrtc_entry = (WebrtcItem *)entry_ptr;
     g_assert(webrtc_entry != NULL);
+    g_print("destroy client: %" G_GUINT64_FORMAT " \n", webrtc_entry->hash_id);
     // const gchar *host = soup_client_context_get_host(webrtc_entry->client);
-    gchar *sql = g_strdup_printf("UPDATE webrtc_log outdate=CURRENT_TIMESTAMP WHERE hashid=%" G_GUINT64_FORMAT ";",
+    gchar *sql = g_strdup_printf("UPDATE webrtc_log SET outdate=CURRENT_TIMESTAMP WHERE hashid=%" G_GUINT64_FORMAT ";",
                                  webrtc_entry->hash_id);
     add_webrtc_access_log(sql);
     g_free(sql);
+    update_online_users();
 
     if (webrtc_entry->stop_webrtc != NULL) {
         webrtc_entry->stop_webrtc(webrtc_entry);
@@ -593,7 +627,9 @@ do_get(SoupServer *server, SoupMessage *msg, const char *path) {
                 gchar *username = get_auth_value_by_key(auth, (const gchar *)"username");
                 const gchar *uid = soup_message_headers_get_one(msg->request_headers, "Uid");
                 const gchar *role = soup_message_headers_get_one(msg->request_headers, "Role");
-                gchar *meta = g_strdup_printf("<meta name=\"user\" uname=\"%s\" uid=\"%s\" role=\"%s\">\n",
+                gchar *meta = g_strdup_printf("<meta name=\"user\" content=\"%s\">\n"
+                                              "<meta name=\"uid\" content=\"%s\">\n"
+                                              "<meta name=\"role\" content=\"%s\">\n",
                                               username,
                                               ++uid, // ++ just for skip empty char.
                                               ++role);
@@ -627,7 +663,7 @@ static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
                               G_GNUC_UNUSED gpointer user_data) {
     char *file_path;
     CustomSoupData *data = (CustomSoupData *)user_data;
-#if 1
+#if 0
     SoupMessageHeadersIter iter;
     const char *name, *value;
 
@@ -758,7 +794,6 @@ void start_http(webrtc_callback fn, int port, int clients) {
     CustomSoupData *data;
     client_limit = clients;
     data = g_new0(CustomSoupData, 1);
-    GHashTable *webrtc_connected_table;
 
     // create self-signed certificate for local area network access
     // https://stackoverflow.com/questions/66558788/how-to-create-a-self-signed-or-signed-by-own-ca-ssl-certificate-for-ip-address
