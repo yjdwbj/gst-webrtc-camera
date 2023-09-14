@@ -347,16 +347,66 @@ static GstElement *get_video_encoder_by_name(gchar *name) {
 }
 
 #if defined(HAS_JETSON_NANO)
+static gchar *get_video_driver_name(const gchar *device) {
+    gchar *drvname = NULL;
+    int fd, ret;
+    struct v4l2_capability caps;
+    fd = open(device, O_RDWR);
+    if (fd < 0) {
+        g_error("Open video device failed\n");
+        return drvname;
+    }
+
+    memset(&caps, 0, sizeof(caps));
+    ret = ioctl(fd, VIDIOC_QUERYCAP, &caps);
+    if (ret == -1) {
+        g_error("Querying device capabilities failed\n");
+        goto failed;
+    }
+    drvname = g_strdup((gchar *)(caps.driver));
+failed:
+    close(fd);
+    return drvname;
+}
+
 static GstElement *get_nvbin() {
     GstElement *nvbin;
+    gchar *binstr = NULL;
+    gchar *drvname = get_video_driver_name(config_data.v4l2src_data.device);
     // If the following parameters are not suitable, it will always block in BLOCKING MODE.
-    gchar *binstr = g_strdup_printf("nvarguscamerasrc sensor_id=0 ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! "
-                                    " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
-                                    " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
-                                    config_data.v4l2src_data.type,
-                                    config_data.v4l2src_data.width,
-                                    config_data.v4l2src_data.height,
-                                    config_data.v4l2src_data.framerate);
+    g_print("get device :%s , driver name: %s\n", config_data.v4l2src_data.device, drvname);
+    if (g_str_has_prefix(drvname, "uvcvideo")) {
+        if (g_str_has_prefix(config_data.v4l2src_data.type, "image")) {
+            binstr = g_strdup_printf("v4l2src device=%s ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! "
+                                     " nvjpegdec ! nvvidconv ! "
+                                     " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
+                                     " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
+                                     config_data.v4l2src_data.device,
+                                     config_data.v4l2src_data.type,
+                                     config_data.v4l2src_data.width,
+                                     config_data.v4l2src_data.height,
+                                     config_data.v4l2src_data.framerate);
+        } else {
+            binstr = g_strdup_printf("v4l2src device=%s ! nvvidconv ! "
+                                     " %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! nvvidconv ! "
+                                     " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
+                                     " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
+                                     config_data.v4l2src_data.device,
+                                     config_data.v4l2src_data.type,
+                                     config_data.v4l2src_data.width,
+                                     config_data.v4l2src_data.height,
+                                     config_data.v4l2src_data.framerate);
+        }
+    } else {
+        binstr = g_strdup_printf("nvarguscamerasrc sensor_id=0 ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! "
+                                 " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
+                                 " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
+                                 config_data.v4l2src_data.type,
+                                 config_data.v4l2src_data.width,
+                                 config_data.v4l2src_data.height,
+                                 config_data.v4l2src_data.framerate);
+    }
+    g_free(drvname);
     nvbin = gst_parse_bin_from_description(binstr, TRUE, NULL);
     g_free(binstr);
     return nvbin;
@@ -367,8 +417,7 @@ static GstElement *get_video_src() {
     GstCaps *srcCaps;
     GstElement *teesrc, *capsfilter;
     gchar *path = get_shellcmd_results("pgrep X");
-    if(path != NULL)
-    {
+    if (path != NULL) {
         g_setenv("XDG_SESSION_TYPE", "mate", TRUE);
         g_free(path);
     }
@@ -413,21 +462,18 @@ static GstElement *get_video_src() {
                  "io-mode", config_data.v4l2src_data.io_mode,
                  NULL);
 
-    srcvconvert = gst_element_factory_make("videoconvert", NULL);
-
     queue = gst_element_factory_make("queue", NULL);
     g_object_set(G_OBJECT(queue), "leaky", 1, NULL);
-    if (!teesrc || !source || !srcvconvert || !capsfilter || !queue) {
+    if (!teesrc || !source || !capsfilter || !queue) {
         g_printerr("video_src all elements could be created.\n");
         return NULL;
     }
     // srcCaps = _getVideoCaps("image/jpeg", "NV12", 30, 1280, 720);
 
-    gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, srcvconvert, teesrc, queue, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), source, capsfilter, teesrc, queue, NULL);
 
-    if (!strncmp(config_data.v4l2src_data.type, "image/jpeg", 10)) {
+    if (g_str_has_suffix(config_data.v4l2src_data.type, "jpeg")) {
         GstElement *jpegparse, *jpegdec;
-        jpegparse = gst_element_factory_make("jpegparse", NULL);
 
         if (gst_element_factory_find("vajpegdec"))
             jpegdec = gst_element_factory_make("vajpegdec", NULL);
@@ -435,28 +481,42 @@ static GstElement *get_video_src() {
             jpegdec = gst_element_factory_make("vaapijpegdec", NULL);
         else if (gst_element_factory_find("v4l2jpegdec"))
             jpegdec = gst_element_factory_make("v4l2jpegdec", NULL);
-        else
+        else {
             jpegdec = gst_element_factory_make("jpegdec", NULL);
+            jpegparse = gst_element_factory_make("jpegparse", NULL);
+            srcvconvert = gst_element_factory_make("videoconvert", NULL);
+            gst_bin_add_many(GST_BIN(pipeline), jpegparse, srcvconvert, NULL);
+        }
 
-        if (!jpegdec || !jpegparse) {
+        if (!jpegdec) {
             g_printerr("video_src all elements could be created.\n");
             return NULL;
         }
-        gst_bin_add_many(GST_BIN(pipeline), jpegparse, jpegdec, NULL);
-        if (gst_element_factory_find("vaapipostproc")) {
-            GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
-            gst_bin_add(GST_BIN(pipeline), vapp);
-            if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, vapp, queue, srcvconvert, teesrc, NULL)) {
-                g_error("Failed to link elements video mjpg src\n");
-                return NULL;
+        gst_bin_add(GST_BIN(pipeline), jpegdec);
+        if (jpegparse != NULL) {
+            if (gst_element_factory_find("vaapipostproc")) {
+                GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
+                gst_bin_add(GST_BIN(pipeline), vapp);
+                if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, vapp, queue, srcvconvert, teesrc, NULL)) {
+                    g_error("Failed to link elements video mjpg src\n");
+                    return NULL;
+                }
+            } else {
+                if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, queue, srcvconvert, teesrc, NULL)) {
+                    g_error("Failed to link elements video mjpg src\n");
+                    return NULL;
+                }
             }
+
         } else {
-            if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, queue, srcvconvert, teesrc, NULL)) {
+            if (!gst_element_link_many(source, capsfilter, jpegdec, queue, teesrc, NULL)) {
                 g_error("Failed to link elements video mjpg src\n");
                 return NULL;
             }
         }
     } else {
+        srcvconvert = gst_element_factory_make("videoconvert", NULL);
+        gst_bin_add(GST_BIN(pipeline), srcvconvert);
         if (gst_element_factory_find("vaapipostproc")) {
             GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
             gst_bin_add(GST_BIN(pipeline), vapp);
@@ -499,7 +559,7 @@ static GstElement *get_audio_device() {
             path = get_shellcmd_results("pactl list sources short | grep input | head -n1 | awk '{print $2}'");
         }
         g_object_set(G_OBJECT(source), "device", path, NULL);
-        if(path != NULL)
+        if (path != NULL)
             free(path);
         return source;
     }
@@ -819,10 +879,18 @@ void udpsrc_cmd_rec_stop(gpointer user_data) {
 int get_record_state() { return cmd_recording ? 1 : 0; }
 
 static gchar *udpsrc_audio_cmdline(const gchar *sink) {
+    gchar *opus;
+    if (g_str_has_prefix(sink, "mux")) {
+        opus = g_strdup("rtpopusdepay");
+    } else {
+        opus = g_strdup("rtpopusdepay !rtpopuspay");
+    }
     gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo ! "
                                        " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay ! rtpopuspay !  queue leaky=1 ! %s.",
-                                       config_data.webrtc.udpsink.port + 1, config_data.webrtc.udpsink.addr, sink);
+                                       " %s !  queue leaky=1 ! %s.",
+                                       config_data.webrtc.udpsink.port + 1,
+                                       config_data.webrtc.udpsink.addr, opus, sink);
+    g_free(opus);
     return audio_src;
 }
 

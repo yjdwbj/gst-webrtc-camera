@@ -679,12 +679,17 @@ int main(int argc, char *argv[]) {
         strvcaps = g_strdup(app->video_caps);
     } else {
         gchar *jpegdec = NULL;
-        if (gst_element_factory_find("v4l2jpegdec")) {
-            jpegdec = g_strdup("v4l2jpegdec");
+        if (gst_element_factory_find("vaapijpegdec")) {
+            strvcaps = g_strdup_printf("%s ! %s ", app->video_caps, jpegdec);
         } else {
-            jpegdec = g_strdup("jpegdec");
+            if (gst_element_factory_find("v4l2jpegdec")) {
+                jpegdec = g_strdup("v4l2jpegdec");
+            } else {
+                jpegdec = g_strdup("jpegdec");
+            }
+            strvcaps = g_strdup_printf("%s ! jpegparse ! %s ", app->video_caps, jpegdec);
         }
-        strvcaps = g_strdup_printf("%s ! jpegparse ! %s ", app->video_caps, jpegdec);
+
         g_free(jpegdec);
     }
 
