@@ -215,16 +215,18 @@ static gchar *get_table_list() {
     return list;
 }
 
-static gchar *update_online_users()
+static void update_online_users()
 {
+    GList *keys = NULL, *item = NULL;
     gchar *list = get_table_list();
     gchar *userlist = get_online_user_list(list);
-    GList *item = g_hash_table_get_keys(webrtc_connected_table);
-    for (; item; item = item->next) {
+    keys = g_hash_table_get_keys(webrtc_connected_table);
+    for (item = keys; item; item = item->next) {
         soup_websocket_connection_send_text(item->data, userlist);
     }
     g_free(list);
     g_free(userlist);
+    g_list_free(keys);
 }
 
 static void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection,
