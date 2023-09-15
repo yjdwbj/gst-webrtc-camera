@@ -306,11 +306,14 @@ static GstElement *get_hardware_h264_encoder() {
     if (gst_element_factory_find("vah264lpenc")) {
         // VA-API H.264 Low Power Encoder in Intel(R) Gen Graphics
         encoder = gst_element_factory_make("vah264lpenc", NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000,
+                     "rate-control", 16, "qpb", 14, "key-int-max", 30, "ref-frames", 1, "b-frames", 2, NULL);
     } else if (gst_element_factory_find("vaapih264enc")) {
         // VA-API H264 encoder
         encoder = gst_element_factory_make("vaapih264enc", NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000,
+                     "init-qp", 14, "quality-level", 4, "max-bframes", 2,
+                     NULL);
     } else if (gst_element_factory_find("nvv4l2h264enc")) {
         // https://docs.nvidia.com/jetson/archives/r34.1/DeveloperGuide/text/SD/Multimedia/AcceleratedGstreamer.html#supported-h-264-h-265-vp9-av1-encoder-features-with-gstreamer-1-0
         encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
@@ -442,7 +445,7 @@ static GstElement *get_video_src() {
     }
 
 #else
-    GstElement *srcvconvert, *queue, *source;
+    GstElement *queue, *source;
     gchar *capBuf;
     capBuf = g_strdup_printf("%s, width=%d, height=%d, framerate=(fraction)%d/1",
                              config_data.v4l2src_data.type,
@@ -483,7 +486,6 @@ static GstElement *get_video_src() {
         else {
             jpegdec = gst_element_factory_make("jpegdec", NULL);
             jpegparse = gst_element_factory_make("jpegparse", NULL);
-            srcvconvert = gst_element_factory_make("videoconvert", NULL);
         }
 
         if (!jpegdec) {
@@ -492,20 +494,20 @@ static GstElement *get_video_src() {
         }
         gst_bin_add(GST_BIN(pipeline), jpegdec);
         if (jpegparse != NULL) {
-            gst_bin_add_many(GST_BIN(pipeline), jpegparse, srcvconvert, NULL);
-            // if (gst_element_factory_find("vaapipostproc")) {
-            //     GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
-            //     gst_bin_add(GST_BIN(pipeline), vapp);
-            //     if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, vapp, queue, srcvconvert, teesrc, NULL)) {
-            //         g_error("Failed to link elements video mjpg src\n");
-            //         return NULL;
-            //     }
-            // } else {
-            if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, queue, srcvconvert, teesrc, NULL)) {
-                g_error("Failed to link elements video mjpg src\n");
-                return NULL;
+            gst_bin_add_many(GST_BIN(pipeline), jpegparse, NULL);
+            if (gst_element_factory_find("vaapipostproc")) {
+                GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
+                gst_bin_add(GST_BIN(pipeline), vapp);
+                if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, vapp, queue, teesrc, NULL)) {
+                    g_error("Failed to link elements video mjpg src\n");
+                    return NULL;
+                }
+            } else {
+                if (!gst_element_link_many(source, capsfilter, jpegparse, jpegdec, queue, teesrc, NULL)) {
+                    g_error("Failed to link elements video mjpg src\n");
+                    return NULL;
+                }
             }
-            // }
         } else {
             if (!gst_element_link_many(source, capsfilter, jpegdec, queue, teesrc, NULL)) {
                 g_error("Failed to link elements video mjpg src\n");
@@ -513,21 +515,19 @@ static GstElement *get_video_src() {
             }
         }
     } else {
-        srcvconvert = gst_element_factory_make("videoconvert", NULL);
-        gst_bin_add(GST_BIN(pipeline), srcvconvert);
-        // if (gst_element_factory_find("vaapipostproc")) {
-        //     GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
-        //     gst_bin_add(GST_BIN(pipeline), vapp);
-        //     if (!gst_element_link_many(source, vapp, queue, srcvconvert, teesrc, NULL)) {
-        //         g_error("Failed to link elements video src\n");
-        //         return NULL;
-        //     }
-        // } else {
-        if (!gst_element_link_many(source, queue, srcvconvert, teesrc, NULL)) {
-            g_error("Failed to link elements video src\n");
-            return NULL;
+        if (gst_element_factory_find("vaapipostproc")) {
+            GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
+            gst_bin_add(GST_BIN(pipeline), vapp);
+            if (!gst_element_link_many(source, capsfilter, vapp, queue, teesrc, NULL)) {
+                g_error("Failed to link elements video src\n");
+                return NULL;
+            }
+        } else {
+            if (!gst_element_link_many(source, capsfilter, queue, teesrc, NULL)) {
+                g_error("Failed to link elements video src\n");
+                return NULL;
+            }
         }
-        // }
     }
 #endif
     return teesrc;
@@ -728,12 +728,16 @@ static GstElement *get_encoder_src() {
     }
     link_request_src_pad(video_source, clockbin);
 #else
-    GstElement *clock, *queue;
-    queue = gst_element_factory_make("queue", NULL);
-    g_object_set(G_OBJECT(queue), "leaky", 1, NULL);
+    GstElement *clock, *videoconvert, *capsfilter;
+    GstCaps *srcCaps;
+    capsfilter = gst_element_factory_make("capsfilter", NULL);
+    srcCaps = gst_caps_from_string("video/x-h264,profile=main");
+    g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
+    gst_caps_unref(srcCaps);
+    videoconvert = gst_element_factory_make("videoconvert", NULL);
     clock = gst_element_factory_make("clockoverlay", NULL);
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
-    gst_bin_add_many(GST_BIN(pipeline), clock, teesrc, queue, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), clock, teesrc, videoconvert, capsfilter, NULL);
     if (config_data.sysinfo) {
         GstElement *textoverlay;
         textoverlay = gst_element_factory_make("textoverlay", NULL);
@@ -743,17 +747,17 @@ static GstElement *get_encoder_src() {
         gchar *sysinfo = get_basic_sysinfo();
         g_object_set(G_OBJECT(textoverlay), "text", sysinfo, "valignment", 1, "line-alignment", 0, "halignment", 0, "font-desc", "Sans, 10", NULL);
         g_free(sysinfo);
-        if (!gst_element_link_many(queue, textoverlay, clock, encoder, teesrc, NULL)) {
+        if (!gst_element_link_many(videoconvert, textoverlay, clock, encoder, capsfilter, teesrc, NULL)) {
             g_print("Failed to link elements encoder  source\n");
             return NULL;
         }
     } else {
-        if (!gst_element_link_many(queue, clock, encoder, teesrc, NULL)) {
+        if (!gst_element_link_many(videoconvert, clock, encoder, capsfilter, teesrc, NULL)) {
             g_print("Failed to link elements encoder source \n");
             return NULL;
         }
     }
-    link_request_src_pad(video_source, queue);
+    link_request_src_pad(video_source, videoconvert);
 #endif
     return teesrc;
 }
@@ -1907,7 +1911,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     item->stop_webrtc = &stop_udpsrc_webrtc;
 
     create_data_channel((gpointer)item);
-#if 1
+#if 0
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(item->sendpipe), GST_DEBUG_GRAPH_SHOW_ALL, "udpsrc_webrtc");
 #endif
 }
@@ -1963,7 +1967,7 @@ int start_av_udpsink() {
         }
         link_request_src_pad(audio_source, aqueue);
     }
-#if 0
+#if 1
     gst_debug_bin_to_dot_file_with_ts(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "udpsink_webrtc");
 #endif
     return 0;

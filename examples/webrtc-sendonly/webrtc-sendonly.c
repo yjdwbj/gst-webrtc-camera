@@ -680,6 +680,7 @@ int main(int argc, char *argv[]) {
     } else {
         gchar *jpegdec = NULL;
         if (gst_element_factory_find("vaapijpegdec")) {
+            jpegdec = g_strdup("vaapijpegdec");
             strvcaps = g_strdup_printf("%s ! %s ", app->video_caps, jpegdec);
         } else {
             if (gst_element_factory_find("v4l2jpegdec")) {
