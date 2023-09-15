@@ -179,3 +179,255 @@ lret:
     close(fd);
     return ret;
 }
+
+static gchar *num2s(unsigned num, gboolean is_hex) {
+    return (is_hex ? g_strdup_printf("0x%08x", num) : g_strdup_printf("%u", num));
+}
+
+static void buftype2s(int type) {
+    gchar *tstr;
+    switch (type) {
+    case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+        tstr = (char *)"Video Capture";
+        break;
+    case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+        tstr = (char *)"Video Capture Multiplanar";
+        break;
+    case V4L2_BUF_TYPE_VIDEO_OUTPUT:
+        tstr = (char *)"Video Output";
+        break;
+    case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+        tstr = (char *)"Video Output Multiplanar";
+        break;
+    case V4L2_BUF_TYPE_VIDEO_OVERLAY:
+        tstr = (char *)"Video Overlay";
+        break;
+    case V4L2_BUF_TYPE_VBI_CAPTURE:
+        tstr = (char *)"VBI Capture";
+        break;
+    case V4L2_BUF_TYPE_VBI_OUTPUT:
+        tstr = (char *)"VBI Output";
+        break;
+    case V4L2_BUF_TYPE_SLICED_VBI_CAPTURE:
+        tstr = (char *)"Sliced VBI Capture";
+        break;
+    case V4L2_BUF_TYPE_SLICED_VBI_OUTPUT:
+        tstr = (char *)"Sliced VBI Output";
+        break;
+    case V4L2_BUF_TYPE_VIDEO_OUTPUT_OVERLAY:
+        tstr = (char *)"Video Output Overlay";
+        break;
+    case V4L2_BUF_TYPE_SDR_CAPTURE:
+        tstr = (char *)"SDR Capture";
+        break;
+    case V4L2_BUF_TYPE_SDR_OUTPUT:
+        tstr = (char *)"SDR Output";
+        break;
+    case V4L2_BUF_TYPE_META_CAPTURE:
+        tstr = (char *)"Metadata Capture";
+        break;
+    case V4L2_BUF_TYPE_META_OUTPUT:
+        tstr = (char *)"Metadata Output";
+        break;
+    case V4L2_BUF_TYPE_PRIVATE:
+        tstr = (char *)"Private";
+        break;
+    default: {
+        gchar *tmp = num2s(type, TRUE);
+        g_print("Unknown (%s)\n", tmp);
+        g_free(tmp);
+        return;
+    }
+    }
+    g_print("Type: %s\n", tstr);
+}
+
+static gchar *fcc2s(__u32 val) {
+    gchar *s;
+    s = g_strdup_printf("%c%c%c%c",
+                        val & 0x7f,
+                        (val >> 8) & 0x7f,
+                        (val >> 16) & 0x7f,
+                        (val >> 24) & 0x7f);
+
+    if (val & (1U << 31)) {
+        gchar *tmp = g_strconcat(s, "-BE", NULL);
+        g_free(s);
+        return tmp;
+    }
+    return s;
+}
+static gchar *frmtype2s(unsigned type) {
+    static char *types[] = {
+        "Unknown",
+        "Discrete",
+        "Continuous",
+        "Stepwise"};
+
+    if (type > 3)
+        type = 0;
+    return types[type];
+}
+
+static gchar *fract2sec(struct v4l2_fract *f) {
+    return g_strdup_printf("%.3f", (1.0 * f->numerator) / f->denominator);
+}
+
+static gchar *fract2fps(struct v4l2_fract *f) {
+    return g_strdup_printf("%.3f", (1.0 * f->denominator) / f->numerator);
+}
+
+void print_frmsize(struct v4l2_frmsizeenum *frmsize, const char *prefix) {
+    g_print("%s\tSize: %s ", prefix, frmtype2s(frmsize->type));
+    if (frmsize->type == V4L2_FRMSIZE_TYPE_DISCRETE) {
+        g_print("%dx%d\n", frmsize->discrete.width, frmsize->discrete.height);
+    } else if (frmsize->type == V4L2_FRMSIZE_TYPE_CONTINUOUS) {
+        g_print("%dx%d - %dx%d\n",
+                frmsize->stepwise.min_width,
+                frmsize->stepwise.min_height,
+                frmsize->stepwise.max_width,
+                frmsize->stepwise.max_height);
+    } else if (frmsize->type == V4L2_FRMSIZE_TYPE_STEPWISE) {
+        g_print("%dx%d - %dx%d with step %d/%d\n",
+                frmsize->stepwise.min_width,
+                frmsize->stepwise.min_height,
+                frmsize->stepwise.max_width,
+                frmsize->stepwise.max_height,
+                frmsize->stepwise.step_width,
+                frmsize->stepwise.step_height);
+    }
+}
+
+void print_frmival(struct v4l2_frmivalenum *frmival, const char *prefix) {
+    gchar *mins, *maxs, *minf, *maxf;
+
+    g_print("%s\tInterval: %s ", prefix, frmtype2s(frmival->type));
+    if (frmival->type == V4L2_FRMIVAL_TYPE_DISCRETE) {
+        mins = fract2sec(&frmival->discrete);
+        minf = fract2fps(&frmival->discrete);
+        g_print("%ss (%s fps)\n", mins, minf);
+        g_free(mins);
+        g_free(minf);
+    } else if (frmival->type == V4L2_FRMIVAL_TYPE_CONTINUOUS) {
+        mins = fract2sec(&frmival->stepwise.min);
+        maxs = fract2sec(&frmival->stepwise.max);
+        maxf = fract2fps(&frmival->stepwise.max);
+        minf = fract2fps(&frmival->stepwise.min);
+        g_print("%ss - %ss (%s-%s fps)\n", mins, maxs, minf, maxf);
+        g_free(mins);
+        g_free(maxs);
+        g_free(minf);
+        g_free(maxf);
+    } else if (frmival->type == V4L2_FRMIVAL_TYPE_STEPWISE) {
+        gchar *step;
+        mins = fract2sec(&frmival->stepwise.min);
+        maxs = fract2sec(&frmival->stepwise.max);
+        step = fract2sec(&frmival->stepwise.step);
+        maxf = fract2fps(&frmival->stepwise.max);
+        minf = fract2fps(&frmival->stepwise.min);
+        g_print("%ss - %ss with step %ss (%s-%s fps)\n", mins, maxs, step, minf, maxf);
+        g_free(mins);
+        g_free(maxs);
+        g_free(minf);
+        g_free(maxf);
+        g_free(step);
+    }
+}
+
+int dump_video_device_fmt(const gchar *device) {
+    int fd;
+    gchar *tmp = NULL;
+    struct v4l2_fmtdesc fmtdesc;
+    struct v4l2_frmsizeenum frmsize;
+    struct v4l2_frmivalenum frmval;
+
+    memset(&fmtdesc, 0, sizeof(fmtdesc));
+    memset(&frmsize, 0, sizeof(frmsize));
+    memset(&frmval, 0, sizeof(frmval));
+    fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    fmtdesc.index = 0;
+    fmtdesc.mbus_code = 0;
+    // Open the device file
+    fd = open(device, O_RDWR);
+    if (fd < 0) {
+        return fd;
+    }
+    g_print("ioctl: VIDIOC_ENUM_FMT\n");
+    buftype2s(fmtdesc.type);
+    for (; 0 == ioctl(fd, VIDIOC_ENUM_FMT, &fmtdesc); fmtdesc.index++) {
+        tmp = fcc2s(fmtdesc.pixelformat);
+        if (fmtdesc.flags & V4L2_FMT_FLAG_COMPRESSED) {
+            g_print("\t[%d]: '%s' (%s, compressed)\n", fmtdesc.index, tmp, fmtdesc.description);
+        } else {
+            g_print("\t[%d]: '%s' (%s)\n", fmtdesc.index, tmp, fmtdesc.description);
+        }
+
+        g_free(tmp);
+        frmsize.pixel_format = fmtdesc.pixelformat;
+        frmsize.index = 0;
+        for (; 0 == ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &frmsize); frmsize.index++) {
+            if (frmsize.type != V4L2_FRMSIZE_TYPE_DISCRETE)
+                continue;
+            print_frmsize(&frmsize, "\t");
+            frmval.pixel_format = fmtdesc.pixelformat;
+            frmval.index = 0;
+            frmval.width = frmsize.discrete.width;
+            frmval.height = frmsize.discrete.height;
+            for (; 0 == ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &frmval); frmval.index++) {
+                print_frmival(&frmval, "\t\t");
+            }
+        }
+    }
+    close(fd);
+    return 0;
+}
+
+gboolean find_video_device_fmt(_v4l2src_data *data) {
+    gboolean match = FALSE;
+    int fd = -1;
+    struct v4l2_fmtdesc fmtdesc;
+    struct v4l2_frmsizeenum frmsize;
+    struct v4l2_frmivalenum frmval;
+
+    memset(&fmtdesc, 0, sizeof(fmtdesc));
+    memset(&frmsize, 0, sizeof(frmsize));
+    memset(&frmval, 0, sizeof(frmval));
+    fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    fmtdesc.index = 0;
+    fmtdesc.mbus_code = 0;
+    // Open the device file
+    fd = open(data->device, O_RDWR);
+    if (fd < 0) {
+        return match;
+    }
+
+    for (; 0 == ioctl(fd, VIDIOC_ENUM_FMT, &fmtdesc); fmtdesc.index++) {
+        frmsize.pixel_format = fmtdesc.pixelformat;
+        frmsize.index = 0;
+        for (; 0 == ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &frmsize); frmsize.index++) {
+            if (frmsize.type != V4L2_FRMSIZE_TYPE_DISCRETE)
+                continue;
+            if(frmsize.discrete.width == data->width &&
+                frmsize.discrete.height == data->height)
+            {
+                frmval.pixel_format = fmtdesc.pixelformat;
+                frmval.index = 0;
+                frmval.width = frmsize.discrete.width;
+                frmval.height = frmsize.discrete.height;
+                for (; 0 == ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &frmval); frmval.index++) {
+                   gfloat fps = ((1.0 * frmval.discrete.denominator) / frmval.discrete.numerator);
+                   if(data->framerate == (int)fps)
+                   {
+                       match = TRUE;
+                       break;
+                   }
+                }
+                break;
+            }
+        }
+    }
+    close(fd);
+    if (!match)
+        dump_video_device_fmt(data->device);
+    return match;
+}

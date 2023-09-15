@@ -28,6 +28,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "sql.h"
+#include "v4l2ctl.h"
 
 static GMainLoop *loop;
 static GstElement *pipeline;
@@ -57,8 +58,8 @@ static void _get_cpuid() {
         : "=r"(arm_cpuid));
     g_print("arm64 cpuid is: 0x%016lx \n", arm_cpuid);
 #elif defined(__x86_64__) || defined(_M_X64)
-    char str[9] = {0};
-    char PSN[30] = {0};
+    static char str[9] = {0};
+    static char PSN[30] = {0};
     int deax, debx, decx, dedx;
     __asm__("cpuid"
             : "=a"(deax), "=b"(debx), "=c"(decx), "=d"(dedx) // The output variables. EAX -> a and vice versa.
@@ -71,7 +72,7 @@ static void _get_cpuid() {
     sprintf(&PSN[9], "-%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
     sprintf(str, "%08X", decx); // i.e. xxxx-xxxx-xxxx-xxxx-XXXX-XXXX
     sprintf(&PSN[19], "-%C%C%C%C-%C%C%C%C", str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
-    gst_println("Get Current CPUID: %s\n", PSN);
+    gst_print("Get Current CPUID: %s\n", PSN);
 #endif
 }
 
@@ -249,6 +250,7 @@ static void read_config_json(gchar *fullpath) {
 static gchar *_get_config_path() {
     gchar *current_dir = g_get_current_dir();
     gchar *fullpath = g_strconcat(current_dir, "/config.json", NULL);
+    g_free(current_dir);
     if (access(fullpath, F_OK) == 0) {
         return fullpath;
     }
@@ -325,6 +327,12 @@ int main(int argc, char *argv[]) {
         g_error("Not found config.json, exit!!!\n");
         exit(1);
     }
+
+    if (!find_video_device_fmt(&config_data.v4l2src_data)) {
+        g_error("Set video pixformat failed !!!\n");
+        exit(1);
+    }
+
     // reset_user_ctrls(config_data.v4l2src_data.device);
 
     _get_cpuid();

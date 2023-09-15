@@ -52,16 +52,18 @@ struct _http_data {
     gchar *password;
 };
 
+typedef struct  {
+    gchar *device;
+    int width;
+    int height;
+    int framerate;
+    int io_mode;
+    gchar *type;
+    gchar *format;
+} _v4l2src_data;
+
 struct _GstConfigData {
-    struct _v4l2src_data {
-        gchar *device;
-        int width;
-        int height;
-        int framerate;
-        int io_mode;
-        gchar *type;
-        gchar *format;
-    } v4l2src_data;
+    _v4l2src_data v4l2src_data;
     int clients;             // How many clients can be allowed to connect to the server.
     gchar *videnc;           // i.e; h264,h265,vp9
     gchar *root_dir;         // streams output root path;

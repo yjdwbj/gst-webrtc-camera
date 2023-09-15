@@ -22,16 +22,19 @@
 
 #ifndef _V4L2CTL_H
 #define _V4L2CTL_H
+#include "data_struct.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <glib.h>
 #include <linux/videodev2.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
-#include <glib.h>
 
 gchar *get_device_json(const gchar* device);
 int set_ctrl_value(const gchar *device,int ctrl_id, int ctrl_val);
 int reset_user_ctrls(const gchar *device);
+int dump_video_device_fmt(const gchar *device);
+gboolean find_video_device_fmt(_v4l2src_data *data);
 
 #endif // _V4L2CTL_H
