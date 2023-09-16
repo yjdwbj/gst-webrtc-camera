@@ -567,6 +567,7 @@ function addOnlineUserList(data) {
         const showsdp = document.getElementById('showsdp');
         showsdp.value = '';
         showsdp.value = sdp.sdp;
+        console.log("answser Sdp: " + showsdp.value);
         await webrtcPeerConnection.setRemoteDescription(sdp).catch(reportError);
         webrtcPeerConnection.createAnswer().then(onLocalDescription).catch(reportError);
       } else {

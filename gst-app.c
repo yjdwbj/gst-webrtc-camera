@@ -699,6 +699,17 @@ static GstElement *create_textbins() {
 }
 #endif
 
+static GstElement *get_h264_caps() {
+    GstElement *capsfilter;
+    GstCaps *srcCaps;
+    capsfilter = gst_element_factory_make("capsfilter", NULL);
+    srcCaps = gst_caps_from_string("video/x-h264,profile=constrained-baseline");
+    g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
+    gst_caps_unref(srcCaps);
+    gst_bin_add(GST_BIN(pipeline), capsfilter);
+    return capsfilter;
+}
+
 static GstElement *get_encoder_src() {
     GstElement *encoder, *teesrc;
     encoder = get_video_encoder_by_name(config_data.videnc);
@@ -728,16 +739,12 @@ static GstElement *get_encoder_src() {
     }
     link_request_src_pad(video_source, clockbin);
 #else
-    GstElement *clock, *videoconvert, *capsfilter;
-    GstCaps *srcCaps;
-    capsfilter = gst_element_factory_make("capsfilter", NULL);
-    srcCaps = gst_caps_from_string("video/x-h264,profile=main");
-    g_object_set(G_OBJECT(capsfilter), "caps", srcCaps, NULL);
-    gst_caps_unref(srcCaps);
+    GstElement *clock, *videoconvert;
+
     videoconvert = gst_element_factory_make("videoconvert", NULL);
     clock = gst_element_factory_make("clockoverlay", NULL);
     g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
-    gst_bin_add_many(GST_BIN(pipeline), clock, teesrc, videoconvert, capsfilter, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), clock, teesrc, videoconvert, NULL);
     if (config_data.sysinfo) {
         GstElement *textoverlay;
         textoverlay = gst_element_factory_make("textoverlay", NULL);
@@ -747,14 +754,28 @@ static GstElement *get_encoder_src() {
         gchar *sysinfo = get_basic_sysinfo();
         g_object_set(G_OBJECT(textoverlay), "text", sysinfo, "valignment", 1, "line-alignment", 0, "halignment", 0, "font-desc", "Sans, 10", NULL);
         g_free(sysinfo);
-        if (!gst_element_link_many(videoconvert, textoverlay, clock, encoder, capsfilter, teesrc, NULL)) {
-            g_print("Failed to link elements encoder  source\n");
-            return NULL;
+        if (g_str_has_prefix(config_data.videnc, "h264")) {
+            if (!gst_element_link_many(videoconvert, textoverlay, clock, encoder, get_h264_caps(), teesrc, NULL)) {
+                g_print("Failed to link elements encoder  source\n");
+                return NULL;
+            }
+        } else {
+            if (!gst_element_link_many(videoconvert, textoverlay, clock, encoder, teesrc, NULL)) {
+                g_print("Failed to link elements encoder  source\n");
+                return NULL;
+            }
         }
     } else {
-        if (!gst_element_link_many(videoconvert, clock, encoder, capsfilter, teesrc, NULL)) {
-            g_print("Failed to link elements encoder source \n");
-            return NULL;
+        if (g_str_has_prefix(config_data.videnc, "h264")) {
+            if (!gst_element_link_many(videoconvert, clock, encoder, get_h264_caps(), teesrc, NULL)) {
+                g_print("Failed to link elements encoder source \n");
+                return NULL;
+            }
+        } else {
+            if (!gst_element_link_many(videoconvert, clock, encoder, teesrc, NULL)) {
+                g_print("Failed to link elements encoder source \n");
+                return NULL;
+            }
         }
     }
     link_request_src_pad(video_source, videoconvert);
@@ -1465,7 +1486,7 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
             gst_printerr("Current system not running on Xwindow. \n");
             return;
         }
-
+#if 0
         if (g_strcmp0(encode_name, "VP8") == 0) {
             desc = g_strdup_printf(" rtpvp8depay ! vp8dec ! queue leaky=1 ! videoconvert ! autovideosink");
             g_print("recv vp8 stream from remote.\n");
@@ -1478,7 +1499,12 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
         } else {
             desc = g_strdup_printf(" decodebin ! queue leaky=1 ! videoconvert ! autovideosink");
         }
-
+#endif
+        if (gst_element_factory_find("vaapidecodebin")) {
+            desc = g_strdup_printf(" vaapidecodebin ! queue leaky=1 ! videoconvert ! autovideosink");
+        } else {
+            desc = g_strdup_printf(" decodebin ! queue leaky=1 ! videoconvert ! autovideosink");
+        }
         playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
         g_free(desc);
         gst_bin_add(GST_BIN(item->recv.recvpipe), playbin);
@@ -1868,9 +1894,9 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
                                     " rtp%sdepay ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
                                     config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc, webrtc_name);
 #else
-        video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo socket-timestamp=1  ! "
+        video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo  socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                    " rtp%sdepay ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
+                                    " rtp%sdepay ! h264parse ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
                                     config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc, webrtc_name);
 #endif
     else
