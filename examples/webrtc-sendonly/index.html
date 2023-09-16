@@ -80,6 +80,7 @@
       switch (msg.type) {
         case "sdp": onIncomingSDP(msg.data); break;
         case "ice": onIncomingICE(msg.data); break;
+        case "iceServers": { iceServers = msg.iceServers; console.log(JSON.stringify(msg)) }; break
         default: break;
       }
     }

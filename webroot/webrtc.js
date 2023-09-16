@@ -41,19 +41,7 @@
     let userCtrls;
 
     // var vConsole = new window.VConsole();
-    const turn_config = {
-      'iceServers': [{
-        urls: 'turn:192.168.1.100:3478',
-        username: "test",
-        credential: "test123"
-      }]
-    };
-
-    const stun_config = {
-      'iceServers': [{
-        urls: 'stun:stun.l.google.com:19302'
-      }]
-    };
+    let iceServers;
     const supportedConstraints = navigator.mediaDevices.getSupportedConstraints();
 
     const audio_traints = {
@@ -62,7 +50,6 @@
         echoCancellation: true
       },
       video: false,
-
     };
 
 
@@ -133,7 +120,7 @@
     function createSender(stream) {
       toggleCanvas('block');
       console.log("stream: " + JSON.stringify(stream));
-      localpc = new RTCPeerConnection(stun_config);
+      localpc = new RTCPeerConnection(iceServers);
       if (hasCamera && hasMicroPhone) {
         localStream = stream;
         visualize(stream);
@@ -219,7 +206,7 @@ function addOnlineUserList(data) {
 
     function createWebrtcRecv() {
       console.log("create webrtc receive peer.");
-      webrtcPeerConnection = new RTCPeerConnection(stun_config);
+      webrtcPeerConnection = new RTCPeerConnection(iceServers);
       webrtcPeerConnection.ontrack = onAddRemoteStream;
       webrtcPeerConnection.onicecandidate = onIceCandidate;
       webrtcPeerConnection.addTransceiver('video', { 'direction': 'sendrecv' });
@@ -343,7 +330,6 @@ function addOnlineUserList(data) {
       if (inIframe())
         document.getElementById('title').remove();
 
-
       document.querySelector('.visualizer').style['display'] = "none";
 
       startWatch.addEventListener('click', (event) => {
@@ -389,9 +375,7 @@ function addOnlineUserList(data) {
         if (websocketConnection != undefined) {
           websocketConnection.send(JSON.stringify({ "type": "cmd", "cmd": "record", "arg": isRecord ? "start" : "stop" }));
         }
-
       });
-
 
       enableTalk.addEventListener('click', (event) => {
         console.log("enable talks now!!!");
@@ -547,9 +531,7 @@ function addOnlineUserList(data) {
         } else {
           console.log("cancel save image!");
         }
-
       });
-
     }
 
     // recvonly webrtc
@@ -562,7 +544,6 @@ function addOnlineUserList(data) {
 
 
     async function onIncomingSDP(sdp) {
-      console.log("Incoming SDP: " + JSON.stringify(sdp));
       if (sdp.type === "offer") {
         const showsdp = document.getElementById('showsdp');
         showsdp.value = '';
@@ -575,7 +556,6 @@ function addOnlineUserList(data) {
         await localpc.setRemoteDescription(sdp).catch(reportError);
       }
     }
-
 
     async function onIncomingICE(ice) {
       var candidate = new RTCIceCandidate(ice);
@@ -640,6 +620,7 @@ function addOnlineUserList(data) {
         case "ice": onIncomingICE(msg.data); break;
         case "record": recordCallBack(msg.data); break;
         case "users": addOnlineUserList(msg.data); break;
+        case "iceServers": { iceServers = msg.iceServers; console.log(JSON.stringify(msg)) }; break
         default: break;
       }
     }

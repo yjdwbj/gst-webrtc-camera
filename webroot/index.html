@@ -64,7 +64,7 @@
     </div>
   </div>
   <script>
-
+    let iceServers;
     if (Hls.isSupported()) {
       var edge = document.getElementById('edge');
       var ehls = new Hls();
@@ -91,11 +91,7 @@
 
     window.addEventListener('load', (event) => {
       console.log("page is fully loaded!");
-      const stun_config = {
-        'iceServers': [{
-          urls: 'stun:stunserver.stunprotocol.org:3478'
-        }]
-      };
+
       let websocketConnection;
 
       function playStream(hostname, port, path) {
@@ -136,6 +132,7 @@
         switch (msg.type) {
           case "sdp": onIncomingSDP(msg.data); break;
           case "ice": onIncomingICE(msg.data); break;
+          case "iceServers": { iceServers = msg.iceServers; console.log(JSON.stringify(msg)) }; break
           default: break;
         }
       }
@@ -186,7 +183,7 @@
         await remotepc.addIceCandidate(candidate).catch(console.error);
       }
 
-      let remotepc = new RTCPeerConnection(stun_config);
+      let remotepc = new RTCPeerConnection(iceServers);
       remotepc.ontrack = onAddRemoteStream;
       remotepc.onicecandidate = onIceCandidate;
       remotepc.addTransceiver('video', { 'direction': 'sendrecv' });

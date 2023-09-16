@@ -311,9 +311,7 @@ static GstElement *get_hardware_h264_encoder() {
     } else if (gst_element_factory_find("vaapih264enc")) {
         // VA-API H264 encoder
         encoder = gst_element_factory_make("vaapih264enc", NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000,
-                     "init-qp", 14, "quality-level", 4, "max-bframes", 2,
-                     NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000,NULL);
     } else if (gst_element_factory_find("nvv4l2h264enc")) {
         // https://docs.nvidia.com/jetson/archives/r34.1/DeveloperGuide/text/SD/Multimedia/AcceleratedGstreamer.html#supported-h-264-h-265-vp9-av1-encoder-features-with-gstreamer-1-0
         encoder = gst_element_factory_make("nvv4l2h264enc", NULL);

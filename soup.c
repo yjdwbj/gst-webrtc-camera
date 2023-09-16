@@ -31,6 +31,8 @@ gchar *audio_priority = NULL;
 
 static GHashTable *webrtc_connected_table;
 
+extern GstConfigData config_data;
+
 #define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
 static int client_limit = 3;
 static gchar *
@@ -452,6 +454,36 @@ typedef struct {
 
 } CustomSoupData;
 
+static void send_iceservers(SoupWebsocketConnection *connection) {
+    JsonObject *msg, *iceServers, *stun, *turn;
+    JsonArray *array;
+    gchar *text;
+    stun = json_object_new();
+    json_object_set_string_member(stun, "url", config_data.webrtc.stun);
+
+    turn = json_object_new();
+    json_object_set_string_member(turn, "url", config_data.webrtc.turn.url);
+    json_object_set_string_member(turn, "username", config_data.webrtc.turn.user);
+    json_object_set_string_member(turn, "credential", config_data.webrtc.turn.pwd);
+
+    array = json_array_new();
+    json_array_add_object_element(array, stun);
+    json_array_add_object_element(array, turn);
+
+    iceServers = json_object_new();
+    json_object_set_array_member(iceServers, "iceServers", array);
+
+    msg = json_object_new();
+    json_object_set_string_member(msg, "type", "iceServers");
+    json_object_set_object_member(msg, "iceServers", iceServers);
+
+    text = get_string_from_json_object(msg);
+
+    json_object_unref(msg);
+    soup_websocket_connection_send_text(connection, text);
+    g_free(text);
+}
+
 static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                                    SoupWebsocketConnection *connection, G_GNUC_UNUSED const char *path,
                                    G_GNUC_UNUSED SoupClientContext *client_context, gpointer user_data) {
@@ -487,6 +519,7 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     if (webrtc_entry->sendpipe)
         gst_element_set_state(webrtc_entry->sendpipe, GST_STATE_PLAYING);
     g_hash_table_insert(webrtc_connected_table, connection, webrtc_entry);
+    send_iceservers(connection);
 }
 
 static void destroy_webrtc_table(gpointer entry_ptr) {
