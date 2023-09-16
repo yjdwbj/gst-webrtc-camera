@@ -1926,7 +1926,6 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     gchar *video_src = NULL;
     // gchar *turn_srv = NULL;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, item->hash_id);
-    g_print("webrtc_name----------> : %s\n", webrtc_name);
 
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
     // here must have rtph264depay and rtph264pay to be compatible with  mobile browser.
@@ -1952,7 +1951,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
 
     if (audio_source != NULL) {
         gchar *audio_src = udpsrc_audio_cmdline(webrtc_name);
-        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=stun://%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
         g_print("webrtc cmdline: %s \n", cmdline);
         g_free(audio_src);
         g_free(video_src);
@@ -1960,7 +1959,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
 
         // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
         // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
-        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s", webrtc_name, config_data.webrtc.stun, video_src);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=stun://%s %s", webrtc_name, config_data.webrtc.stun, video_src);
         // g_free(turn_srv);
     }
 
@@ -2057,7 +2056,7 @@ void start_webrtcbin(WebrtcItem *item) {
     // gchar *turn_srv = NULL;
     gchar *stun;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, item->hash_id);
-    g_print("webrtc_name: %s\n", webrtc_name);
+    // g_print("webrtc_name: %s\n", webrtc_name);
     item->sendbin = gst_element_factory_make("webrtcbin", webrtc_name);
     stun = g_strdup_printf("stun://%s", config_data.webrtc.stun);
     g_object_set(item->sendbin, "stun-server", stun, NULL);
@@ -2179,16 +2178,16 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                            " queue leaky=2 ! %s.",
                                            item->hash_id, webrtc_name);
-        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=stun://%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
         g_free(audio_src);
     } else {
         // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
         // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
-        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s", webrtc_name, config_data.webrtc.stun, video_src);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=stun://%s %s", webrtc_name, config_data.webrtc.stun, video_src);
         // g_free(turn_srv);
     }
 
-    g_print("webrtc cmdline: %s \n", cmdline);
+    // g_print("webrtc cmdline: %s \n", cmdline);
     g_free(video_src);
 
     item->sendpipe = gst_parse_launch(cmdline, NULL);
