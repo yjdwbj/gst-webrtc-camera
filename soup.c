@@ -456,13 +456,21 @@ typedef struct {
 
 static void send_iceservers(SoupWebsocketConnection *connection) {
     JsonObject *msg, *iceServers, *stun, *turn;
-    JsonArray *array;
-    gchar *text;
+    JsonArray *array, *urls;
+    gchar *text, *url;
     stun = json_object_new();
-    json_object_set_string_member(stun, "url", config_data.webrtc.stun);
+    urls = json_array_new();
+    url = g_strdup_printf("stun:%s", config_data.webrtc.stun);
+    json_array_add_string_element(urls, url);
+    json_object_set_array_member(stun, "urls",urls );
 
     turn = json_object_new();
-    json_object_set_string_member(turn, "url", config_data.webrtc.turn.url);
+    g_free(url);
+    url = g_strdup_printf("turn:%s", config_data.webrtc.turn.url);
+    urls = json_array_new();
+    json_array_add_string_element(urls, url);
+    json_object_set_array_member(turn, "urls", urls);
+
     json_object_set_string_member(turn, "username", config_data.webrtc.turn.user);
     json_object_set_string_member(turn, "credential", config_data.webrtc.turn.pwd);
 
@@ -481,6 +489,8 @@ static void send_iceservers(SoupWebsocketConnection *connection) {
 
     json_object_unref(msg);
     soup_websocket_connection_send_text(connection, text);
+    g_print("text: %s\n", text);
+    g_free(url);
     g_free(text);
 }
 

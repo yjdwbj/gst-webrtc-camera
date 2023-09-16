@@ -39,7 +39,7 @@
       "pwd": "test123",
       "enable": true
     },
-    "stun":"stun://stun.l.google.com:19302",
+    "stun":"stun.l.google.com:19302",
     "udpsink": {
       "port": 7000,
       "addr": "224.1.1.2",

@@ -223,6 +223,24 @@ static gchar *get_basic_sysinfo() {
     return line;
 }
 
+static const gchar *get_link_error(GstPadLinkReturn ret) {
+    int type = abs(ret);
+    int size = 0;
+    static gchar *types[] = {
+        "GST_PAD_LINK_OK",
+        "GST_PAD_LINK_WRONG_HIERARCHY",
+        "GST_PAD_LINK_WAS_LINKED",
+        "GST_PAD_LINK_WRONG_DIRECTION",
+        "GST_PAD_LINK_NOFORMAT",
+        "GST_PAD_LINK_NOSCHED",
+        "GST_PAD_LINK_REFUSED",
+        "Invalid value"};
+    size = sizeof(types) / sizeof(gchar *);
+    if (type > size - 1)
+        type = size;
+    return types[type];
+}
+
 static GstElement *get_hardware_vp9_encoder() {
     // https://developers.google.com/media/vp9/bitrate-modes/
     GstElement *encoder;
@@ -311,7 +329,7 @@ static GstElement *get_hardware_h264_encoder() {
     } else if (gst_element_factory_find("vaapih264enc")) {
         // VA-API H264 encoder
         encoder = gst_element_factory_make("vaapih264enc", NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000,NULL);
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
     } else if (gst_element_factory_find("nvv4l2h264enc")) {
         // https://docs.nvidia.com/jetson/archives/r34.1/DeveloperGuide/text/SD/Multimedia/AcceleratedGstreamer.html#supported-h-264-h-265-vp9-av1-encoder-features-with-gstreamer-1-0
         encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
@@ -622,7 +640,7 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
     if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
         gchar *sname = gst_pad_get_name(src_pad);
         gchar *dname = gst_pad_get_name(sink_pad);
-        g_print("Src pad %s link to sink pad %s failed . return: %d\n", sname, dname, lret);
+        g_print("Src pad %s link to sink pad %s failed . return: %s\n", sname, dname, get_link_error(lret));
         get_pad_caps_info(src_pad);
         get_pad_caps_info(sink_pad);
         g_free(sname);
@@ -1430,6 +1448,47 @@ has_running_xwindow() {
     return g_strcmp0(xdg_stype, "tty");
 }
 
+static gchar *get_best_decode_name(const gchar *name) {
+    gchar *tmp;
+    static gchar *videnc[] = {
+        "va%sdec",
+        "vaapi%sdec",
+        "qsv%sdec",
+        "avdec_%s",
+        "open%sdec"};
+
+    for (int i = 0; i < sizeof(videnc) / sizeof(gchar *); i++) {
+        tmp = g_strdup_printf(videnc[i], name);
+        if (gst_element_factory_find(tmp)) {
+            return tmp;
+        }
+    }
+
+    tmp = g_strdup_printf("%sdec", name);
+    return tmp;
+}
+
+static GstElement *get_playbin(const gchar *encode_name) {
+    GstElement *playbin;
+    gchar *desc;
+    gchar *lowname = g_ascii_strdown(encode_name, -1);
+
+    if (g_strcmp0(encode_name, "VP9") == 0 ||
+        g_strcmp0(encode_name, "VP8") == 0 ||
+        g_strcmp0(encode_name, "H264") == 0) {
+        gchar *decname = get_best_decode_name(lowname);
+        desc = g_strdup_printf("rtp%sdepay ! %s ! queue leaky=1 ! videoconvert ! autovideosink", lowname, decname);
+        g_free(decname);
+    } else {
+        desc = g_strdup_printf(" decodebin ! queue leaky=1 ! videoconvert ! autovideosink");
+    }
+
+    g_free(lowname);
+    playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
+    g_free(desc);
+    return playbin;
+}
+
 static void
 on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
                              gpointer user_data) {
@@ -1484,27 +1543,8 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
             gst_printerr("Current system not running on Xwindow. \n");
             return;
         }
-#if 0
-        if (g_strcmp0(encode_name, "VP8") == 0) {
-            desc = g_strdup_printf(" rtpvp8depay ! vp8dec ! queue leaky=1 ! videoconvert ! autovideosink");
-            g_print("recv vp8 stream from remote.\n");
-        } else if (g_strcmp0(encode_name, "H264") == 0) {
-            const gchar *vah264 = "vaapih264dec";
-            const gchar *nvh264 = "nvh264dec";
-            desc = g_strdup_printf(" rtph264depay ! h264parse ! %s ! queue leaky=1 ! videoconvert ! autovideosink",
-                                   gst_element_factory_find(vah264) ? vah264 : gst_element_factory_find(nvh264) ? nvh264
-                                                                                                                : "avdec_h264");
-        } else {
-            desc = g_strdup_printf(" decodebin ! queue leaky=1 ! videoconvert ! autovideosink");
-        }
-#endif
-        if (gst_element_factory_find("vaapidecodebin")) {
-            desc = g_strdup_printf(" vaapidecodebin ! queue leaky=1 ! videoconvert ! autovideosink");
-        } else {
-            desc = g_strdup_printf(" decodebin ! queue leaky=1 ! videoconvert ! autovideosink");
-        }
-        playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
-        g_free(desc);
+
+        playbin = get_playbin(encode_name);
         gst_bin_add(GST_BIN(item->recv.recvpipe), playbin);
     } else {
         gst_printerr("Unknown pad %s, ignoring", GST_PAD_NAME(pad));
@@ -1513,6 +1553,9 @@ on_incoming_decodebin_stream(GstElement *decodebin, GstPad *pad,
     gst_element_sync_state_with_parent(playbin);
 
     ret = gst_pad_link(pad, playbin->sinkpads->data);
+    if (ret) {
+        get_link_error(ret);
+    }
     g_assert_cmphex(ret, ==, GST_PAD_LINK_OK);
 }
 
@@ -1795,6 +1838,7 @@ static void webrtcbin_add_turn(GstElement *webrtcbin) {
 
 static void start_recv_webrtcbin(gpointer user_data) {
     WebrtcItem *item = (WebrtcItem *)user_data;
+    gchar *stun;
     // gchar *turn_srv;
     gchar *pipe_name = g_strdup_printf("recv_%" G_GUINT64_FORMAT, item->hash_id);
     gchar *bin_name = g_strdup_printf("recvbin_%" G_GUINT64_FORMAT, item->hash_id);
@@ -1805,7 +1849,9 @@ static void start_recv_webrtcbin(gpointer user_data) {
     // g_object_set(item->recv.recvbin, "turn-server", config_data.webrtc.turn, NULL);
 
     item->recv.recvbin = gst_element_factory_make("webrtcbin", bin_name);
-    g_object_set(item->recv.recvbin, "stun-server", config_data.webrtc.stun, NULL);
+    stun = g_strdup_printf("stun://%s", config_data.webrtc.stun);
+    g_object_set(item->recv.recvbin, "stun-server", stun, NULL);
+    g_free(stun);
     if (config_data.webrtc.turn.enable) {
         webrtcbin_add_turn(item->recv.recvbin);
     }
@@ -2009,10 +2055,13 @@ static void stop_webrtc(gpointer user_data) {
 
 void start_webrtcbin(WebrtcItem *item) {
     // gchar *turn_srv = NULL;
+    gchar *stun;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, item->hash_id);
     g_print("webrtc_name: %s\n", webrtc_name);
     item->sendbin = gst_element_factory_make("webrtcbin", webrtc_name);
-    g_object_set(item->sendbin, "stun-server", config_data.webrtc.stun, NULL);
+    stun = g_strdup_printf("stun://%s", config_data.webrtc.stun);
+    g_object_set(item->sendbin, "stun-server", stun, NULL);
+    g_free(stun);
     if (config_data.webrtc.turn.enable) {
         webrtcbin_add_turn(item->sendbin);
     }
@@ -2345,7 +2394,7 @@ int splitfile_sink() {
         if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
             gchar *sname = gst_pad_get_name(src_pad);
             gchar *dname = gst_pad_get_name(sink_pad);
-            g_print("Src pad %s link to sink pad %s failed . return: %d\n", sname, dname, lret);
+            g_print("Src pad %s link to sink pad %s failed . return: %s\n", sname, dname, get_link_error(lret));
             get_pad_caps_info(src_pad);
             get_pad_caps_info(sink_pad);
             g_free(sname);
