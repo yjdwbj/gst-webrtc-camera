@@ -10,6 +10,7 @@
   <link rel="shortcut icon" href="#">
   <script src="hls.js"></script>
   <script src="dash.all.min.js"></script>
+  <script src="jquery.min.js"></script>
   <link href="bootstrap.min.css" rel="stylesheet">
   <script src="bootstrap.bundle.min.js"></script>
 </head>
@@ -109,11 +110,11 @@
       function onServerMessage(event) {
         var msg;
 
-        $.getJSON('https://api.ipify.org?format=jsonp&callback=?', function (data) {
-         let info = {
+        $.getJSON('https://api.ipify.org?format=json', function (data) {
+          let info = {
             client: {
               ip: data.ip,
-              username: document.querySelector('meta[name="user"]').uname,
+              username: document.querySelector('meta[name="user"]').content,
               useragent: navigator.userAgent,
               path: document.location.pathname,
               origin: document.location.origin

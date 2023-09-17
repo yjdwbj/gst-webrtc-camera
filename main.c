@@ -37,7 +37,8 @@ extern GstConfigData config_data;
 static const gchar *video_encodecs[] = {
     "h264",
     "h265",
-    "vp9"};
+    "vp9",
+    "vp8"};
 
 // static GThread *inotify_watch = NULL;
 

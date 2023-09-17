@@ -241,28 +241,57 @@ static const gchar *get_link_error(GstPadLinkReturn ret) {
     return types[type];
 }
 
-static GstElement *get_hardware_vp9_encoder() {
+static gchar *get_best_code_name(const gchar *name) {
+    gchar *tmp = NULL;
+    // "msdk%senc", may occur follow errror.
+    // msdkenc gstmsdkenc.c:673:gst_msdkenc_init_encoder:<msdkvp9enc0> Video Encode Query failed (undeveloped feature)
+    static gchar *hw_enc[] = {
+        "va%senc",
+        "vaapi%senc", // VA-API H.265 Low Power Encoder in Intel(R) Gen Graphics
+        "qsv%senc",
+        "nvv4l2%senc",
+        "v4l2%enc",
+        "omx%senc"};
+
+    static gchar *sf_enc[] = {
+        "%senc",
+        "avenc_%s_omx",
+        "open%senc"};
+
+    for (int i = 0; i < sizeof(hw_enc) / sizeof(gchar *); i++) {
+        tmp = g_strdup_printf(hw_enc[i], name);
+        if (gst_element_factory_find(tmp)) {
+            return tmp;
+        }
+    }
+
+    if (g_str_has_prefix(name, "h26")) {
+        tmp = g_strdup_printf("%senc", name);
+        tmp[0] = 'x';
+        if (gst_element_factory_find(tmp)) {
+            return tmp;
+        }
+    }
+
+    for (int i = 0; i < sizeof(sf_enc) / sizeof(gchar *); i++) {
+        tmp = g_strdup_printf(sf_enc[i], name);
+        if (gst_element_factory_find(tmp)) {
+            return tmp;
+        }
+    }
+    return tmp;
+}
+
+static GstElement *get_hardware_vp89_encoder(const gchar *name) {
     // https://developers.google.com/media/vp9/bitrate-modes/
     GstElement *encoder;
     // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
-    if (gst_element_factory_find("vaapivp9enc")) {
-        encoder = gst_element_factory_make("vaapivp9enc", NULL);
-    } else if (gst_element_factory_find("msdkvp9enc")) {
-        // Intel MSDK VP9 encoder
-        encoder = gst_element_factory_make("msdkvp9enc", NULL);
-        g_object_set(G_OBJECT(encoder), "rate-control", 3, NULL);
-    } else if (gst_element_factory_find("qsvvp9enc")) {
-        encoder = gst_element_factory_make("qsvvp9enc", NULL);
-    } else if (gst_element_factory_find("nvv4l2vp9enc")) {
-        encoder = gst_element_factory_make("nvv4l2vp9enc", NULL);
-    } else if (gst_element_factory_find("omxvp9enc")) {
-        encoder = gst_element_factory_make("omxvp9enc", NULL);
-    } else if (gst_element_factory_find("vp9enc")) {
-        encoder = gst_element_factory_make("vp9enc", NULL);
-    } else {
+    gchar *encname = get_best_code_name(name);
+    if (encname == NULL)
         return NULL;
-    }
-
+    encoder = gst_element_factory_make(encname, NULL);
+    g_print(" vp8: %s\n", encname);
+    g_free(encname);
     gst_bin_add(GST_BIN(pipeline), encoder);
     return encoder;
 }
@@ -284,23 +313,18 @@ static GstElement *get_hardware_h265_encoder() {
             bitrate = 1000000;
     }
     // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
-    if (gst_element_factory_find("vah265lpenc")) {
-        // VA-API H.265 Low Power Encoder in Intel(R) Gen Graphics
-        encoder = gst_element_factory_make("vah265lpenc", NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
-    } else if (gst_element_factory_find("vaapih265enc")) {
-        encoder = gst_element_factory_make("vaapih265enc", NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
-    } else if (gst_element_factory_find("nvv4l2h265enc")) {
-        encoder = gst_element_factory_make("nvv4l2h265enc", NULL);
-        g_object_set(G_OBJECT(encoder), "control-rate", 1, "maxperf-enable", TRUE, "bitrate", bitrate, NULL);
-    } else if (gst_element_factory_find("x265enc")) {
-        encoder = gst_element_factory_make("x265enc", NULL);
-        // g_object_set(G_OBJECT(encoder), "key-int-max", 2, NULL);
-        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, "speed-preset", 1, "tune", 4, "key-int-max", 30, NULL);
-    } else {
+
+    gchar *encname = get_best_code_name("h265");
+    if (encname == NULL)
         return NULL;
+    encoder = gst_element_factory_make(encname, NULL);
+
+    if (g_str_has_prefix(encname, "nvv4l2")) {
+        g_object_set(G_OBJECT(encoder), "control-rate", 1, "maxperf-enable", TRUE, "bitrate", bitrate, NULL);
+    } else {
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
     }
+    g_free(encname);
 
     gst_bin_add(GST_BIN(pipeline), encoder);
     return encoder;
@@ -358,8 +382,8 @@ static GstElement *get_video_encoder_by_name(gchar *name) {
         return get_hardware_h264_encoder();
     } else if (g_str_has_prefix(name, "h265")) {
         return get_hardware_h265_encoder();
-    } else if (g_str_has_prefix(name, "vp9")) {
-        return get_hardware_vp9_encoder();
+    } else if (g_str_has_prefix(name, "vp")) {
+        return get_hardware_vp89_encoder(name);
     } else {
         return get_hardware_h264_encoder();
     }
@@ -525,9 +549,18 @@ static GstElement *get_video_src() {
                 }
             }
         } else {
-            if (!gst_element_link_many(source, capsfilter, jpegdec, queue, teesrc, NULL)) {
-                g_error("Failed to link elements video mjpg src\n");
-                return NULL;
+            if (gst_element_factory_find("vaapipostproc")) {
+                GstElement *vapp = gst_element_factory_make("vaapipostproc", NULL);
+                gst_bin_add(GST_BIN(pipeline), vapp);
+                if (!gst_element_link_many(source, capsfilter, jpegdec, vapp, queue, teesrc, NULL)) {
+                    g_error("Failed to link elements video mjpg src\n");
+                    return NULL;
+                }
+            } else {
+                if (!gst_element_link_many(source, capsfilter, jpegdec, queue, teesrc, NULL)) {
+                    g_error("Failed to link elements video mjpg src\n");
+                    return NULL;
+                }
             }
         }
     } else {
@@ -933,6 +966,16 @@ static gchar *udpsrc_audio_cmdline(const gchar *sink) {
     return audio_src;
 }
 
+static gchar *get_rtp_args() {
+    gchar *rtp = NULL;
+    if (g_strcmp0(config_data.videnc, "vp8")) {
+        rtp = g_strdup_printf("rtp%sdepay ! %sparse", config_data.videnc, config_data.videnc);
+    } else {
+        rtp = g_strdup_printf("rtp%sdepay ", config_data.videnc);
+    }
+    return rtp;
+}
+
 void udpsrc_cmd_rec_start(gpointer user_data) {
     /**
      * @brief I want to create a module for recording, but it cannot be dynamically added and deleted while the pipeline is running。
@@ -968,11 +1011,13 @@ void udpsrc_cmd_rec_start(gpointer user_data) {
     g_free(filename);
     g_free(timestr);
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
+    gchar *rtp = get_rtp_args();
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                       " rtp%sdepay ! %sparse !  queue leaky=1 ! mux. ",
-                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc);
+                                       " %s !  queue leaky=1 ! mux. ",
+                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, rtp);
     g_free(upenc);
+    g_free(rtp);
     if (config_data.audio.enable) {
         gchar *audio_src = udpsrc_audio_cmdline("mux");
         cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
@@ -1067,12 +1112,13 @@ static int start_udpsrc_rec(gpointer user_data) {
     g_free(outdir);
 
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
+    gchar *rtp = get_rtp_args();
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s  multicast-iface=lo ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                       " rtp%sdepay ! %sparse ! queue leaky=1 ! mux. ",
-                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc);
+                                       " %s ! queue leaky=1 ! mux. ",
+                                       config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, rtp);
     g_free(upenc);
-
+    g_free(rtp);
     if (audio_source != NULL) {
         gchar *audio_src = udpsrc_audio_cmdline("mux");
         cmdline = g_strdup_printf(" matroskamux name=mux ! filesink  async=false location=\"%s\" %s %s ", fullpath, audio_src, video_src);
@@ -1283,12 +1329,13 @@ static void appsrc_cmd_rec_start(gpointer user_data) {
     fullpath = g_strconcat(outdir, filename, NULL);
     g_free(outdir);
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
+    gchar *rtp = get_rtp_args();
     gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 leaky-type=1  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                       " rtph%sdepay ! %sparse !  queue leaky=1 ! mux. ",
-                                       vid_str, upenc, config_data.videnc, config_data.videnc);
+                                       " %s !  queue leaky=1 ! mux. ",
+                                       vid_str, upenc, rtp);
     g_free(upenc);
-
+    g_free(rtp);
     if (config_data.audio.enable) {
         gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3  leaky-type=1  ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
@@ -1389,12 +1436,13 @@ start_appsrc_record() {
     g_free(outdir);
 
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
+    gchar *rtp = get_rtp_args();
     gchar *video_src = g_strdup_printf("appsrc  name=%s format=3 leaky-type=1  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                       " rtp%sdepay ! %sparse ! queue leaky=1 ! mux. ",
-                                       vid_str, upenc, config_data.videnc, config_data.videnc);
+                                       " %s ! queue leaky=1 ! mux. ",
+                                       vid_str, upenc, rtp);
     g_free(upenc);
-
+    g_free(rtp);
     if (config_data.audio.enable) {
         gchar *audio_src = g_strdup_printf("appsrc name=%s  format=3 leaky-type=1 ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
@@ -1929,7 +1977,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
 
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
     // here must have rtph264depay and rtph264pay to be compatible with  mobile browser.
-
+    gchar *rtp = get_rtp_args();
     if (g_str_has_prefix(config_data.videnc, "h26"))
 #if defined(HAS_JETSON_NANO)
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  ! "
@@ -1939,8 +1987,8 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
 #else
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo  socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                    " rtp%sdepay ! h264parse ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
-                                    config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc, webrtc_name);
+                                    " %s ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
+                                    config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, rtp, config_data.videnc , webrtc_name);
 #endif
     else
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo socket-timestamp=1  ! "
@@ -1988,16 +2036,14 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
 int start_av_udpsink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *videoparse;
+    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay;
 
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(pqueue, "queue");
     gchar *tmpname = g_strdup_printf("rtp%spay", config_data.videnc);
     MAKE_ELEMENT_AND_ADD(video_pay, tmpname);
     g_free(tmpname);
-    tmpname = g_strdup_printf("%sparse", config_data.videnc);
-    MAKE_ELEMENT_AND_ADD(videoparse, tmpname);
-    g_free(tmpname);
+
     MAKE_ELEMENT_AND_ADD(video_sink, "udpsink");
 
     /* Configure udpsink */
@@ -2012,9 +2058,21 @@ int start_av_udpsink() {
     }
     g_object_set(vqueue, "max-size-time", 100000000, NULL);
 
-    if (!gst_element_link_many(vqueue, videoparse, video_pay, pqueue, video_sink, NULL)) {
-        g_error("Failed to link elements audio to mpegtsmux.\n");
-        return -1;
+    if (g_strcmp0(config_data.videnc, "vp8")) {
+        // vp8parse not avavilable ?
+        GstElement *videoparse;
+        tmpname = g_strdup_printf("%sparse", config_data.videnc);
+        MAKE_ELEMENT_AND_ADD(videoparse, tmpname);
+        g_free(tmpname);
+        if (!gst_element_link_many(vqueue, videoparse, video_pay, pqueue, video_sink, NULL)) {
+            g_error("Failed to link elements audio to mpegtsmux.\n");
+            return -1;
+        }
+    } else {
+        if (!gst_element_link_many(vqueue, video_pay, pqueue, video_sink, NULL)) {
+            g_error("Failed to link elements audio to mpegtsmux.\n");
+            return -1;
+        }
     }
 
     link_request_src_pad(video_encoder, vqueue);
@@ -2095,16 +2153,14 @@ void start_webrtcbin(WebrtcItem *item) {
 int start_av_fakesink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *videoparse;
+    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay;
     GstElement *vtee, *atee;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(pqueue, "queue");
     gchar *tmpname = g_strdup_printf("rtp%spay", config_data.videnc);
     MAKE_ELEMENT_AND_ADD(video_pay, tmpname);
     g_free(tmpname);
-    tmpname = g_strdup_printf("%sparse", config_data.videnc);
-    MAKE_ELEMENT_AND_ADD(videoparse, tmpname);
-    g_free(tmpname);
+
     MAKE_ELEMENT_AND_ADD(video_sink, "fakesink");
     vtee = gst_element_factory_make("tee", FSINK_VNAME);
     gst_bin_add(GST_BIN(pipeline), vtee);
@@ -2117,9 +2173,21 @@ int start_av_fakesink() {
     }
     g_object_set(vqueue, "max-size-time", 100000000, "leaky", 1, NULL);
 
-    if (!gst_element_link_many(vqueue, videoparse, video_pay, pqueue, vtee, NULL)) {
-        g_error("Failed to link elements audio to mpegtsmux.\n");
-        return -1;
+    if (g_strcmp0(config_data.videnc, "vp8")) {
+        // vp8parse not avavilable ?
+        GstElement *videoparse;
+        tmpname = g_strdup_printf("%sparse", config_data.videnc);
+        MAKE_ELEMENT_AND_ADD(videoparse, tmpname);
+        g_free(tmpname);
+        if (!gst_element_link_many(vqueue, videoparse, video_pay, pqueue, vtee, NULL)) {
+            g_error("Failed to link elements audio to mpegtsmux.\n");
+            return -1;
+        }
+    } else {
+        if (!gst_element_link_many(vqueue, video_pay, pqueue, vtee, NULL)) {
+            g_error("Failed to link elements audio to mpegtsmux.\n");
+            return -1;
+        }
     }
 
     link_request_src_pad(vtee, video_sink);
@@ -2163,14 +2231,15 @@ void start_appsrc_webrtcbin(WebrtcItem *item) {
     // vcaps = gst_caps_from_string("video/x-h264,stream-format=(string)avc,alignment=(string)au,width=(int)1280,height=(int)720,framerate=(fraction)30/1,profile=(string)main");
     // acaps = gst_caps_from_string("audio/x-opus, channels=(int)1,channel-mapping-family=(int)1");
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
+    gchar *rtp = get_rtp_args();
     gchar *video_src = g_strdup_printf("appsrc  name=video_%" G_GUINT64_FORMAT " format=3 leaky-type=2 ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                       " rtp%sdepay ! %sparse ! rtp%spay  ! queue leaky=2 !"
+                                       " %s ! rtp%spay  ! queue leaky=2 !"
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                        " queue leaky=2 ! %s. ",
-                                       item->hash_id, upenc, config_data.videnc, config_data.videnc, config_data.videnc, upenc, webrtc_name);
+                                       item->hash_id, upenc, rtp, config_data.videnc, upenc, webrtc_name);
     g_free(upenc);
-
+    g_free(rtp);
     if (audio_source != NULL) {
         gchar *audio_src = g_strdup_printf("appsrc name=audio_%" G_GUINT64_FORMAT "  format=3 leaky-type=2 ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
@@ -2288,16 +2357,13 @@ on_new_sample_from_sink(GstElement *elt, gpointer user_data) {
 int start_av_appsink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *aqueue, *vqueue, *video_sink, *audio_sink, *video_pay, *audio_pay, *videoparse;
+    GstElement *aqueue, *vqueue, *video_sink, *audio_sink, *video_pay, *audio_pay;
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     gchar *tmpname = g_strdup_printf("rtp%spay", config_data.videnc);
     MAKE_ELEMENT_AND_ADD(video_pay, tmpname);
     g_free(tmpname);
-    tmpname = g_strdup_printf("%sparse", config_data.videnc);
-    MAKE_ELEMENT_AND_ADD(videoparse, tmpname);
-    g_free(tmpname);
-    video_sink = gst_element_factory_make("appsink", "video_sink");
 
+    video_sink = gst_element_factory_make("appsink", "video_sink");
     /* Configure udpsink */
     g_object_set(video_sink, "sync", FALSE, "async", FALSE,
                  "emit-signals", TRUE, "drop", TRUE, "max-buffers", 100, NULL);
@@ -2308,9 +2374,22 @@ int start_av_appsink() {
     g_object_set(vqueue, "leaky", 1, NULL);
     gst_bin_add(GST_BIN(pipeline), video_sink);
 
-    if (!gst_element_link_many(vqueue, videoparse, video_pay, video_sink, NULL)) {
-        g_error("Failed to link elements video to mpegtsmux.\n");
-        return -1;
+    if (g_strcmp0(config_data.videnc, "vp8")) {
+        // vp8parse not avavilable ?
+        GstElement *videoparse;
+        tmpname = g_strdup_printf("%sparse", config_data.videnc);
+        MAKE_ELEMENT_AND_ADD(videoparse, tmpname);
+        g_free(tmpname);
+
+        if (!gst_element_link_many(vqueue, videoparse, video_pay, video_sink, NULL)) {
+            g_error("Failed to link elements video to mpegtsmux.\n");
+            return -1;
+        }
+    } else {
+        if (!gst_element_link_many(vqueue, video_pay, video_sink, NULL)) {
+            g_error("Failed to link elements video to mpegtsmux.\n");
+            return -1;
+        }
     }
 
     link_request_src_pad(video_encoder, vqueue);
@@ -2347,14 +2426,12 @@ int start_av_appsink() {
 int splitfile_sink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *splitmuxsink, *videoparse, *vqueue;
+    GstElement *splitmuxsink, *videoparse, *vqueue, *encoder;
     gchar *tmpfile;
-
+    encoder = get_hardware_h264_encoder();
     gchar *outdir = g_strconcat(config_data.root_dir, "/mkv", NULL);
     MAKE_ELEMENT_AND_ADD(splitmuxsink, "splitmuxsink");
-    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
-    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
-    g_free(parsestr);
+    MAKE_ELEMENT_AND_ADD(videoparse, "h264parse");
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
 
     g_object_set(vqueue, "leaky", 1, NULL);
@@ -2375,7 +2452,7 @@ int splitfile_sink() {
     _mkdir(outdir, 0755);
     g_free(outdir);
 
-    link_request_src_pad(video_encoder, vqueue);
+    link_request_src_pad(encoder, vqueue);
 
     // add audio to muxer.
     if (audio_source != NULL) {
@@ -2429,9 +2506,7 @@ int av_hlssink() {
     encoder = get_hardware_h264_encoder();
     gchar *outdir = g_strconcat(config_data.root_dir, "/hls", NULL);
     MAKE_ELEMENT_AND_ADD(hlssink, "hlssink");
-    gchar *parsestr = g_strdup_printf("%sparse", config_data.videnc);
-    MAKE_ELEMENT_AND_ADD(videoparse, parsestr);
-    g_free(parsestr);
+    MAKE_ELEMENT_AND_ADD(videoparse, "h264parse");
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
     MAKE_ELEMENT_AND_ADD(mpegtsmux, "mpegtsmux");
     g_object_set(vqueue, "leaky", 1, NULL);

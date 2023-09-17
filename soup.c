@@ -464,19 +464,21 @@ static void send_iceservers(SoupWebsocketConnection *connection) {
     json_array_add_string_element(urls, url);
     json_object_set_array_member(stun, "urls",urls );
 
-    turn = json_object_new();
-    g_free(url);
-    url = g_strdup_printf("turn:%s", config_data.webrtc.turn.url);
-    urls = json_array_new();
-    json_array_add_string_element(urls, url);
-    json_object_set_array_member(turn, "urls", urls);
-
-    json_object_set_string_member(turn, "username", config_data.webrtc.turn.user);
-    json_object_set_string_member(turn, "credential", config_data.webrtc.turn.pwd);
-
     array = json_array_new();
     json_array_add_object_element(array, stun);
-    json_array_add_object_element(array, turn);
+    if(config_data.webrtc.turn.enable)
+    {
+        turn = json_object_new();
+        gchar *turl = g_strdup_printf("turn:%s", config_data.webrtc.turn.url);
+        urls = json_array_new();
+        json_array_add_string_element(urls, turl);
+        json_object_set_array_member(turn, "urls", urls);
+
+        json_object_set_string_member(turn, "username", config_data.webrtc.turn.user);
+        json_object_set_string_member(turn, "credential", config_data.webrtc.turn.pwd);
+        json_array_add_object_element(array, turn);
+        g_free(turl);
+    }
 
     iceServers = json_object_new();
     json_object_set_array_member(iceServers, "iceServers", array);
@@ -484,7 +486,6 @@ static void send_iceservers(SoupWebsocketConnection *connection) {
     msg = json_object_new();
     json_object_set_string_member(msg, "type", "iceServers");
     json_object_set_object_member(msg, "iceServers", iceServers);
-
     text = get_string_from_json_object(msg);
 
     json_object_unref(msg);
