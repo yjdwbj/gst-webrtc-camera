@@ -52,6 +52,15 @@ let prevFrameSynchronizationSource;
 
 let updateVideoStatusTimer;
 
+let supportVideoSize = {};
+let videoPixList;
+let currentConstraint;
+
+const supportedConstraints = navigator.mediaDevices.getSupportedConstraints();
+const supportsSetCodecPreferences = window.RTCRtpTransceiver &&
+  'setCodecPreferences' in window.RTCRtpTransceiver.prototype;
+
+
 function videoAnalyzer(encodedFrame, controller) {
   const view = new DataView(encodedFrame.data);
   // We assume that the video is VP8.
@@ -87,11 +96,6 @@ const testConstraints = {
   tv4k: { width: { exact: 3840 }, height: { exact: 2160 } }
 };
 
-let supportVideoSize = {};
-let videoPixList;
-let currentConstraint;
-
-const supportedConstraints = true; // navigator.mediaDevices.getSupportedConstraints();
 
 const audio_traints = {
   audio: {
@@ -149,6 +153,7 @@ function toggleCanvas(show) {
 
 function stopLocalMedia() {
   isTalk = false;
+  codecPreferences.disabled = false;
   if (websocketConnection)
     websocketConnection.send(JSON.stringify({ "type": "cmd", "cmd": "talk", "arg": "stop" }));
   if (localStream) {
@@ -197,6 +202,23 @@ function createSender(stream) {
       localpc.addTrack(track);
     })
   }
+
+  if (supportsSetCodecPreferences) {
+    const preferredCodec = codecPreferences.options[codecPreferences.selectedIndex];
+    if (preferredCodec.value !== '') {
+      const [mimeType, sdpFmtpLine] = preferredCodec.value.split(' ');
+      const { codecs } = RTCRtpSender.getCapabilities('video');
+      const selectedCodecIndex = codecs.findIndex(c => c.mimeType === mimeType && c.sdpFmtpLine === sdpFmtpLine);
+      const selectedCodec = codecs[selectedCodecIndex];
+      codecs.splice(selectedCodecIndex, 1);
+      codecs.unshift(selectedCodec);
+      console.log(codecs);
+      const transceiver = localpc.getTransceivers().find(t => t.sender && t.sender.track === stream.getVideoTracks()[0]);
+      transceiver.setCodecPreferences(codecs);
+      console.log('Preferred video codec', selectedCodec);
+    }
+  }
+  codecPreferences.disabled = true;
 
   localpc.createOffer().then(d => {
     localpc.setLocalDescription(d);
@@ -425,11 +447,24 @@ async function getSupportedVideoSize() {
       console.log("Capture media error: " + err);
       reject(err);
     });
+
+    if (supportsSetCodecPreferences) {
+      const { codecs } = RTCRtpSender.getCapabilities('video');
+      codecs.forEach(codec => {
+        if (['video/red', 'video/ulpfec', 'video/rtx'].includes(codec.mimeType)) {
+          return;
+        }
+        const option = document.createElement('option');
+        option.value = (codec.mimeType + ' ' + (codec.sdpFmtpLine || '')).trim();
+        option.innerText = option.value;
+        codecPreferences.appendChild(option);
+      });
+      codecPreferences.disabled = false;
+    }
   });
 }
 
 window.onunload = function () {
-  console.log(" unload stop --------------------------------->");
   localStream.getTracks().forEach((track) => {
     track.stop();
   });
@@ -439,17 +474,16 @@ window.onunload = function () {
 
 // buttons control
 window.onload = function () {
-  getSupportedVideoSize();
-  listCamerasAndMicrophone();
-
   window.keyFrameCountDisplay = document.querySelector('#keyframe-count');
   window.keyFrameSizeDisplay = document.querySelector('#keyframe-size');
   window.interFrameCountDisplay = document.querySelector('#interframe-count');
   window.interFrameSizeDisplay = document.querySelector('#interframe-size');
   window.videoSizeDisplay = document.querySelector('#video-size');
   window.duplicateCountDisplay = document.querySelector('#duplicate-count');
+  window.codecPreferences = document.getElementById('codecSelect');
 
-
+  getSupportedVideoSize();
+  listCamerasAndMicrophone();
   startWatch = document.getElementById('startWatch');
   startRecord = document.getElementById('startRecord');
   // enableTalk = document.getElementById('enableTalk');

@@ -246,8 +246,9 @@ static gchar *get_best_code_name(const gchar *name) {
     // "msdk%senc", may occur follow errror.
     // msdkenc gstmsdkenc.c:673:gst_msdkenc_init_encoder:<msdkvp9enc0> Video Encode Query failed (undeveloped feature)
     static gchar *hw_enc[] = {
+        "va%slpenc", // VA-API H.265 Low Power Encoder in Intel(R) Gen Graphics
         "va%senc",
-        "vaapi%senc", // VA-API H.265 Low Power Encoder in Intel(R) Gen Graphics
+        "vaapi%senc",
         "qsv%senc",
         "nvv4l2%senc",
         "v4l2%enc",
@@ -282,25 +283,8 @@ static gchar *get_best_code_name(const gchar *name) {
     return tmp;
 }
 
-static GstElement *get_hardware_vp89_encoder(const gchar *name) {
-    // https://developers.google.com/media/vp9/bitrate-modes/
-    GstElement *encoder;
-    // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
-    gchar *encname = get_best_code_name(name);
-    if (encname == NULL)
-        return NULL;
-    encoder = gst_element_factory_make(encname, NULL);
-    g_print(" vp8: %s\n", encname);
-    g_free(encname);
-    gst_bin_add(GST_BIN(pipeline), encoder);
-    return encoder;
-}
-
-static GstElement *get_hardware_h265_encoder() {
-    // https://www.avaccess.com/blogs/guides/h264-vs-h265-difference/
-    // https://x265.readthedocs.io/en/master/presets.html
-    GstElement *encoder;
-    guint bitrate = 1500;
+static guint get_exact_bitrate() {
+    guint bitrate = 8000;
     if (config_data.v4l2src_data.height == 1080) {
         if (config_data.v4l2src_data.framerate >= 60)
             bitrate = 4000000;
@@ -312,13 +296,48 @@ static GstElement *get_hardware_h265_encoder() {
         else
             bitrate = 1000000;
     }
+    return bitrate;
+}
+
+static GstElement *get_hardware_vp89_encoder(const gchar *name) {
+    // https://developers.google.com/media/vp9/bitrate-modes/
+    GstElement *encoder;
+    guint bitrate = get_exact_bitrate();
+
+    // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
+    gchar *encname = get_best_code_name(name);
+
+    if (encname == NULL)
+        return NULL;
+
+    // Testing vaapivp9enc at 1280x720 on an Intel N100 works fine, but setting it to 1920x1080 fails to display the video on the remote webrtc.
+    // After testing qsvvp9enc is great with 1080p encoder.
+
+    g_print("video encoder: %s\n", encname);
+    encoder = gst_element_factory_make(encname, NULL);
+    if (g_str_has_prefix(encname, "qsv")) {
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, "low-latency", TRUE, NULL);
+    } else if (g_str_has_prefix(encname, "vaapi")) {
+        g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, "rate-control", 4,
+                     "default-roi-delta-qp", 0, "trellis", TRUE, "tune", 3, NULL);
+    }
+    g_free(encname);
+    gst_bin_add(GST_BIN(pipeline), encoder);
+    return encoder;
+}
+
+static GstElement *get_hardware_h265_encoder() {
+    // https://www.avaccess.com/blogs/guides/h264-vs-h265-difference/
+    // https://x265.readthedocs.io/en/master/presets.html
+    GstElement *encoder;
+    guint bitrate = get_exact_bitrate();
     // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
 
     gchar *encname = get_best_code_name("h265");
     if (encname == NULL)
         return NULL;
     encoder = gst_element_factory_make(encname, NULL);
-
+    g_print("video encoder: %s\n", encname);
     if (g_str_has_prefix(encname, "nvv4l2")) {
         g_object_set(G_OBJECT(encoder), "control-rate", 1, "maxperf-enable", TRUE, "bitrate", bitrate, NULL);
     } else {
@@ -332,18 +351,7 @@ static GstElement *get_hardware_h265_encoder() {
 
 static GstElement *get_hardware_h264_encoder() {
     GstElement *encoder;
-    guint bitrate = 8000;
-    if (config_data.v4l2src_data.height == 1080) {
-        if (config_data.v4l2src_data.framerate >= 60)
-            bitrate = 8000000;
-        else
-            bitrate = 4000000;
-    } else if (config_data.v4l2src_data.height == 720) {
-        if (config_data.v4l2src_data.framerate >= 60)
-            bitrate = 5000000;
-        else
-            bitrate = 3000000;
-    }
+    guint bitrate = get_exact_bitrate();
     // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
     if (gst_element_factory_find("vah264lpenc")) {
         // VA-API H.264 Low Power Encoder in Intel(R) Gen Graphics
@@ -1516,21 +1524,37 @@ static gchar *get_best_decode_name(const gchar *name) {
     return tmp;
 }
 
+static gchar *get_rtpdepay_args(const gchar *codec) {
+    gchar *rtp = NULL;
+    if (g_strcmp0(codec, "vp8")) {
+        rtp = g_strdup_printf("rtp%sdepay ! %sparse", codec, codec);
+    } else {
+        rtp = g_strdup_printf("rtp%sdepay ", codec);
+    }
+    return rtp;
+}
+
 static GstElement *get_playbin(const gchar *encode_name) {
     GstElement *playbin;
     gchar *desc;
     gchar *lowname = g_ascii_strdown(encode_name, -1);
-
+    if (g_strcmp0(encode_name, "AV1X") == 0) {
+        g_free(lowname);
+        lowname = g_strdup("av1");
+    }
+    gchar *rtp = get_rtpdepay_args(lowname);
     if (g_strcmp0(encode_name, "VP9") == 0 ||
         g_strcmp0(encode_name, "VP8") == 0 ||
+        g_strcmp0(encode_name, "AV1X") == 0 ||
         g_strcmp0(encode_name, "H264") == 0) {
         gchar *decname = get_best_decode_name(lowname);
-        desc = g_strdup_printf("rtp%sdepay ! %s ! queue leaky=1 ! videoconvert ! autovideosink", lowname, decname);
+        desc = g_strdup_printf("%s ! %s ! queue leaky=1 ! videoconvert ! autovideosink", rtp, decname);
         g_free(decname);
     } else {
         desc = g_strdup_printf(" decodebin ! queue leaky=1 ! videoconvert ! autovideosink");
     }
-
+    g_free(rtp);
+    g_print("codec name: %s,receive video desc: %s\n", encode_name, desc);
     g_free(lowname);
     playbin = gst_parse_bin_from_description(desc, TRUE, NULL);
     g_free(desc);
@@ -1988,7 +2012,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo  socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                     " %s ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
-                                    config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, rtp, config_data.videnc , webrtc_name);
+                                    config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, rtp, config_data.videnc, webrtc_name);
 #endif
     else
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo socket-timestamp=1  ! "
@@ -2036,10 +2060,9 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
 int start_av_udpsink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *aqueue, *vqueue, *pqueue, *video_sink, *audio_sink, *video_pay, *audio_pay;
+    GstElement *aqueue, *vqueue, *video_sink, *audio_sink, *video_pay, *audio_pay;
 
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
-    MAKE_ELEMENT_AND_ADD(pqueue, "queue");
     gchar *tmpname = g_strdup_printf("rtp%spay", config_data.videnc);
     MAKE_ELEMENT_AND_ADD(video_pay, tmpname);
     g_free(tmpname);
@@ -2064,12 +2087,12 @@ int start_av_udpsink() {
         tmpname = g_strdup_printf("%sparse", config_data.videnc);
         MAKE_ELEMENT_AND_ADD(videoparse, tmpname);
         g_free(tmpname);
-        if (!gst_element_link_many(vqueue, videoparse, video_pay, pqueue, video_sink, NULL)) {
+        if (!gst_element_link_many(vqueue, videoparse, video_pay, video_sink, NULL)) {
             g_error("Failed to link elements audio to mpegtsmux.\n");
             return -1;
         }
     } else {
-        if (!gst_element_link_many(vqueue, video_pay, pqueue, video_sink, NULL)) {
+        if (!gst_element_link_many(vqueue, video_pay, video_sink, NULL)) {
             g_error("Failed to link elements audio to mpegtsmux.\n");
             return -1;
         }
