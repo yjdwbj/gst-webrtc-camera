@@ -180,7 +180,7 @@ static gchar *get_today_str() {
     return g_strdup(time_str);
 }
 
-static gchar *get_shellcmd_results(const gchar *shellcmd) {
+gchar *get_shellcmd_results(const gchar *shellcmd) {
     FILE *fp;
     gchar *val = NULL;
     char path[256];
@@ -283,6 +283,72 @@ static gchar *get_best_code_name(const gchar *name) {
     return tmp;
 }
 
+static gchar *get_video_driver_name(const gchar *device) {
+    gchar *drvname = NULL;
+    int fd, ret;
+    struct v4l2_capability caps;
+    fd = open(device, O_RDWR);
+    if (fd < 0) {
+        g_error("Open video device failed\n");
+        return drvname;
+    }
+
+    memset(&caps, 0, sizeof(caps));
+    ret = ioctl(fd, VIDIOC_QUERYCAP, &caps);
+    if (ret == -1) {
+        g_error("Querying device capabilities failed\n");
+        goto failed;
+    }
+    drvname = g_strdup((gchar *)(caps.driver));
+failed:
+    close(fd);
+    return drvname;
+}
+
+#if defined(HAS_JETSON_NANO)
+static GstElement *get_nvbin() {
+    GstElement *nvbin;
+    gchar *binstr = NULL;
+    gchar *drvname = get_video_driver_name(config_data.v4l2src_data.device);
+    // If the following parameters are not suitable, it will always block in BLOCKING MODE.
+    if (g_str_has_prefix(drvname, "uvcvideo")) {
+        if (g_str_has_prefix(config_data.v4l2src_data.type, "image")) {
+            binstr = g_strdup_printf("v4l2src device=%s ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! "
+                                     " nvjpegdec ! nvvidconv ! "
+                                     " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
+                                     " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
+                                     config_data.v4l2src_data.device,
+                                     config_data.v4l2src_data.type,
+                                     config_data.v4l2src_data.width,
+                                     config_data.v4l2src_data.height,
+                                     config_data.v4l2src_data.framerate);
+        } else {
+            binstr = g_strdup_printf("v4l2src device=%s ! nvvidconv ! "
+                                     " %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! nvvidconv ! "
+                                     " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
+                                     " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
+                                     config_data.v4l2src_data.device,
+                                     config_data.v4l2src_data.type,
+                                     config_data.v4l2src_data.width,
+                                     config_data.v4l2src_data.height,
+                                     config_data.v4l2src_data.framerate);
+        }
+    } else {
+        binstr = g_strdup_printf("nvarguscamerasrc sensor_id=0 ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! "
+                                 " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
+                                 " video/x-raw(memory:NVMM),width=1920,height=1080,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
+                                 config_data.v4l2src_data.type,
+                                 config_data.v4l2src_data.width,
+                                 config_data.v4l2src_data.height,
+                                 config_data.v4l2src_data.framerate);
+    }
+    g_free(drvname);
+    nvbin = gst_parse_bin_from_description(binstr, TRUE, NULL);
+    g_free(binstr);
+    return nvbin;
+}
+#endif
+
 static guint get_exact_bitrate() {
     guint bitrate = 8000;
     if (config_data.v4l2src_data.height == 1080) {
@@ -364,13 +430,16 @@ static GstElement *get_hardware_h264_encoder() {
         g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
     } else if (gst_element_factory_find("nvv4l2h264enc")) {
         // https://docs.nvidia.com/jetson/archives/r34.1/DeveloperGuide/text/SD/Multimedia/AcceleratedGstreamer.html#supported-h-264-h-265-vp9-av1-encoder-features-with-gstreamer-1-0
+        gchar *drvname = get_video_driver_name(config_data.v4l2src_data.device);
+        guint64 nvbitrate = g_strcmp0(drvname, "uvcvideo") ? 12000000 : 800000;
+
         encoder = gst_element_factory_make("nvv4l2h264enc", NULL);
         g_object_set(G_OBJECT(encoder), "control-rate", 0,
                      "maxperf-enable", TRUE,
                      "iframeinterval", "1000",
                      "vbv-size", 50,
                      "qp-range", "1,51:1,51:1,51",
-                     "bitrate", bitrate, NULL);
+                     "bitrate", nvbitrate, NULL);
     } else if (gst_element_factory_find("v4l2h264enc")) {
         encoder = gst_element_factory_make("v4l2h264enc", NULL);
     } else if (gst_element_factory_find("x264enc")) {
@@ -397,80 +466,9 @@ static GstElement *get_video_encoder_by_name(gchar *name) {
     }
 }
 
-#if defined(HAS_JETSON_NANO)
-static gchar *get_video_driver_name(const gchar *device) {
-    gchar *drvname = NULL;
-    int fd, ret;
-    struct v4l2_capability caps;
-    fd = open(device, O_RDWR);
-    if (fd < 0) {
-        g_error("Open video device failed\n");
-        return drvname;
-    }
-
-    memset(&caps, 0, sizeof(caps));
-    ret = ioctl(fd, VIDIOC_QUERYCAP, &caps);
-    if (ret == -1) {
-        g_error("Querying device capabilities failed\n");
-        goto failed;
-    }
-    drvname = g_strdup((gchar *)(caps.driver));
-failed:
-    close(fd);
-    return drvname;
-}
-
-static GstElement *get_nvbin() {
-    GstElement *nvbin;
-    gchar *binstr = NULL;
-    gchar *drvname = get_video_driver_name(config_data.v4l2src_data.device);
-    // If the following parameters are not suitable, it will always block in BLOCKING MODE.
-    if (g_str_has_prefix(drvname, "uvcvideo")) {
-        if (g_str_has_prefix(config_data.v4l2src_data.type, "image")) {
-            binstr = g_strdup_printf("v4l2src device=%s ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! "
-                                     " nvjpegdec ! nvvidconv ! "
-                                     " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
-                                     " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
-                                     config_data.v4l2src_data.device,
-                                     config_data.v4l2src_data.type,
-                                     config_data.v4l2src_data.width,
-                                     config_data.v4l2src_data.height,
-                                     config_data.v4l2src_data.framerate);
-        } else {
-            binstr = g_strdup_printf("v4l2src device=%s ! nvvidconv ! "
-                                     " %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! nvvidconv ! "
-                                     " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
-                                     " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
-                                     config_data.v4l2src_data.device,
-                                     config_data.v4l2src_data.type,
-                                     config_data.v4l2src_data.width,
-                                     config_data.v4l2src_data.height,
-                                     config_data.v4l2src_data.framerate);
-        }
-    } else {
-        binstr = g_strdup_printf("nvarguscamerasrc sensor_id=0 ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! "
-                                 " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
-                                 " video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
-                                 config_data.v4l2src_data.type,
-                                 config_data.v4l2src_data.width,
-                                 config_data.v4l2src_data.height,
-                                 config_data.v4l2src_data.framerate);
-    }
-    g_free(drvname);
-    nvbin = gst_parse_bin_from_description(binstr, TRUE, NULL);
-    g_free(binstr);
-    return nvbin;
-}
-#endif
-
 static GstElement *get_video_src() {
     GstCaps *srcCaps;
     GstElement *teesrc, *capsfilter;
-    gchar *path = get_shellcmd_results("pgrep X");
-    if (path != NULL) {
-        g_setenv("XDG_SESSION_TYPE", "mate", TRUE);
-        g_free(path);
-    }
 
     capsfilter = gst_element_factory_make("capsfilter", NULL);
     g_print("device: %s, Type: %s, W: %d, H: %d , format: %s\n",
@@ -756,6 +754,7 @@ static GstElement *create_textbins() {
 }
 #endif
 
+#if !defined(HAS_JETSON_NANO)
 static GstElement *get_h264_caps() {
     GstElement *capsfilter;
     GstCaps *srcCaps;
@@ -766,6 +765,7 @@ static GstElement *get_h264_caps() {
     gst_bin_add(GST_BIN(pipeline), capsfilter);
     return capsfilter;
 }
+#endif
 
 static GstElement *get_encoder_src() {
     GstElement *encoder, *teesrc;
@@ -2001,20 +2001,23 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
 
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
     // here must have rtph264depay and rtph264pay to be compatible with  mobile browser.
-    gchar *rtp = get_rtp_args();
+
     if (g_str_has_prefix(config_data.videnc, "h26"))
+    {
 #if defined(HAS_JETSON_NANO)
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                     " rtp%sdepay ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
                                     config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc, webrtc_name);
 #else
+        gchar *rtp = get_rtp_args();
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo  socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                     " %s ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
                                     config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, rtp, config_data.videnc, webrtc_name);
+        g_free(rtp);
 #endif
-    else
+    } else
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                     " %s. ",
@@ -2631,11 +2634,15 @@ static gchar *get_hlssink_string(gchar *outdir, gchar *location) {
 }
 
 static gchar *get_hlssink_bin(const gchar *opencv_plugin) {
-    const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
+    static const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
+    static const gchar *qprang = "1,51:1,51:1,51";
+    gchar *drvname = get_video_driver_name(config_data.v4l2src_data.device);
+    guint nvbitrate = g_strcmp0(drvname, "uvcvideo") ? 12000000 : 800000;
     gchar *binstr = g_strdup_printf(" queue  ! videoconvert ! %s ! video/x-raw,width=1024,height=576 ! "
                                     " %s ! videoconvert ! nvvidconv ! video/x-raw(memory:NVMM),width=1024,height=576,format=I420,pixel-aspect-ratio=1/1 ! "
-                                    "nvv4l2h264enc ! queue ! h264parse ! mpegtsmux ",
-                                    opencv_plugin, clock);
+                                    "nvv4l2h264enc control-rate=0 maxperf-enable=1 iframeinterval=1000 vbv-size=50 qp-range=%s bitrate=%d ! "
+                                    " queue ! h264parse ! mpegtsmux ",
+                                    opencv_plugin, clock, qprang, nvbitrate);
     return binstr;
 }
 

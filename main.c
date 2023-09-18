@@ -338,6 +338,12 @@ int main(int argc, char *argv[]) {
 
     _get_cpuid();
 
+    gchar *path = get_shellcmd_results("pgrep X");
+    if (path != NULL) {
+        g_setenv("XDG_SESSION_TYPE", "mate", TRUE);
+        g_free(path);
+    }
+
     signal(SIGINT, sigintHandler);
 
     // initialize the Gstreamer library

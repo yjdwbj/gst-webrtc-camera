@@ -29,7 +29,7 @@
     }
 
     .w-60 {
-      width: 60%!important;
+      width: 60% !important;
     }
 
     .container {
@@ -57,133 +57,133 @@
 </head>
 
 <body>
-  <div>
-    <h1 class="text-center" id="title">Gstreamer Webrtc Camera</h1>
-    <div class="text-center" id="container">
-      <video class="w-60" id="video0" playsinline autoplay></video>
-      <div class="text-center mb-5" id="loading" style="display: none">
-        <div class="spinner-border" role="status">
-          <span class="visually-hidden">Loading...</span>
-        </div>
+  <div class="d-flex">
+    <a class="btn btn-primary align-self-start m-2" href="index.html" role="button">Show HLS Stream</a>
+    <h1 class="text-center align-self-center flex-fill" id="title">Gstreamer Webrtc Camera</h1>
+  </div>
+  <div class="text-center" id="container">
+    <video class="w-60" id="video0" playsinline autoplay></video>
+    <div class="text-center mb-5" id="loading" style="display: none">
+      <div class="spinner-border" role="status">
+        <span class="visually-hidden">Loading...</span>
       </div>
-      <div class="visualizer w-100 d-flex justify-content-center my-2" id="vis-dom">
-        <canvas class="w-60" id="visualizer"></canvas>
-      </div>
-      <div id="elapse"></div>
-      <canvas style="display: none" id="videoCanvas"></canvas>
-      <section class="main-controls d-flex justify-content-center flex-column align-items-center">
-        <div class="mt-3" id="buttons">
-          <button type="button" class="btn btn-info" id="startWatch">
-            Start
-          </button>
-          <button type="button" class="btn btn-light" id="startRecord">
-            Start Record
-          </button>
-          <!-- <button type="button" class="btn btn-light" id="enableTalk">
+    </div>
+    <div class="visualizer w-100 d-flex justify-content-center my-2" id="vis-dom">
+      <canvas class="w-60" id="visualizer"></canvas>
+    </div>
+    <div id="elapse"></div>
+    <canvas style="display: none" id="videoCanvas"></canvas>
+    <section class="main-controls d-flex justify-content-center flex-column align-items-center">
+      <div class="mt-3" id="buttons">
+        <button type="button" class="btn btn-info" id="startWatch">
+          Start
+        </button>
+        <button type="button" class="btn btn-light" id="startRecord">
+          Start Record
+        </button>
+        <!-- <button type="button" class="btn btn-light" id="enableTalk">
             Video on
           </button> -->
-          <div type="button" class="btn btn-light p-0 m-0">
-            <select onchange="selectVideoSize(event)" class="form-select btn-light" aria-label=".form-select-sm"
-              id="videoPixList">
-              <option value="stop">Talk On</option>
-            </select>
-          </div>
-          <button type="button" class="btn btn-light" id="sendVoice">
-            Start Voice
-          </button>
-          <button type="button" class="btn btn-light" id="screenShot">
-            ScreenShot
-          </button>
-          <button class="btn btn-light" type="button" data-bs-toggle="offcanvas" data-bs-target="#offcanvasRight"
-            aria-controls="offcanvasRight" id="ctrlPanel">
+        <div type="button" class="btn btn-light p-0 m-0">
+          <select onchange="selectVideoSize(event)" class="form-select btn-light" aria-label=".form-select-sm"
+            id="videoPixList">
+            <option value="stop">Talk On</option>
+          </select>
+        </div>
+        <button type="button" class="btn btn-light" id="sendVoice">
+          Start Voice
+        </button>
+        <button type="button" class="btn btn-light" id="screenShot">
+          ScreenShot
+        </button>
+        <button class="btn btn-light" type="button" data-bs-toggle="offcanvas" data-bs-target="#offcanvasRight"
+          aria-controls="offcanvasRight" id="ctrlPanel">
+          Control Panel
+        </button>
+      </div>
+      <div class="form-floating w-25 m-0">
+        <select class="form-select" id="codecSelect" aria-label="Floating label select example">
+          <option value="" selected>Default</option>
+        </select>
+        <label for="codecSelect">Codec preferences for talk</label>
+      </div>
+    </section>
+    <div class="offcanvas offcanvas-end overflow-hidden" tabindex="-1" id="offcanvasRight"
+      aria-labelledby="offcanvasRightLabel">
+      <div class="offcanvas-header">
+        <label>Control Panel</label>
+        <button type="button" class="btn-close text-reset" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+      </div>
+      <ul class="nav nav-tabs" id="myTab" role="tablist">
+        <li class="nav-item" role="presentation">
+          <button class="nav-link active" id="ctrl-panel" data-bs-toggle="tab" data-bs-target="#ctrl" type="button"
+            role="tab" aria-controls="ctrl" aria-selected="true">
             Control Panel
           </button>
-        </div>
-        <div class="form-floating w-25 m-0">
-          <select class="form-select" id="codecSelect" aria-label="Floating label select example">
-            <option value="" selected>Default</option>
-          </select>
-          <label for="codecSelect">Codec preferences for talk</label>
-        </div>
-      </section>
-      <div class="offcanvas offcanvas-end overflow-hidden" tabindex="-1" id="offcanvasRight"
-        aria-labelledby="offcanvasRightLabel">
-        <div class="offcanvas-header">
-          <label>Control Panel</label>
-          <button type="button" class="btn-close text-reset" data-bs-dismiss="offcanvas" aria-label="Close"></button>
-        </div>
-        <ul class="nav nav-tabs" id="myTab" role="tablist">
-          <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="ctrl-panel" data-bs-toggle="tab" data-bs-target="#ctrl" type="button"
-              role="tab" aria-controls="ctrl" aria-selected="true">
-              Control Panel
-            </button>
-          </li>
-          <li class="nav-item" role="presentation">
-            <button class="nav-link" id="user-info" data-bs-toggle="tab" data-bs-target="#users" type="button"
-              role="tab" aria-controls="users" aria-selected="false">
-              Online Users
-            </button>
-          </li>
-        </ul>
-        <div class="tab-content h-100" id="myTabContent">
-          <div class="tab-pane fade show active" id="ctrl" role="tabpanel" aria-labelledby="ctrl-panel">
-            <div class="offcanvas-body d-flex flex-column py-0 h-100">
-              <div class="card">
-                <div class="card-header">video user contorls</div>
-                <div class="card-body m-0 p-0">
-                  <ul class="list-group" id="ctrls"></ul>
-                </div>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="nav-link" id="user-info" data-bs-toggle="tab" data-bs-target="#users" type="button" role="tab"
+            aria-controls="users" aria-selected="false">
+            Online Users
+          </button>
+        </li>
+      </ul>
+      <div class="tab-content h-100" id="myTabContent">
+        <div class="tab-pane fade show active" id="ctrl" role="tabpanel" aria-labelledby="ctrl-panel">
+          <div class="offcanvas-body d-flex flex-column py-0 h-100">
+            <div class="card">
+              <div class="card-header">video user contorls</div>
+              <div class="card-body m-0 p-0">
+                <ul class="list-group" id="ctrls"></ul>
               </div>
-              <div class="flex-grow-1">
-                <nav>
-                  <div class="nav nav-tabs" id="nav-tab" role="tablist">
-                    <button class="nav-link active" id="tab-sdp" data-bs-toggle="tab" data-bs-target="#nav-sdp"
-                      type="button" role="tab" aria-controls="nav-sdp" aria-selected="true">SDP Info</button>
-                    <button class="nav-link" id="tab-status" data-bs-toggle="tab" data-bs-target="#nav-statsu"
-                      type="button" role="tab" aria-controls="nav-status" aria-selected="false">VP8 Status</button>
-                  </div>
-                </nav>
-                <div class="tab-content" id="nav-tabContent">
-                  <div class="tab-pane fade show active m-0 p-0" id="nav-sdp" role="tabpanel" aria-labelledby="tab-sdp">
-                    <textarea id="showsdp" class="w-100 h-100 m-0"></textarea>
-                  </div>
-                  <div class="tab-pane fade show m-0 p-0" id="nav-status" role="tabpanel"
-                    aria-labelledby="tab-status">
-                    <ul class="list-group">
-                      <li class="list-group-item d-flex justify-content-between align-items-center">
-                        Video size:
-                        <span class="badge bg-primary rounded-pill" id="video-size">0</span>
-                      </li>
-                      <li class="list-group-item d-flex justify-content-between align-items-center">
-                        Keyframe count:
-                        <span class="badge bg-primary rounded-pill" id="keyframe-count">0</span>
-                      </li>
-                      <li class="list-group-item d-flex justify-content-between align-items-center">
-                        Interframe count:
-                        <span class="badge bg-primary rounded-pill" id="interframe-count">0</span>
-                      </li>
-                      <li class="list-group-item d-flex justify-content-between align-items-center">
-                        Last keyframe size:
-                        <span class="badge bg-primary rounded-pill" id="keyframe-size">0</span>
-                      </li>
-                      <li class="list-group-item d-flex justify-content-between align-items-center">
-                        Last interframe size:
-                        <span class="badge bg-primary rounded-pill" id="interframe-size">0</span>
-                      </li>
-                      <li class="list-group-item d-flex justify-content-between align-items-center">
-                        Duplicate count:
-                        <span class="badge bg-primary rounded-pill" id="duplicate-count">0</span>
-                      </li>
-                    </ul>
-                  </div>
+            </div>
+            <div class="flex-grow-1">
+              <nav>
+                <div class="nav nav-tabs" id="nav-tab" role="tablist">
+                  <button class="nav-link active" id="tab-sdp" data-bs-toggle="tab" data-bs-target="#nav-sdp"
+                    type="button" role="tab" aria-controls="nav-sdp" aria-selected="true">SDP Info</button>
+                  <button class="nav-link" id="tab-status" data-bs-toggle="tab" data-bs-target="#nav-status"
+                    type="button" role="tab" aria-controls="nav-status" aria-selected="false">VP8 Status</button>
+                </div>
+              </nav>
+              <div class="tab-content" id="nav-tabContent">
+                <div class="tab-pane fade show active m-0 p-0" id="nav-sdp" role="tabpanel" aria-labelledby="tab-sdp">
+                  <textarea id="showsdp" class="w-100 h-100 m-0"></textarea>
+                </div>
+                <div class="tab-pane fade show m-0 p-0" id="nav-status" role="tabpanel" aria-labelledby="tab-status">
+                  <ul class="list-group">
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                      Video size:
+                      <span class="badge bg-primary rounded-pill" id="video-size">0</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                      Keyframe count:
+                      <span class="badge bg-primary rounded-pill" id="keyframe-count">0</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                      Interframe count:
+                      <span class="badge bg-primary rounded-pill" id="interframe-count">0</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                      Last keyframe size:
+                      <span class="badge bg-primary rounded-pill" id="keyframe-size">0</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                      Last interframe size:
+                      <span class="badge bg-primary rounded-pill" id="interframe-size">0</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                      Duplicate count:
+                      <span class="badge bg-primary rounded-pill" id="duplicate-count">0</span>
+                    </li>
+                  </ul>
                 </div>
               </div>
             </div>
           </div>
-          <div class="tab-pane fade" id="users" role="tabpanel" aria-labelledby="user-info">
-            <ol class="list-group list-group-numbered" id="online-users"></ol>
-          </div>
+        </div>
+        <div class="tab-pane fade" id="users" role="tabpanel" aria-labelledby="user-info">
+          <ol class="list-group list-group-numbered" id="online-users"></ol>
         </div>
       </div>
     </div>

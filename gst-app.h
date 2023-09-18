@@ -55,6 +55,8 @@ int motion_hlssink();
 int cvtracker_hlssink();
 int facedetect_hlssink();
 int edgedect_hlssink();
+
+gchar *get_shellcmd_results(const gchar *shellcmd);
 GThread *start_inotify_thread(void);
 
 GstStateChangeReturn start_app();

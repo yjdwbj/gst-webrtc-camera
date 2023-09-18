@@ -55,11 +55,12 @@ let updateVideoStatusTimer;
 let supportVideoSize = {};
 let videoPixList;
 let currentConstraint;
+const hasTty = document.querySelector('meta[name="type"]').content === 'tty';
+
 
 const supportedConstraints = navigator.mediaDevices.getSupportedConstraints();
 const supportsSetCodecPreferences = window.RTCRtpTransceiver &&
   'setCodecPreferences' in window.RTCRtpTransceiver.prototype;
-
 
 function videoAnalyzer(encodedFrame, controller) {
   const view = new DataView(encodedFrame.data);
@@ -482,8 +483,6 @@ window.onload = function () {
   window.duplicateCountDisplay = document.querySelector('#duplicate-count');
   window.codecPreferences = document.getElementById('codecSelect');
 
-  getSupportedVideoSize();
-  listCamerasAndMicrophone();
   startWatch = document.getElementById('startWatch');
   startRecord = document.getElementById('startRecord');
   // enableTalk = document.getElementById('enableTalk');
@@ -491,6 +490,16 @@ window.onload = function () {
   screenShot = document.getElementById('screenShot');
   ctrlPanel = document.getElementById('ctrlPanel');
   videoPixList = document.getElementById('videoPixList');
+
+
+  if (!hasTty)
+  {
+    getSupportedVideoSize();
+    listCamerasAndMicrophone();
+  }
+  videoPixList.hidden = hasTty;
+  codecPreferences.hidden = hasTty;
+  document.querySelector('.form-floating').hidden = hasTty;
 
   canvas = document.getElementById('visualizer');
   canvasCtx = canvas.getContext('2d');

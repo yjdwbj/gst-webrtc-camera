@@ -490,7 +490,6 @@ static void send_iceservers(SoupWebsocketConnection *connection) {
 
     json_object_unref(msg);
     soup_websocket_connection_send_text(connection, text);
-    g_print("text: %s\n", text);
     g_free(url);
     g_free(text);
 }
@@ -569,13 +568,14 @@ got_headers_callback(SoupMessage *msg, gpointer data) {
     GHashTable *webrtc_connected_table = (GHashTable *)data;
     header = soup_message_headers_get_one(msg->request_headers,
                                           "Authorization");
+
     if (header) {
+        g_print("got headers: %s\n", header);
         if (strstr(header, "Basic "))
             g_print("client send requested basic \n");
         if (strstr(header, "Digest "))
             g_print("client send requested digest \n");
     }
-    g_print("connected size: %d\n", g_hash_table_size(webrtc_connected_table));
 }
 
 static void
@@ -585,6 +585,7 @@ wrote_headers_callback(SoupMessage *msg, gpointer data) {
     header = soup_message_headers_get_list(msg->response_headers,
                                            "WWW-Authenticate");
     if (header) {
+        g_print("wrote headers: %s\n", header);
         if (strstr(header, "Basic "))
             g_print("server_requested basic \n");
         if (strstr(header, "Digest "))
@@ -712,15 +713,18 @@ do_get(SoupServer *server, SoupMessage *msg, const char *path) {
         if (g_str_has_suffix(path, ".html")) {
             const gchar *auth = soup_message_headers_get_one(msg->request_headers, "Authorization");
             if (auth != NULL) {
+                const gchar *xdg_stype = g_getenv("XDG_SESSION_TYPE");
                 gchar *username = get_auth_value_by_key(auth, (const gchar *)"username");
                 const gchar *uid = soup_message_headers_get_one(msg->request_headers, "Uid");
                 const gchar *role = soup_message_headers_get_one(msg->request_headers, "Role");
                 gchar *meta = g_strdup_printf("<meta name=\"user\" content=\"%s\">\n"
                                               "<meta name=\"uid\" content=\"%s\">\n"
-                                              "<meta name=\"role\" content=\"%s\">\n",
+                                              "<meta name=\"role\" content=\"%s\">\n"
+                                              "<meta name=\"type\" content=\"%s\">\n",
                                               username,
                                               ++uid, // ++ just for skip empty char.
-                                              ++role);
+                                              ++role,
+                                              xdg_stype);
                 // g_print("auth:  %s, username: %s\n", auth, username);
                 buffer = add_user_to_html(buffer, meta);
                 g_free(username);
