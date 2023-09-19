@@ -385,7 +385,7 @@ static GstElement *get_hardware_vp89_encoder(const gchar *name) {
         g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, "low-latency", TRUE, NULL);
     } else if (g_str_has_prefix(encname, "vaapi")) {
         g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, "rate-control", 4,
-                     "default-roi-delta-qp", 0, "trellis", TRUE, "tune", 3, NULL);
+                     "quality-level", 1, "trellis", TRUE, "tune", 3, NULL);
     }
     g_free(encname);
     gst_bin_add(GST_BIN(pipeline), encoder);

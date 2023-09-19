@@ -215,8 +215,7 @@ static gchar *get_table_list() {
     return list;
 }
 
-static void update_online_users()
-{
+static void update_online_users() {
     GList *keys = NULL, *item = NULL;
     gchar *list = get_table_list();
     gchar *userlist = get_online_user_list(list);
@@ -462,12 +461,11 @@ static void send_iceservers(SoupWebsocketConnection *connection) {
     urls = json_array_new();
     url = g_strdup_printf("stun:%s", config_data.webrtc.stun);
     json_array_add_string_element(urls, url);
-    json_object_set_array_member(stun, "urls",urls );
+    json_object_set_array_member(stun, "urls", urls);
 
     array = json_array_new();
     json_array_add_object_element(array, stun);
-    if(config_data.webrtc.turn.enable)
-    {
+    if (config_data.webrtc.turn.enable) {
         turn = json_object_new();
         gchar *turl = g_strdup_printf("turn:%s", config_data.webrtc.turn.url);
         urls = json_array_new();
@@ -713,6 +711,14 @@ do_get(SoupServer *server, SoupMessage *msg, const char *path) {
         if (g_str_has_suffix(path, ".html")) {
             const gchar *auth = soup_message_headers_get_one(msg->request_headers, "Authorization");
             if (auth != NULL) {
+                if (g_strcmp0(soup_message_headers_get_one(msg->request_headers, "Active"), "off") == 0) {
+                    soup_message_set_status(msg, SOUP_STATUS_FORBIDDEN);
+                    gchar *txt = "This account is inactive.";
+                    soup_message_set_response(msg, "text/plain",
+                                              SOUP_MEMORY_STATIC, txt, strlen(txt));
+                    soup_buffer_free(buffer);
+                    return;
+                }
                 const gchar *xdg_stype = g_getenv("XDG_SESSION_TYPE");
                 gchar *username = get_auth_value_by_key(auth, (const gchar *)"username");
                 const gchar *uid = soup_message_headers_get_one(msg->request_headers, "Uid");
@@ -870,6 +876,8 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
 
     uid = g_strdup_printf("% " G_GINT64_FORMAT, json_object_get_int_member(root_obj, "role"));
     soup_message_headers_append(msg->request_headers, "Role", uid);
+
+    soup_message_headers_append(msg->request_headers, "Active", json_object_get_int_member(root_obj, "active") ? "on" : "off");
     g_free(uid);
     // ret = soup_auth_domain_digest_encode_password(username,
     //                                               realm,
