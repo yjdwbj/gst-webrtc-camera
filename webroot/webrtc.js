@@ -55,6 +55,8 @@ let updateVideoStatusTimer;
 let supportVideoSize = {};
 let videoPixList;
 let currentConstraint;
+let bytesPrev;
+let timestampPrev;
 const hasTty = document.querySelector('meta[name="type"]').content === 'tty';
 
 
@@ -295,6 +297,7 @@ function createWebrtcRecv() {
       webrtcPeerConnection.restartIce();
     }
   };
+
 
   localdc = webrtcPeerConnection.createDataChannel("web page channel", { ordered: true });
 
@@ -698,6 +701,73 @@ async function onLocalDescription(desc) {
     .catch(reportError);
 }
 
+function showRemoteStats(results) {
+  const peerDiv = document.getElementById('connected-to');
+  const vbitrateDiv = document.getElementById('remote-vbitrate');
+  const timestampDiv = document.getElementById('timestamp');
+  const idDiv = document.getElementById('remote-id');
+  const typeDiv = document.getElementById('remote-type');
+  const sizeDiv = document.getElementById('video-dimension');
+  if (videoCanvas) {
+    sizeDiv.innerHTML = `<div class="fw-bold text-start">Video dimensions:</div>${videoCanvas.width}x${videoCanvas.height} px`;
+  }
+
+  // calculate video bitrate
+  results.forEach(report => {
+    const now = report.timestamp;
+    timestampDiv.innerHTML = `<div class="fw-bold text-start" >Timestamp:</div>${now}`;
+    idDiv.innerHTML = `<div class="fw-bold text-start" >Id:</div>${report.id}`;
+    typeDiv.innerHTML = `<div class="fw-bold text-start" >Type:</div>${report.type}`;
+    let bitrate;
+    if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
+      const bytes = report.bytesReceived;
+      if (timestampPrev) {
+        bitrate = 8 * (bytes - bytesPrev) / (now - timestampPrev);
+        bitrate = Math.floor(bitrate);
+      }
+      bytesPrev = bytes;
+      timestampPrev = now;
+    }
+    if (bitrate) {
+      bitrate += ' kbits/sec';
+      vbitrateDiv.innerHTML = `<div class="fw-bold text-start" >Video Bitrate:</div>${bitrate}`;
+    }
+
+  });
+
+  // figure out the peer's ip
+  let activeCandidatePair = null;
+  let remoteCandidate = null;
+
+  // Search for the candidate pair, spec-way first.
+  results.forEach(report => {
+    if (report.type === 'transport') {
+      activeCandidatePair = results.get(report.selectedCandidatePairId);
+    }
+  });
+  // Fallback for Firefox.
+  if (!activeCandidatePair) {
+    results.forEach(report => {
+      if (report.type === 'candidate-pair' && report.selected) {
+        activeCandidatePair = report;
+      }
+    });
+  }
+  if (activeCandidatePair && activeCandidatePair.remoteCandidateId) {
+    remoteCandidate = results.get(activeCandidatePair.remoteCandidateId);
+  }
+  if (remoteCandidate) {
+    if (remoteCandidate.address && remoteCandidate.port) {
+      peerDiv.innerHTML = `<div class="fw-bold text-start" data-bs-toggle="tooltip" data-bs-placement="top" title="${remoteCandidate.address}:${remoteCandidate.port}">Connected to:</div>${remoteCandidate.address}:${remoteCandidate.port}`;
+    } else if (remoteCandidate.ip && remoteCandidate.port) {
+      peerDiv.innerHTML = `<div class="fw-bold text-start" data-bs-toggle="tooltip" data-bs-placement="top" title="${remoteCandidate.ip}:${remoteCandidate.port}">Connected to:</div>${remoteCandidate.ip}:${remoteCandidate.port}`;
+    } else if (remoteCandidate.ipAddress && remoteCandidate.portNumber) {
+      // Fall back to old names.
+      peerDiv.innerHTML = `<div class="fw-bold text-start" data-bs-toggle="tooltip" data-bs-placement="top" title="${remoteCandidate.ipAddress}:${remoteCandidate.port}">Connected to:</div>${remoteCandidate.ipAddress}:${remoteCandidate.portNumber}`;
+    }
+  }
+}
+
 async function onIncomingSDP(sdp) {
   if (sdp.type === "offer") {
     const showsdp = document.getElementById('showsdp');
@@ -712,7 +782,10 @@ async function onIncomingSDP(sdp) {
       interFrameCountDisplay.innerHTML = interFrameCount;
       interFrameSizeDisplay.innerHTML = interFrameLastSize;
       duplicateCountDisplay.innerHTML = duplicateCount;
-    }, 500);
+      webrtcPeerConnection
+        .getStats(null)
+        .then(showRemoteStats, err => console.log(err));
+    }, 1000);
   } else {
     // console.log("answser Sdp: " + sdp.sdp);
     await localpc.setRemoteDescription(sdp).catch(reportError);

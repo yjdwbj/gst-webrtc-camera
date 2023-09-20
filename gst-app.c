@@ -334,9 +334,7 @@ static GstElement *get_nvbin() {
                                      config_data.v4l2src_data.framerate);
         }
     } else {
-        binstr = g_strdup_printf("nvarguscamerasrc sensor_id=0 ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! "
-                                 " nvivafilter customer-lib-name=libnvsample_cudaprocess.so cuda-process=true pre-process=false post-process=false !"
-                                 " video/x-raw(memory:NVMM),width=1920,height=1080,format=NV12,pixel-aspect-ratio=1/1 ! nvvidconv ",
+        binstr = g_strdup_printf("nvarguscamerasrc sensor_id=0 ! %s,width=%d,height=%d,framerate=(fraction)%d/1,format=NV12 ! nvvidconv ! queue ",
                                  config_data.v4l2src_data.type,
                                  config_data.v4l2src_data.width,
                                  config_data.v4l2src_data.height,
@@ -437,8 +435,10 @@ static GstElement *get_hardware_h264_encoder() {
         g_object_set(G_OBJECT(encoder), "control-rate", 0,
                      "maxperf-enable", TRUE,
                      "iframeinterval", "1000",
-                     "vbv-size", 50,
-                     "qp-range", "1,51:1,51:1,51",
+                     "preset-level", 4,
+                     "vbv-size", 45000,
+                     "qp-range",
+                     "1,31:1,31:1,31",
                      "bitrate", nvbitrate, NULL);
     } else if (gst_element_factory_find("v4l2h264enc")) {
         encoder = gst_element_factory_make("v4l2h264enc", NULL);
@@ -2635,12 +2635,12 @@ static gchar *get_hlssink_string(gchar *outdir, gchar *location) {
 
 static gchar *get_hlssink_bin(const gchar *opencv_plugin) {
     static const gchar *clock = "clockoverlay time-format=\"%D %H:%M:%S\"";
-    static const gchar *qprang = "1,51:1,51:1,51";
+    static const gchar *qprang = "1,31:1,31:1,31";
     gchar *drvname = get_video_driver_name(config_data.v4l2src_data.device);
     guint nvbitrate = g_strcmp0(drvname, "uvcvideo") ? 12000000 : 800000;
-    gchar *binstr = g_strdup_printf(" queue  ! videoconvert ! %s ! video/x-raw,width=1024,height=576 ! "
-                                    " %s ! videoconvert ! nvvidconv ! video/x-raw(memory:NVMM),width=1024,height=576,format=I420,pixel-aspect-ratio=1/1 ! "
-                                    "nvv4l2h264enc control-rate=0 maxperf-enable=1 iframeinterval=1000 vbv-size=50 qp-range=%s bitrate=%d ! "
+    gchar *binstr = g_strdup_printf(" queue  ! videoconvert ! %s ! video/x-raw,width=1920,height=1080 ! "
+                                    " %s ! videoconvert ! nvvidconv ! video/x-raw(memory:NVMM),width=1920,height=1080,format=I420,pixel-aspect-ratio=1/1 ! "
+                                    "nvv4l2h264enc control-rate=0 maxperf-enable=1 preset-level=4 iframeinterval=1000 vbv-size=450000 qp-range=%s bitrate=%d ! "
                                     " queue ! h264parse ! mpegtsmux ",
                                     opencv_plugin, clock, qprang, nvbitrate);
     return binstr;

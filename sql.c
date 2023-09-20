@@ -133,9 +133,9 @@ gchar *get_user_auth(const gchar *username, const gchar *realm) {
 gchar *get_online_user_list(const gchar *list) {
     int rc;
     gchar *errMsg;
+    static GMutex mutex;
     struct _SQLdata data = {.ret = NULL};
     rc = sqlite3_open(dbpath, &db);
-
     if (rc != SQLITE_OK) {
         g_print("open db failed\n");
         init_db();
@@ -150,10 +150,12 @@ gchar *get_online_user_list(const gchar *list) {
                                  "INNER JOIN webrtc_user "
                                  "ON webrtc_user.username == webrtc_log.username "
                                  "WHERE hashid IN %s ) "
-                                 "SELECT json_object('type',\"users\",'data',json(result)) FROM json_users;",
+                                 "SELECT json_object('type',\"users\",'data',json(result)) FROM json_users LIMIT 50;",
                                  list);
+    g_mutex_lock(&mutex);
     rc = sqlite3_exec(db, sql, callback, &data, &errMsg);
     sqlite3_close(db);
+    g_mutex_unlock(&mutex);
     if (rc != SQLITE_OK) {
         g_print("sql error: %s \n", errMsg);
         return NULL;
