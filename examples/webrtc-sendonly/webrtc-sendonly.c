@@ -15,6 +15,8 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "../../v4l2ctl.h"
+
 /* This example is a standalone app which serves a web page
  * and configures webrtcbin to receive an H.264 video feed, and to
  * send+recv an Opus audio stream */
@@ -369,6 +371,19 @@ void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection
 
         g_signal_emit_by_name(receiver_entry->webrtcbin, "add-ice-candidate",
                               mline_index, candidate_string);
+    } else if (!g_strcmp0(type_string, "v4l2")) {
+        g_print("get v4l2 ctrls \n");
+        if (json_object_has_member(root_json_object, "data")) {
+            JsonObject *ctrl_object = json_object_get_object_member(root_json_object, "data");
+            gboolean isTrue = json_object_get_boolean_member(ctrl_object, "reset");
+            if (isTrue)
+                reset_user_ctrls(gs_app.video_dev);
+        } else if (json_object_has_member(root_json_object, "data")) {
+            JsonObject *ctrl_object = json_object_get_object_member(root_json_object, "data");
+            gint64 id = json_object_get_int_member(ctrl_object, "id");
+            gint64 value = json_object_get_int_member(ctrl_object, "value");
+            set_ctrl_value(gs_app.video_dev, id, value);
+        }
     } else
         goto unknown_message;
 
@@ -391,6 +406,7 @@ void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
 }
 
 #define INDEX_HTML "index.html"
+#define MAIN_JS "main.js"
 #define BOOTSTRAP_JS "bootstrap.bundle.min.js"
 #define BOOTSTRAP_CSS "bootstrap.min.css"
 
@@ -408,6 +424,8 @@ void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
             mapping = g_mapped_file_new(BOOTSTRAP_JS, FALSE, NULL);
         } else if (g_str_has_suffix(path, BOOTSTRAP_CSS)) {
             mapping = g_mapped_file_new(BOOTSTRAP_CSS, FALSE, NULL);
+        } else if (g_str_has_suffix(path, MAIN_JS)) {
+            mapping = g_mapped_file_new(MAIN_JS, FALSE, NULL);
         } else {
             soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
             return;
@@ -439,6 +457,9 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
 
     receiver_entry = create_receiver_entry(connection, app);
     g_hash_table_insert(app->receiver_entry_table, connection, receiver_entry);
+    gchar *videoCtrls = get_device_json(app->video_dev);
+    soup_websocket_connection_send_text(receiver_entry->connection, videoCtrls);
+    g_free(videoCtrls);
 }
 
 #define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"

@@ -3,7 +3,7 @@ LIBS	:= $(shell pkg-config --libs --cflags gstreamer-webrtc-1.0 gstreamer-sdp-1.
 CFLAGS	:= -O0 -ggdb -Wall -fno-omit-frame-pointer -fsanitize=address
 
 all: webrtc-sendonly
-webrtc-sendonly: webrtc-sendonly.c
+webrtc-sendonly: webrtc-sendonly.c ../../v4l2ctl.c
 	"$(CC)" $(CFLAGS) $^ $(LIBS) -o $@
 
 clean:
