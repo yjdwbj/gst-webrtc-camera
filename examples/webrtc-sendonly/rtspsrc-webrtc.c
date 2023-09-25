@@ -38,15 +38,36 @@
 
 #include "../../v4l2ctl.h"
 
-/* This example is a standalone app which serves a web page
- * and configures webrtcbin to receive an H.264 video feed, and to
- * send+recv an Opus audio stream */
-
-#define RTP_PAYLOAD_TYPE "96"
-#define RTP_CAPS_OPUS "application/x-rtp,media=audio,encoding-name=OPUS,payload="
-
-#define SOUP_HTTP_PORT 57778
 #define STUN_SERVER "stun://stun.l.google.com:19302"
+
+#define AUDIO_PORT "6006"
+#define VIDEO_PORT "6005"
+#define MUDP_ADDR "224.1.1.4"
+
+#define UDPSRCA_ARGS "port=" AUDIO_PORT " address=" MUDP_ADDR
+#define UDPSRCV_ARGS "port=" VIDEO_PORT " address=" MUDP_ADDR
+#define UDPSINKA_ARGS "port=" AUDIO_PORT " host=" MUDP_ADDR " sync=false async=false"
+#define UDPSINKV_ARGS "port=" VIDEO_PORT " host=" MUDP_ADDR " sync=false async=false"
+
+#define INDEX_HTML "rtspsrc.html"
+#define BOOTSTRAP_JS "bootstrap.bundle.min.js"
+#define BOOTSTRAP_CSS "bootstrap.min.css"
+
+#define ZTE_V520_LOGIN_FORM "Username=%s&Password=%s&Frm_Logintoken=&action=login"
+#define ZTE_V520_NAVCTRL_FORM "IF_ACTION=Apply&ActionType=%d&"
+#define ZTE_V520_AUTOTRACK_FORM "IF_ACTION=Apply&Enable=%d"
+#define ZTE_V520_GET_RTSP_URL "/common_page/GetVideoURL_lua.lua?codecType=1&_=%" G_GUINT64_FORMAT
+#define ZTE_V520_NAVCTRL_URL "/common_page/ViewVideo_Navigate_lua.lua"
+#define ZTE_V520_AUTOTRACK_URL "/common_page/ViewVideo_AutoTrack_lua.lua"
+
+#define NAVIGATE_UP 1
+#define NAVIGATE_DOWN 2
+#define NAVIGATE_RIGHT 3
+#define NAVIGATE_LEFT 4
+#define NAVIGATE_HORIZONTAL 20
+#define NAVIGATE_VERTICAL 21
+#define NAVIGATE_STOP 22
+#define NAVIGATE_ORIGIN 24
 
 typedef struct _APPData AppData;
 struct _APPData {
@@ -54,26 +75,28 @@ struct _APPData {
     GMainLoop *loop;
     SoupServer *soup_server;
     GHashTable *receiver_entry_table;
-    gchar *video_dev;  // v4l2src device. default: /dev/video0
-    gchar *video_caps; // video/x-raw,width=1280,height=720,format=NV12,framerate=25/1
-    gchar *audio_dev;  // only for alsasrc device
+    SoupSession *session; // http client;
+    gchar *url;           // login url;
     gchar *user;
     gchar *password;
-    int port;
-    gchar *udphost; // for udpsink and udpsrc
-    int udpport;
+    gchar *rtsp_url; // rtsp url
+    int port;        // port for soup server
+};
+
+struct _ReceiverEntry {
+    SoupWebsocketConnection *connection;
+    GstElement *pipeline;
+    GstElement *webrtcbin;
+    GstElement *rtspsrcpipe;
 };
 
 static AppData gs_app = {
-    NULL, NULL, NULL, NULL,
-    "/dev/video0", "video/x-raw,width=800,height=600,format=YUY2,framerate=25/1", NULL, "test", "test1234", 57778, "127.0.0.1", 5000};
+    NULL, NULL, NULL, NULL, NULL,
+    "http://192.168.2.30", "admin", "admin", NULL, 57778};
 
 static void start_http(AppData *app);
 
 typedef struct _ReceiverEntry ReceiverEntry;
-
-GstPadProbeReturn payloader_caps_event_probe_cb(GstPad *pad,
-                                                GstPadProbeInfo *info, gpointer user_data);
 
 void on_offer_created_cb(GstPromise *promise, gpointer user_data);
 void on_negotiation_needed_cb(GstElement *webrtcbin, gpointer user_data);
@@ -94,38 +117,204 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
 
 static gchar *get_string_from_json_object(JsonObject *object);
 
-struct _ReceiverEntry {
-    SoupWebsocketConnection *connection;
-    GstElement *pipeline;
-    GstElement *webrtcbin;
-};
+static void
+got_headers(SoupMessage *msg, gpointer user_data) {
+    const char *location;
 
-#if 0
-static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
-    GstPad *src_pad, *sink_pad;
-    GstPadLinkReturn lret;
-#if GST_VERSION_MINOR >= 20
-    src_pad = gst_element_request_pad_simple(src, "src_%u");
-    sink_pad = gst_element_request_pad_simple(dst, "sink_%u");
-#else
-    src_pad = gst_element_get_request_pad(src, "src_%u");
-    sink_pad = gst_element_get_request_pad(dst, "sink_%u");
-    g_assert_nonnull(sink_pad);
-#endif
-    g_print("motion obtained request pad %s for source.\n", gst_pad_get_name(src_pad));
-    if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
-        gchar *sname = gst_pad_get_name(src_pad);
-        gchar *dname = gst_pad_get_name(sink_pad);
-        g_print("Src pad %s link to sink pad %s failed . return: %d\n", sname, dname, lret);
-        g_free(sname);
-        g_free(dname);
-        return -1;
-    }
-    gst_object_unref(sink_pad);
-    gst_object_unref(src_pad);
-    return lret;
+    g_print("    -> %d %s\n", msg->status_code,
+            msg->reason_phrase);
+    location = soup_message_headers_get_one(msg->response_headers,
+                                            "Location");
+    if (location)
+        g_print("       Location: %s\n", location);
 }
-#endif
+
+static void
+restarted(SoupMessage *msg, gpointer user_data) {
+    SoupURI *uri = soup_message_get_uri(msg);
+
+    g_print("    %s %s\n", msg->method, uri->path);
+}
+
+static void
+got_body(SoupMessage *msg, gpointer user_data) {
+    AppData *app = (AppData *)user_data;
+    SoupURI *uri = soup_message_get_uri(msg);
+    if (msg->request_body->length < 1024) {
+        GMatchInfo *matchInfo;
+        g_print("got body    %s %s, body:\n %s\n", msg->method, uri->path, msg->response_body->data);
+        GRegex *url_regex =
+            g_regex_new("rtsp://[^ ><$]+", G_REGEX_OPTIMIZE | G_REGEX_MULTILINE, 0, NULL);
+
+        g_regex_match(url_regex, msg->response_body->data, 0, &matchInfo);
+        if (g_match_info_matches(matchInfo)) {
+            app->rtsp_url = g_match_info_fetch(matchInfo, 0);
+            g_print("rtsp_url ---> : %s\n", app->rtsp_url);
+        }
+    }
+}
+
+static void login_camera(AppData *app) {
+    SoupMessage *msg;
+
+    gchar *formdata = g_strdup_printf(ZTE_V520_LOGIN_FORM, app->user, app->password);
+    msg = soup_message_new(SOUP_METHOD_POST, app->url);
+    soup_message_set_flags(msg, SOUP_MESSAGE_NO_REDIRECT);
+    soup_message_set_request(msg, "application/x-www-form-urlencoded",
+                             SOUP_MEMORY_COPY,
+                             formdata,
+                             strlen(formdata));
+
+    g_signal_connect(msg, "got_headers",
+                     G_CALLBACK(got_headers), NULL);
+    g_signal_connect(msg, "restarted",
+                     G_CALLBACK(restarted), NULL);
+
+    soup_session_send_message(app->session, msg);
+    g_object_unref(msg);
+    g_free(formdata);
+}
+
+static void get_rtsp_url(AppData *app) {
+    SoupMessage *msg;
+    gchar *get_api = g_strdup_printf(ZTE_V520_GET_RTSP_URL, g_get_real_time());
+
+    gchar *fullurl = g_strconcat(app->url, get_api, NULL);
+    g_print("fullurl: %s\n", fullurl);
+    msg = soup_message_new(SOUP_METHOD_GET, fullurl);
+    soup_message_set_flags(msg, SOUP_MESSAGE_NO_REDIRECT);
+
+    soup_message_headers_append(msg->request_headers, "Connection", "keep-alive");
+
+    // g_signal_connect(msg, "got_headers",
+    //                  G_CALLBACK(got_headers), NULL);
+    // g_signal_connect(msg, "restarted",
+    //                  G_CALLBACK(restarted), NULL);
+
+    g_signal_connect(msg, "got_body",
+                     G_CALLBACK(got_body), (gpointer)app);
+
+    soup_session_send_message(app->session, msg);
+    g_print("Request metod: %s, url: %s, status code: %d\n", SOUP_METHOD_GET, fullurl, msg->status_code);
+    g_object_unref(msg);
+    g_free(get_api);
+    g_free(fullurl);
+}
+
+static int get_navctrl_cmd(const gchar *cmd) {
+    if (g_strcmp0(cmd, "left") == 0) {
+        return NAVIGATE_LEFT;
+    }
+    if (g_strcmp0(cmd, "right") == 0) {
+        return NAVIGATE_RIGHT;
+    }
+    if (g_strcmp0(cmd, "up") == 0) {
+        return NAVIGATE_UP;
+    }
+    if (g_strcmp0(cmd, "down") == 0) {
+        return NAVIGATE_DOWN;
+    }
+    if (g_strcmp0(cmd, "origin") == 0) {
+        return NAVIGATE_ORIGIN;
+    }
+    return -1;
+}
+
+static void set_autotrack(AppData *app, int value) {
+    SoupMessage *msg;
+
+    gchar *formdata = g_strdup_printf(ZTE_V520_AUTOTRACK_FORM, value);
+    gchar *fullurl = g_strconcat(app->url, ZTE_V520_AUTOTRACK_URL, NULL);
+    msg = soup_message_new(SOUP_METHOD_POST, fullurl);
+
+    // soup_message_set_flags(msg, SOUP_MESSAGE_CONTENT_DECODED);
+    soup_message_set_request(msg, "application/x-www-form-urlencoded",
+                             SOUP_MEMORY_COPY,
+                             formdata,
+                             strlen(formdata));
+
+    soup_message_headers_append(msg->request_headers, "Connection", "keep-alive");
+    soup_session_send_message(app->session, msg);
+    g_print("Request metod: %s, url: %s, status code: %d\n", SOUP_METHOD_POST, fullurl, msg->status_code);
+
+    g_free(formdata);
+    g_object_unref(msg);
+    g_free(fullurl);
+}
+
+static void send_navctrl_cmd(AppData *app, const gchar *cmd) {
+    SoupMessage *msg;
+    int cmdidx = get_navctrl_cmd(cmd);
+    if (cmdidx < 0) {
+        g_print("Invalid navigate command\n");
+        return;
+    }
+
+    gchar *formdata = g_strdup_printf(ZTE_V520_NAVCTRL_FORM, cmdidx);
+    gchar *fullurl = g_strconcat(app->url, ZTE_V520_NAVCTRL_URL, NULL);
+    msg = soup_message_new(SOUP_METHOD_POST, fullurl);
+
+    // soup_message_set_flags(msg, SOUP_MESSAGE_CONTENT_DECODED);
+    soup_message_set_request(msg, "application/x-www-form-urlencoded",
+                             SOUP_MEMORY_COPY,
+                             formdata,
+                             strlen(formdata));
+
+    soup_message_headers_append(msg->request_headers, "Connection", "keep-alive");
+
+    soup_session_send_message(app->session, msg);
+    g_print("Request metod: %s, url: %s, status code: %d\n", SOUP_METHOD_POST, fullurl, msg->status_code);
+    if (cmdidx != NAVIGATE_ORIGIN) {
+        SoupMessage *stop;
+        g_free(formdata);
+        stop = soup_message_new(SOUP_METHOD_POST, fullurl);
+        formdata = g_strdup_printf(ZTE_V520_NAVCTRL_FORM, NAVIGATE_STOP);
+        soup_message_set_request(stop, "application/x-www-form-urlencoded",
+                                 SOUP_MEMORY_COPY,
+                                 formdata,
+                                 strlen(formdata));
+        soup_session_send_message(app->session, stop);
+        g_print("Request metod: %s, url: %s, status code: %d\n", SOUP_METHOD_POST, fullurl, msg->status_code);
+        g_object_unref(stop);
+    }
+
+    g_free(formdata);
+    g_object_unref(msg);
+    g_free(fullurl);
+}
+
+static GstElement *start_to_fetch_rtspsrc(AppData *app) {
+    GError *error = NULL;
+    gchar *cmdline;
+    GstElement *fetch_pipeline;
+    login_camera(app);
+    get_rtsp_url(app);
+    // profile-level-id=(string)640028
+    // profile-level-id=(string)42e01f
+    g_print("get rtsp_url is : %s\n", app->rtsp_url);
+    cmdline = g_strdup_printf("rtspsrc location=%s latency=0 drop-on-latency=1 name=rtp !"
+                              " queue ! application/x-rtp,media=(string)audio,payload=(int)98 ! "
+                              " rtpmp4gdepay ! aacparse ! avdec_aac ! queue ! audioconvert ! audioresample ! audio/x-raw,rate=48000 ! opusenc ! "
+                              " rtpopuspay pt=97 ! application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! udpsink %s "
+                              " rtp. ! queue  ! application/x-rtp,media=(string)video,payload=(int)96,clock-rate=(int)90000,encoding-name=(string)H264 ! udpsink %s   ",
+                              app->rtsp_url, UDPSINKA_ARGS, UDPSINKV_ARGS);
+
+    fetch_pipeline = gst_parse_launch(cmdline, &error);
+
+    if (error) {
+        gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
+        g_print("%s", message);
+        g_free(message);
+        g_error_free(error);
+    }
+    g_print("rtsp cmdline:\n\n %s\n", cmdline);
+    g_free(cmdline);
+    // app->pipeline = gst_pipeline_new(NULL);
+    if (gst_element_set_state(fetch_pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+        g_error("unable to set the pipeline to playing state %d. maybe the alsasrc device is wrong. \n", GST_STATE_CHANGE_FAILURE);
+    }
+    return fetch_pipeline;
+}
 
 void destroy_receiver_entry(gpointer receiver_entry_ptr) {
     ReceiverEntry *receiver_entry = (ReceiverEntry *)receiver_entry_ptr;
@@ -133,6 +322,12 @@ void destroy_receiver_entry(gpointer receiver_entry_ptr) {
     g_assert(receiver_entry != NULL);
     gst_element_set_state(GST_ELEMENT(receiver_entry->pipeline),
                           GST_STATE_NULL);
+
+    if (receiver_entry->rtspsrcpipe != NULL) {
+        gst_element_set_state(GST_ELEMENT(receiver_entry->rtspsrcpipe),
+                              GST_STATE_NULL);
+        gst_object_unref(GST_OBJECT(receiver_entry->rtspsrcpipe));
+    }
 
     gst_object_unref(GST_OBJECT(receiver_entry->webrtcbin));
     gst_object_unref(GST_OBJECT(receiver_entry->pipeline));
@@ -155,22 +350,25 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     g_signal_connect(G_OBJECT(connection), "message",
                      G_CALLBACK(soup_websocket_message_cb), (gpointer)receiver_entry);
 
+    login_camera(app);
+    get_rtsp_url(app);
+
     // gchar *turn_srv = NULL;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (intptr_t)(receiver_entry->connection));
-    gchar *video_src = g_strdup_printf("udpsrc port=6005 address=224.1.1.4  ! "
+    gchar *video_src = g_strdup_printf("udpsrc %s  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 !  %s. ",
-                                        webrtc_name);
+                                       UDPSRCV_ARGS, webrtc_name);
 
-    gchar *audio_src = g_strdup_printf("udpsrc port=6006 address=224.1.1.4  ! "
+    gchar *audio_src = g_strdup_printf("udpsrc %s  ! "
                                        " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                        " rtpopusdepay ! rtpopuspay ! %s.",
-                                       webrtc_name);
+                                       UDPSRCA_ARGS, webrtc_name);
     cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s", webrtc_name, STUN_SERVER, audio_src, video_src);
+
     g_print("webrtc cmdline: %s \n", cmdline);
     g_free(audio_src);
     g_free(video_src);
 
-    g_print("webrtc cmdline: %s\n", cmdline);
     receiver_entry->pipeline = gst_parse_launch(cmdline, NULL);
     gst_element_set_state(receiver_entry->pipeline, GST_STATE_READY);
     g_free(cmdline);
@@ -184,7 +382,6 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
                      G_CALLBACK(on_ice_candidate_cb), (gpointer)receiver_entry);
 
     gst_element_set_state(receiver_entry->pipeline, GST_STATE_PLAYING);
-
     return receiver_entry;
 }
 
@@ -310,6 +507,7 @@ void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection
         g_error("Received message without data field\n");
         goto cleanup;
     }
+
     data_json_object = json_object_get_object_member(root_json_object, "data");
 
     if (g_strcmp0(type_string, "sdp") == 0) {
@@ -338,7 +536,7 @@ void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection
         }
         sdp_string = json_object_get_string_member(data_json_object, "sdp");
 
-        gst_print("Received SDP:\n%s\n", sdp_string);
+        gst_print("Received %s type  SDP:\n%s\n", sdp_type_string, sdp_string);
 
         ret = gst_sdp_message_new(&sdp);
         g_assert_cmphex(ret, ==, GST_SDP_OK);
@@ -361,6 +559,13 @@ void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection
         gst_promise_interrupt(promise);
         gst_promise_unref(promise);
         gst_webrtc_session_description_free(answer);
+        if (receiver_entry->rtspsrcpipe != NULL) {
+            gst_element_set_state(GST_ELEMENT(receiver_entry->rtspsrcpipe),
+                                  GST_STATE_NULL);
+            gst_object_unref(GST_OBJECT(receiver_entry->rtspsrcpipe));
+        }
+
+        receiver_entry->rtspsrcpipe = start_to_fetch_rtspsrc(&gs_app);
     } else if (g_strcmp0(type_string, "ice") == 0) {
         guint mline_index;
         const gchar *candidate_string;
@@ -384,19 +589,20 @@ void soup_websocket_message_cb(G_GNUC_UNUSED SoupWebsocketConnection *connection
 
         g_signal_emit_by_name(receiver_entry->webrtcbin, "add-ice-candidate",
                               mline_index, candidate_string);
-    } else if (!g_strcmp0(type_string, "v4l2")) {
-        g_print("get v4l2 ctrls \n");
-        if (json_object_has_member(root_json_object, "data")) {
-            JsonObject *ctrl_object = json_object_get_object_member(root_json_object, "data");
-            gboolean isTrue = json_object_get_boolean_member(ctrl_object, "reset");
-            if (isTrue)
-                reset_user_ctrls(gs_app.video_dev);
-        } else if (json_object_has_member(root_json_object, "data")) {
-            JsonObject *ctrl_object = json_object_get_object_member(root_json_object, "data");
-            gint64 id = json_object_get_int_member(ctrl_object, "id");
-            gint64 value = json_object_get_int_member(ctrl_object, "value");
-            set_ctrl_value(gs_app.video_dev, id, value);
+    } else if (g_strcmp0(type_string, "ctrl") == 0) {
+        const gchar *ctrl_type;
+        if (!json_object_has_member(data_json_object, "type")) {
+            g_error("Received SDP message without type field\n");
+            goto cleanup;
         }
+        ctrl_type = json_object_get_string_member(data_json_object, "type");
+        if (g_strcmp0(ctrl_type, "autotrack") == 0) {
+            set_autotrack(&gs_app, json_object_get_int_member(data_json_object, "value"));
+        } else {
+            send_navctrl_cmd(&gs_app, json_object_get_string_member(data_json_object, "value"));
+        }
+        goto cleanup;
+
     } else
         goto unknown_message;
 
@@ -418,11 +624,6 @@ void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
     gst_print("Closed websocket connection %p\n", (gpointer)connection);
 }
 
-#define INDEX_HTML "index.html"
-#define MAIN_JS "main.js"
-#define BOOTSTRAP_JS "bootstrap.bundle.min.js"
-#define BOOTSTRAP_CSS "bootstrap.min.css"
-
 void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
                        SoupMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
                        G_GNUC_UNUSED SoupClientContext *client_context,
@@ -431,14 +632,12 @@ void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
         GMappedFile *mapping;
         SoupBuffer *buffer;
         g_print("to get path is: %s\n", path);
-        if (g_str_has_suffix(path, INDEX_HTML) || g_str_has_suffix(path, "/")) {
+        if (g_str_has_suffix(path, INDEX_HTML) || g_str_has_suffix(path, "/") || g_str_has_suffix(path, "index.html")) {
             mapping = g_mapped_file_new(INDEX_HTML, FALSE, NULL);
         } else if (g_str_has_suffix(path, BOOTSTRAP_JS)) {
             mapping = g_mapped_file_new(BOOTSTRAP_JS, FALSE, NULL);
         } else if (g_str_has_suffix(path, BOOTSTRAP_CSS)) {
             mapping = g_mapped_file_new(BOOTSTRAP_CSS, FALSE, NULL);
-        } else if (g_str_has_suffix(path, MAIN_JS)) {
-            mapping = g_mapped_file_new(MAIN_JS, FALSE, NULL);
         } else {
             soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
             return;
@@ -469,10 +668,8 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                      G_CALLBACK(soup_websocket_closed_cb), app);
 
     receiver_entry = create_receiver_entry(connection, app);
+    receiver_entry->rtspsrcpipe = start_to_fetch_rtspsrc(app);
     g_hash_table_insert(app->receiver_entry_table, connection, receiver_entry);
-    gchar *videoCtrls = get_device_json(app->video_dev);
-    soup_websocket_connection_send_text(receiver_entry->connection, videoCtrls);
-    g_free(videoCtrls);
 }
 
 #define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
@@ -616,64 +813,19 @@ void sigintHandler(int unused) {
     exit(0);
 }
 
-#include <stdio.h>
-static gchar *get_shellcmd_results(const gchar *shellcmd) {
-    FILE *fp;
-    gchar *val;
-    char path[256];
-
-    /* Open the command for reading. */
-    fp = popen(shellcmd, "r");
-    if (fp == NULL) {
-        printf("Failed to run command\n");
-        exit(1);
-    }
-
-    /* Read the output a line at a time - output it. */
-    while (fgets(path, sizeof(path), fp) != NULL) {
-        val = g_strdup(path);
-    }
-
-    /* close */
-    pclose(fp);
-    return val;
-}
-
-static gchar *get_basic_sysinfo() {
-    // g_file_get_contents("/etc/lsb-release", &contents, NULL, NULL);
-    gchar *cpumodel = get_shellcmd_results("cat /proc/cpuinfo | grep 'model name' | head -n1 | awk -F ':' '{print \"CPU:\"$2}'");
-    gchar *memsize = get_shellcmd_results("free -h | awk 'NR==2{print $1$2}'");
-    gchar *kerstr = get_shellcmd_results("uname -a");
-    gchar *line = g_strconcat(cpumodel, "\t", memsize, kerstr, NULL);
-
-    g_free(kerstr);
-    g_free(cpumodel);
-    g_free(memsize);
-    return line;
-}
-
 static GOptionEntry entries[] = {
-    {"video", 'v', 0, G_OPTION_ARG_STRING, &gs_app.video_dev,
-     "Video device location, Default: /dev/video0", "VIDEO"},
-    {"vcaps", 'c', 0, G_OPTION_ARG_STRING, &gs_app.video_caps,
-     "Video device caps, Default: video/x-raw,width=1280,height=720,format=YUY2,framerate=25/1", "VCAPS"},
-    {"audio", 'a', 0, G_OPTION_ARG_STRING, &gs_app.audio_dev,
-     "Audio device location, Default: hw:1", "AUDIO"},
+    {"url", 'c', 0, G_OPTION_ARG_STRING, &gs_app.url,
+     "rtsp url for login ", "URL"},
     {"user", 'u', 0, G_OPTION_ARG_STRING, &gs_app.user,
      "User name for http digest auth, Default: test", "USER"},
     {"password", 'p', 0, G_OPTION_ARG_STRING, &gs_app.password,
      "Password for http digest auth, Default: test1234", "PASSWORD"},
     {"port", 0, 0, G_OPTION_ARG_INT, &gs_app.port, "Port to listen on (default: 57778 )", "PORT"},
-    {"udphost", 0, 0, G_OPTION_ARG_STRING, &gs_app.udphost, "Address for udpsink (default : 224.1.1.5)", "ADDR"},
-    {"udpport", 0, 0, G_OPTION_ARG_INT, &gs_app.udpport, "Port for udpsink (default: 5000 )", "PORT"},
     {NULL}};
 
 int main(int argc, char *argv[]) {
     GOptionContext *context;
-    gchar *contents;
     GError *error = NULL;
-    gchar *strvcaps;
-    gchar *enc = NULL;
 
     context = g_option_context_new("- gstreamer webrtc camera");
     g_option_context_add_main_entries(context, entries, NULL);
@@ -684,92 +836,22 @@ int main(int argc, char *argv[]) {
         g_clear_error(&error);
         return -1;
     }
+
     g_option_context_free(context);
-
-    g_print("args, device: %s, user: %s, pwd: %s ,port %d\n", gs_app.video_dev, gs_app.user, gs_app.password, gs_app.port);
-
+    gs_app.session = soup_session_new();
     AppData *app = &gs_app;
+
     setlocale(LC_ALL, "");
-    signal(SIGINT, sigintHandler);
     gst_init(&argc, &argv);
     app->loop = g_main_loop_new(NULL, FALSE);
     g_assert(app->loop != NULL);
 
-    const gchar *clockstr = "clockoverlay time-format=\"%D %H:%M:%S\"";
-    contents = get_basic_sysinfo();
-    if (gst_element_factory_find("vaapih264enc"))
-        enc = g_strdup("vaapih264enc");
-    else if (gst_element_factory_find("v4l2h264enc"))
-        enc = g_strdup(" video/x-raw,format=I420 ! v4l2h264enc");
-    else
-        enc = g_strdup(" video/x-raw,format=I420 ! x264enc ! h264parse");
-
-    gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
-    GstCaps *vcaps = gst_caps_from_string(app->video_caps);
-    GstStructure *structure = gst_caps_get_structure(vcaps, 0);
-    g_print(" caps name is: %s\n", gst_structure_get_name(structure));
-
-    if (g_str_has_prefix(gst_structure_get_name(structure), "video")) {
-        strvcaps = g_strdup(app->video_caps);
-    } else {
-        gchar *jpegdec = NULL;
-        if (gst_element_factory_find("vaapijpegdec")) {
-            jpegdec = g_strdup("vaapijpegdec");
-            strvcaps = g_strdup_printf("%s ! %s ", app->video_caps, jpegdec);
-        } else {
-            if (gst_element_factory_find("v4l2jpegdec")) {
-                jpegdec = g_strdup("v4l2jpegdec");
-            } else {
-                jpegdec = g_strdup("jpegdec");
-            }
-            strvcaps = g_strdup_printf("%s ! jpegparse ! %s ", app->video_caps, jpegdec);
-        }
-
-        g_free(jpegdec);
-    }
-
-    gchar *cmdline = g_strdup_printf(
-        "v4l2src device=%s ! %s ! videoconvert ! %s ! %s ! %s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
-        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-        " queue leaky=1  ! udpsink port=%d host=%s multicast-iface=lo async=false sync=false ",
-        app->video_dev, strvcaps, clockstr, textoverlay, enc, app->udpport, app->udphost);
-    g_free(strvcaps);
-    g_free(enc);
-
-    if (app->audio_dev != NULL) {
-        gchar *tmp = g_strdup_printf("alsasrc device=%s ! audioconvert ! opusenc ! rtpopuspay ! "
-                                     " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                     " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=lo async=false sync=false  %s",
-                                     app->audio_dev, app->udpport + 1, app->udphost, cmdline);
-        g_free(cmdline);
-        cmdline = g_strdup(tmp);
-        g_free(tmp);
-    }
-
-    g_print("pipeline: %s\n", cmdline);
-    app->pipeline = gst_parse_launch(cmdline, &error);
-
-    if (error) {
-        gchar *message = g_strdup_printf("Unable to build pipeline: %s\n", error->message);
-        g_print("%s", message);
-        g_free(message);
-        g_error_free(error);
-    }
-
-    g_free(cmdline);
-    g_free(textoverlay);
-    g_free(contents);
-
-    if (gst_element_set_state(app->pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-        g_printerr("unable to set the pipeline to playing state %d. maybe the alsasrc device is wrong. \n", GST_STATE_CHANGE_FAILURE);
-        goto bail;
-    }
     start_http(app);
     g_main_loop_run(app->loop);
     g_object_unref(G_OBJECT(app->soup_server));
     g_hash_table_destroy(app->receiver_entry_table);
     g_main_loop_unref(app->loop);
-bail:
+
     gst_deinit();
 
     return 0;
