@@ -157,19 +157,27 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
 
     // gchar *turn_srv = NULL;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (intptr_t)(receiver_entry->connection));
-    gchar *video_src = g_strdup_printf("udpsrc port=6005 address=224.1.1.4  ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 !  %s. ",
-                                        webrtc_name);
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " rtph264depay ! rtph264pay config-interval=-1  aggregate-mode=1 ! %s. ",
+                                       app->udpport, app->udphost, webrtc_name);
+    if (app->audio_dev != NULL) {
+        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo ! "
+                                           " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
+                                           " rtpopusdepay ! rtpopuspay !  "
+                                           " queue leaky=1 ! %s.",
+                                           app->udpport + 1, app->udphost, webrtc_name);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, STUN_SERVER, audio_src, video_src);
+        g_print("webrtc cmdline: %s \n", cmdline);
+        g_free(audio_src);
+        g_free(video_src);
+    } else {
 
-    gchar *audio_src = g_strdup_printf("udpsrc port=6006 address=224.1.1.4  ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay ! rtpopuspay ! %s.",
-                                       webrtc_name);
-    cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s", webrtc_name, STUN_SERVER, audio_src, video_src);
-    g_print("webrtc cmdline: %s \n", cmdline);
-    g_free(audio_src);
-    g_free(video_src);
-
+        // turn_srv = g_strdup_printf("turn://%s:%s@%s", config_data.webrtc.turn.user, config_data.webrtc.turn.pwd, config_data.webrtc.turn.url);
+        // cmdline = g_strdup_printf("webrtcbin name=%s turn-server=%s %s %s ", webrtc_name, turn_srv, audio_src, video_src);
+        cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s", webrtc_name, STUN_SERVER, video_src);
+        // g_free(turn_srv);
+    }
     g_print("webrtc cmdline: %s\n", cmdline);
     receiver_entry->pipeline = gst_parse_launch(cmdline, NULL);
     gst_element_set_state(receiver_entry->pipeline, GST_STATE_READY);
