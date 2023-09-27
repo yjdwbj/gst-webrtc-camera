@@ -46,8 +46,8 @@
 
 #define UDPSRCA_ARGS "port=" AUDIO_PORT " address=" MUDP_ADDR
 #define UDPSRCV_ARGS "port=" VIDEO_PORT " address=" MUDP_ADDR
-#define UDPSINKA_ARGS "port=" AUDIO_PORT " host=" MUDP_ADDR " sync=false async=false"
-#define UDPSINKV_ARGS "port=" VIDEO_PORT " host=" MUDP_ADDR " sync=false async=false"
+#define UDPSINKA_ARGS "port=" AUDIO_PORT " host=" MUDP_ADDR
+#define UDPSINKV_ARGS "port=" VIDEO_PORT " host=" MUDP_ADDR
 
 #define INDEX_HTML "rtspsrc.html"
 #define BOOTSTRAP_JS "bootstrap.bundle.min.js"
@@ -169,7 +169,7 @@ static void login_camera(AppData *app) {
                      G_CALLBACK(got_headers), NULL);
     g_signal_connect(msg, "restarted",
                      G_CALLBACK(restarted), NULL);
-
+    g_print("Request metod: %s, url: %s, form data: %s,status code: %d\n", SOUP_METHOD_GET, app->url, formdata, msg->status_code);
     soup_session_send_message(app->session, msg);
     g_object_unref(msg);
     g_free(formdata);
@@ -293,11 +293,11 @@ static GstElement *start_to_fetch_rtspsrc(AppData *app) {
     // profile-level-id=(string)42e01f
     g_print("get rtsp_url is : %s\n", app->rtsp_url);
     cmdline = g_strdup_printf("rtspsrc location=%s latency=0 drop-on-latency=1 name=rtp !"
-                              " queue ! application/x-rtp,media=(string)audio,payload=(int)98 ! "
-                              " rtpmp4gdepay ! aacparse ! avdec_aac ! queue ! audioconvert ! audioresample ! audio/x-raw,rate=48000 ! opusenc ! "
-                              " rtpopuspay pt=97 ! application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! udpsink %s "
-                              " rtp. ! queue  ! application/x-rtp,media=(string)video,payload=(int)96,clock-rate=(int)90000,encoding-name=(string)H264 ! udpsink %s   ",
-                              app->rtsp_url, UDPSINKA_ARGS, UDPSINKV_ARGS);
+                              " queue  ! application/x-rtp,media=(string)video,payload=(int)96,clock-rate=(int)90000,encoding-name=(string)H264 ! udpsink %s   "
+                              " rtp. ! queue max-size-buffers=1 leaky=downstream ! application/x-rtp,media=(string)audio,payload=(int)98 ! "
+                              " rtpmp4gdepay ! aacparse  ! avdec_aac  ! audioconvert ! audioresample ! audio/x-raw,rate=48000 ! queue !  "
+                              " rtpL16pay pt=96 !  udpsink %s ",
+                              app->rtsp_url, UDPSINKV_ARGS, UDPSINKA_ARGS);
 
     fetch_pipeline = gst_parse_launch(cmdline, &error);
 
@@ -338,11 +338,35 @@ void destroy_receiver_entry(gpointer receiver_entry_ptr) {
     g_free(receiver_entry);
 }
 
+#if defined(SET_PRIORITY)
+static GstWebRTCPriorityType
+_priority_from_string(const gchar *s) {
+    GEnumClass *klass =
+        (GEnumClass *)g_type_class_ref(GST_TYPE_WEBRTC_PRIORITY_TYPE);
+    GEnumValue *en;
+
+    g_return_val_if_fail(klass, 0);
+    if (!(en = g_enum_get_value_by_name(klass, s)))
+        en = g_enum_get_value_by_nick(klass, s);
+    g_type_class_unref(klass);
+
+    if (en)
+        return en->value;
+
+    return 0;
+}
+#endif
+
 ReceiverEntry *
 create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     ReceiverEntry *receiver_entry;
     gchar *cmdline = NULL;
-
+#if defined(SET_PRIORITY)
+    GstWebRTCRTPTransceiver *trans;
+    GArray *transceivers;
+    gchar *video_priority = "high";
+    gchar *audio_priority = "medium";
+#endif
     receiver_entry = g_new0(ReceiverEntry, 1);
     receiver_entry->connection = connection;
 
@@ -356,12 +380,15 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     // gchar *turn_srv = NULL;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (intptr_t)(receiver_entry->connection));
     gchar *video_src = g_strdup_printf("udpsrc %s  ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 !  %s. ",
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " %s. ",
                                        UDPSRCV_ARGS, webrtc_name);
 
     gchar *audio_src = g_strdup_printf("udpsrc %s  ! "
-                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                       " rtpopusdepay ! rtpopuspay ! %s.",
+                                       " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)L16 ! rtpL16depay !  "
+                                       " audioconvert ! audio/x-raw,rate=48000,channels=2 ! queue  ! opusenc bitrate=48000 ! opusparse ! rtpopuspay pt=96 ! "
+                                       " application/x-rtp,encoding-name=OPUS! "
+                                       "%s.",
                                        UDPSRCA_ARGS, webrtc_name);
     cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s", webrtc_name, STUN_SERVER, audio_src, video_src);
 
@@ -375,6 +402,43 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
 
     receiver_entry->webrtcbin = gst_bin_get_by_name(GST_BIN(receiver_entry->pipeline), webrtc_name);
     g_free(webrtc_name);
+
+#if defined(SET_PRIORITY)
+    g_signal_emit_by_name(receiver_entry->webrtcbin, "get-transceivers",
+                          &transceivers);
+    g_assert(transceivers != NULL && transceivers->len > 1);
+    trans = g_array_index(transceivers, GstWebRTCRTPTransceiver *, 1);
+    g_object_set(trans, "direction",
+                 GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY, NULL);
+    if (video_priority) {
+        GstWebRTCPriorityType priority;
+
+        priority = _priority_from_string(video_priority);
+        if (priority) {
+            GstWebRTCRTPSender *sender;
+
+            g_object_get(trans, "sender", &sender, NULL);
+            gst_webrtc_rtp_sender_set_priority(sender, priority);
+            g_object_unref(sender);
+        }
+    }
+    trans = g_array_index(transceivers, GstWebRTCRTPTransceiver *, 0);
+    g_object_set(trans, "direction",
+                 GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY, NULL);
+    if (audio_priority) {
+        GstWebRTCPriorityType priority;
+
+        priority = _priority_from_string(audio_priority);
+        if (priority) {
+            GstWebRTCRTPSender *sender;
+
+            g_object_get(trans, "sender", &sender, NULL);
+            gst_webrtc_rtp_sender_set_priority(sender, priority);
+            g_object_unref(sender);
+        }
+    }
+    g_array_unref(transceivers);
+#endif
     g_signal_connect(receiver_entry->webrtcbin, "on-negotiation-needed",
                      G_CALLBACK(on_negotiation_needed_cb), (gpointer)receiver_entry);
 
@@ -405,6 +469,8 @@ void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
                           offer, local_desc_promise);
     gst_promise_interrupt(local_desc_promise);
     gst_promise_unref(local_desc_promise);
+    gst_sdp_media_add_attribute((GstSDPMedia *)&g_array_index(offer->sdp->medias, GstSDPMedia, 0), "fmtp",
+                                "96 sprop-stereo=1;sprop-maxcapturerate=48000");
 
     sdp_string = gst_sdp_message_as_text(offer->sdp);
     // gst_print("Negotiation offer created:\n%s\n", sdp_string);
@@ -764,6 +830,7 @@ static void start_http(AppData *app) {
         soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server",
                         SOUP_SERVER_TLS_CERTIFICATE, cert,
                         NULL);
+
     g_object_unref(cert);
     soup_server_add_handler(app->soup_server, "/", soup_http_handler, NULL, NULL);
     soup_server_add_websocket_handler(app->soup_server, "/ws", NULL, NULL,

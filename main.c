@@ -369,6 +369,7 @@ int main(int argc, char *argv[]) {
         "nvvidconv",
         "nvvideo4linux2",
         "nvtee",
+        "nvjpeg",
         "nvvideocuda",
         "nvegltransform",
         "nvcompositor",

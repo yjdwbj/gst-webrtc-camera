@@ -373,8 +373,8 @@
         webrtcPeerConnection = new RTCPeerConnection(Object.assign(iceServers, { encodedInsertableStreams: true }));
         webrtcPeerConnection.ontrack = onAddRemoteStream;
         webrtcPeerConnection.onicecandidate = onIceCandidate;
-        webrtcPeerConnection.addTransceiver('video', { 'direction': 'sendrecv' });
-        webrtcPeerConnection.addTransceiver('audio', { 'direction': 'sendrecv' });
+        webrtcPeerConnection.addTransceiver('video', { 'direction': 'recvonly' });
+        webrtcPeerConnection.addTransceiver('audio', { 'direction': 'recvonly' });
         webrtcPeerConnection.oniceconnectionstatechange = e => {
             console.log("receive stream state change: " + webrtcPeerConnection.iceConnectionState);
             if (webrtcPeerConnection.iceconnectionState === 'failed') {
@@ -752,7 +752,7 @@
         var wsPath = (path != undefined) ? path : "ws";
         if (wsPort)
             wsPort = ":" + wsPort;
-        var wsUrl = "wss://" + wsHost + wsPort + "/" + wsPath;
+        var wsUrl = (l.protocol == "https:" ? "wss://" : "ws://") + wsHost + wsPort + "/" + wsPath;
 
         createWebrtcRecv();
         return new Promise((resolve, reject) => {
