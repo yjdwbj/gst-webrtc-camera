@@ -44,6 +44,9 @@ static volatile gboolean reading_inotify = TRUE;
 static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t cmd_mtx = PTHREAD_MUTEX_INITIALIZER;
 
+static GThreadPool *play_thread_pool = NULL;
+static GMutex _play_pool_lock;
+
 typedef struct {
     GstElement *video_src;
     GstElement *audio_src;
@@ -1754,12 +1757,6 @@ play_voice(gpointer user_data) {
     gst_element_set_state(playline, GST_STATE_NULL);
     gst_object_unref(playline);
     gst_object_unref(bus);
-
-    remove(item_entry->dcfile.filename);
-    if (item_entry->dcfile.filename != NULL) {
-        g_free(item_entry->dcfile.filename);
-        item_entry->dcfile.filename = NULL;
-    }
 }
 
 static void
@@ -1774,7 +1771,20 @@ data_channel_on_message_data(GObject *channel, GBytes *bytes, gpointer user_data
             item_entry->dcfile.pos += size;
             if (item_entry->dcfile.pos == item_entry->dcfile.fsize) {
                 close(item_entry->dcfile.fd);
-                g_thread_new("play_voice", (GThreadFunc)play_voice, user_data);
+
+                // g_thread_new("play_voice", (GThreadFunc)play_voice, user_data);
+                g_mutex_lock(&_play_pool_lock);
+                if (play_thread_pool == NULL)
+                {
+                    GError *err = NULL;
+                    play_thread_pool = g_thread_pool_new((GFunc)play_voice, NULL, -1, FALSE, &err);
+                    if (err != NULL) {
+                        g_critical("could not alloc threadpool %s", err->message);
+                        g_clear_error(&err);
+                    }
+                }
+                g_thread_pool_push((GThreadPool *)play_thread_pool, user_data, NULL);
+                g_mutex_unlock(&_play_pool_lock);
             }
         }
     }
@@ -1810,6 +1820,13 @@ data_channel_on_message_string(GObject *dc, gchar *str, gpointer user_data) {
     if (!g_strcmp0(type_string, "sendfile")) {
         JsonObject *file_object = json_object_get_object_member(root_json_object, "file");
         // const gchar *file_type = json_object_get_string_member(file_object, "type");
+
+        // remove old filename.
+        if (item_entry->dcfile.filename != NULL) {
+            remove(item_entry->dcfile.filename);
+            g_free(item_entry->dcfile.filename);
+            item_entry->dcfile.filename = NULL;
+        }
 
         item_entry->dcfile.filename = g_strdup_printf("/tmp/%s", json_object_get_string_member(file_object, "name"));
         item_entry->dcfile.fsize = json_object_get_int_member(file_object, "size");
