@@ -611,13 +611,16 @@ static GstElement *get_audio_device() {
 
     if (gst_element_factory_find("pulsesrc")) {
         source = gst_element_factory_make("pulsesrc", NULL);
+#if 0
         gchar *path = get_shellcmd_results("pactl list sources short | grep Ncs | awk '{print $2}'");
         if (path == NULL) {
             path = get_shellcmd_results("pactl list sources short | grep input | head -n1 | awk '{print $2}'");
         }
         g_object_set(G_OBJECT(source), "device", path, NULL);
+
         if (path != NULL)
             free(path);
+#endif
         return source;
     }
 
@@ -627,22 +630,22 @@ static GstElement *get_audio_device() {
 }
 
 static GstElement *get_audio_src() {
-    GstElement *teesrc, *source, *srcvconvert, *enc, *postconv, *audioecho;
+    GstElement *teesrc, *source, *amp, *enc, *postconv, *filter;
     teesrc = gst_element_factory_make("tee", NULL);
     source = get_audio_device();
-    srcvconvert = gst_element_factory_make("audioconvert", NULL);
+    amp = gst_element_factory_make("ladspa-amp-so-amp-stereo", NULL);
     postconv = gst_element_factory_make("audioconvert", NULL);
     enc = gst_element_factory_make("opusenc", NULL);
-    audioecho = gst_element_factory_make("audioecho", NULL);
+    filter = gst_element_factory_make("ladspa-sine-so-sine-faaa", NULL);
 
-    if (!teesrc || !source || !srcvconvert || !postconv || !enc || !audioecho) {
+    if (!teesrc || !source || !amp || !postconv || !enc || !filter) {
         g_printerr("audio source all elements could be created.\n");
         return NULL;
     }
 
-    g_object_set(G_OBJECT(audioecho), "delay", 50000000, "intensity", 0.6, "feedback", 0.4, NULL);
-    gst_bin_add_many(GST_BIN(pipeline), source, teesrc, srcvconvert, enc, postconv, audioecho, NULL);
-    if (!gst_element_link_many(source, srcvconvert, audioecho, postconv, enc, teesrc, NULL)) {
+    // g_object_set(G_OBJECT(audioecho), "delay", 50000000, "intensity", 0.6, "feedback", 0.4, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), source, teesrc, amp, enc, postconv, filter, NULL);
+    if (!gst_element_link_many(source, amp, filter, postconv, enc, teesrc, NULL)) {
         g_error("Failed to link elements audio src.\n");
         return NULL;
     }
