@@ -23,10 +23,18 @@ You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library,
 
 ## RiotBoard(armv7l)
 
-* In RiotBoard (imx6 armv7l), I tested it can run v4l2src and v4l2jpegdec together.
+* In RiotBoard (imx6 armv7l), I tested it can run v4l2src and v4l2jpegdec together. You can download [Pre-built RiotBoard uSD Image](https://github.com/yjdwbj/imx6-riotboard) to testing this project.
+
+## Picture Gallery
+
+![mainview-control.png](images/mainview-control.png)
+![mainview-detail.png](images/mainview-detail.png)
+![hls-view.png](images/hls-view.png)
+![webrtc-only-armv7l.png](images/webrtc-only-armv7l.png)
+![zte-v520.png](images/zte-v520.png)
+
 
 ## pipeline workflow
-
 
   ![readme.svg](readme.svg)
 ---
