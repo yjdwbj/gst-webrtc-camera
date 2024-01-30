@@ -493,8 +493,8 @@ static void send_iceservers(SoupWebsocketConnection *connection) {
 }
 
 static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
-                                   SoupWebsocketConnection *connection, G_GNUC_UNUSED const char *path,
-                                   G_GNUC_UNUSED SoupClientContext *client_context, gpointer user_data) {
+                                   SoupServerMessage *msg, G_GNUC_UNUSED const char *path,
+                                   SoupWebsocketConnection *connection, gpointer user_data) {
     WebrtcItem *webrtc_entry;
 
     CustomSoupData *data = (CustomSoupData *)user_data;
@@ -506,7 +506,7 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                      G_CALLBACK(soup_websocket_closed_cb), (gpointer)webrtc_connected_table);
     webrtc_entry = g_new0(WebrtcItem, 1);
     webrtc_entry->connection = connection;
-    webrtc_entry->client = client_context;
+    // webrtc_entry->client = client_context;
     webrtc_entry->send_channel = NULL;
     webrtc_entry->receive_channel = NULL;
     webrtc_entry->hash_id = (intptr_t)(webrtc_entry->connection);
@@ -561,10 +561,10 @@ static void destroy_webrtc_table(gpointer entry_ptr) {
 
 #if 0
 static void
-got_headers_callback(SoupMessage *msg, gpointer data) {
+got_headers_callback(SoupServerMessage *msg, gpointer data) {
     const char *header;
     GHashTable *webrtc_connected_table = (GHashTable *)data;
-    header = soup_message_headers_get_one(msg->request_headers,
+    header = soup_message_headers_get_one(soup_server_message_get_request_headers(msg),
                                           "Authorization");
 
     if (header) {
@@ -577,7 +577,7 @@ got_headers_callback(SoupMessage *msg, gpointer data) {
 }
 
 static void
-wrote_headers_callback(SoupMessage *msg, gpointer data) {
+wrote_headers_callback(SoupServerMessage *msg, gpointer data) {
     const char *header;
 
     header = soup_message_headers_get_list(msg->response_headers,
@@ -645,16 +645,6 @@ gst_g_string_replace(GString *string,
 }
 #endif /* GLIB_CHECK_VERSION */
 
-static SoupBuffer *add_user_to_html(SoupBuffer *oldbuf, gchar const *meta) {
-    SoupBuffer *buffer = NULL;
-    GString *html = g_string_new(oldbuf->data);
-    soup_buffer_free(oldbuf);
-    g_string_replace(html, "{{tag}}", meta, 0);
-    buffer = soup_buffer_new(SOUP_MEMORY_COPY, html->str, html->len);
-    g_string_free(html, FALSE);
-    return buffer;
-}
-
 static gchar *get_auth_value_by_key(const gchar *auth, const gchar *key) {
     char **pairs, *eq, *name, *value, *realm = NULL;
     int i;
@@ -682,47 +672,45 @@ static gchar *get_auth_value_by_key(const gchar *auth, const gchar *key) {
 
 #include <sys/stat.h>
 static void
-do_get(SoupServer *server, SoupMessage *msg, const char *path) {
+do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
     struct stat st;
 
     if (stat(path, &st) == -1) {
         if (errno == EPERM)
-            soup_message_set_status(msg, SOUP_STATUS_FORBIDDEN);
+            soup_server_message_set_status(msg, SOUP_STATUS_FORBIDDEN,NULL);
         else if (errno == ENOENT)
-            soup_message_set_status(msg, SOUP_STATUS_NOT_FOUND);
+            soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
         else
-            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
         return;
     }
 
-    if (msg->method == SOUP_METHOD_GET) {
+    if (soup_server_message_get_method(msg) == SOUP_METHOD_GET) {
         GMappedFile *mapping;
-        SoupBuffer *buffer;
-
+        GBytes *buffer;
         mapping = g_mapped_file_new(path, FALSE, NULL);
         if (!mapping) {
-            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
             return;
         }
 
-        buffer = soup_buffer_new_with_owner(g_mapped_file_get_contents(mapping),
+        buffer = g_bytes_new_with_free_func(g_mapped_file_get_contents(mapping),
                                             g_mapped_file_get_length(mapping),
-                                            mapping, (GDestroyNotify)g_mapped_file_unref);
+                                            (GDestroyNotify)g_mapped_file_unref, mapping);
         if (g_str_has_suffix(path, ".html")) {
-            const gchar *auth = soup_message_headers_get_one(msg->request_headers, "Authorization");
+            const gchar *auth = soup_message_headers_get_one(soup_server_message_get_request_headers(msg), "Authorization");
             if (auth != NULL) {
-                if (g_strcmp0(soup_message_headers_get_one(msg->request_headers, "Active"), "off") == 0) {
-                    soup_message_set_status(msg, SOUP_STATUS_FORBIDDEN);
-                    gchar *txt = "This account is inactive.";
-                    soup_message_set_response(msg, "text/plain",
-                                              SOUP_MEMORY_STATIC, txt, strlen(txt));
-                    soup_buffer_free(buffer);
+                if (g_strcmp0(soup_message_headers_get_one(soup_server_message_get_request_headers(msg), "Active"), "off") == 0) {
+                    soup_server_message_set_status(msg, SOUP_STATUS_FORBIDDEN, NULL);
+                    static gchar *txt = "This account is inactive.";
+                    soup_server_message_set_response(msg, "text/plain",
+                                                     SOUP_MEMORY_STATIC, txt, strlen(txt));
                     return;
                 }
                 const gchar *xdg_stype = g_getenv("XDG_SESSION_TYPE");
                 gchar *username = get_auth_value_by_key(auth, (const gchar *)"username");
-                const gchar *uid = soup_message_headers_get_one(msg->request_headers, "Uid");
-                const gchar *role = soup_message_headers_get_one(msg->request_headers, "Role");
+                const gchar *uid = soup_message_headers_get_one(soup_server_message_get_request_headers(msg), "Uid");
+                const gchar *role = soup_message_headers_get_one(soup_server_message_get_request_headers(msg), "Role");
                 gchar *meta = g_strdup_printf("<meta name=\"user\" content=\"%s\">\n"
                                               "<meta name=\"uid\" content=\"%s\">\n"
                                               "<meta name=\"role\" content=\"%s\">\n"
@@ -732,13 +720,21 @@ do_get(SoupServer *server, SoupMessage *msg, const char *path) {
                                               ++role,
                                               xdg_stype);
                 // g_print("auth:  %s, username: %s\n", auth, username);
-                buffer = add_user_to_html(buffer, meta);
+                // body = add_user_to_html(body, meta);
+
+                GString *html = g_string_new(g_bytes_get_data(buffer,NULL));
+                // soup_message_body_unref(oldbuf);
+                g_string_replace(html, "{{tag}}", meta, 0);
+                GBytes *newhtml = g_string_free_to_bytes(html);
+                soup_message_body_append_bytes(soup_server_message_get_response_body(msg), newhtml);
+                g_bytes_unref(newhtml);
                 g_free(username);
                 g_free(meta);
             }
+        } else {
+            soup_message_body_append_bytes(soup_server_message_get_response_body(msg), buffer);
+            g_bytes_unref(buffer);
         }
-        soup_message_body_append_buffer(msg->response_body, buffer);
-        soup_buffer_free(buffer);
     } else /* msg->method == SOUP_METHOD_HEAD */ {
         char *length;
 
@@ -747,17 +743,22 @@ do_get(SoupServer *server, SoupMessage *msg, const char *path) {
          * But we'll optimize and avoid the extra I/O.
          */
         length = g_strdup_printf("%lu", (gulong)st.st_size);
-        soup_message_headers_append(msg->response_headers,
+
+        // follow code for libsoup-2.4
+        // soup_message_headers_append(msg->response_headers,
+        //                             "Content-Length", length);
+
+        // follow code for libsoup-3.-
+        soup_message_headers_append(soup_server_message_get_response_headers(msg),
                                     "Content-Length", length);
         g_free(length);
     }
 
-    soup_message_set_status(msg, SOUP_STATUS_OK);
+    soup_server_message_set_status(msg, SOUP_STATUS_OK, NULL);
 }
 
 static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
-                              SoupMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
-                              G_GNUC_UNUSED SoupClientContext *client_context,
+                              SoupServerMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
                               G_GNUC_UNUSED gpointer user_data) {
     char *file_path;
     CustomSoupData *data = (CustomSoupData *)user_data;
@@ -767,7 +768,7 @@ static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
 
     g_print("%s %s HTTP/1.%d\n", msg->method, path,
             soup_message_get_http_version(msg));
-    soup_message_headers_iter_init(&iter, msg->request_headers);
+    soup_message_headers_iter_init(&iter, soup_server_message_get_request_headers(msg));
     while (soup_message_headers_iter_next(&iter, &name, &value))
         g_print("%s: %s\n", name, value);
     if (msg->request_body->length)
@@ -776,25 +777,26 @@ static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
 
     GHashTable *webrtc_connected_table = data->webrtc_connected_table;
     if (g_hash_table_size(webrtc_connected_table) > client_limit) {
-        soup_message_set_status(msg, SOUP_STATUS_INSUFFICIENT_STORAGE);
+        soup_server_message_set_status(msg, SOUP_STATUS_INSUFFICIENT_STORAGE, NULL);
         gchar *txt = "The maximum number of connections has been reached.";
-        soup_message_set_response(msg, "text/plain",
+        soup_server_message_set_response(msg, "text/plain",
                                   SOUP_MEMORY_STATIC, txt, strlen(txt));
         return;
     }
+    const char *method = soup_server_message_get_method(msg);
 
-    if (msg->method == SOUP_METHOD_GET || msg->method == SOUP_METHOD_POST || msg->method == SOUP_METHOD_HEAD) {
+    if (method == SOUP_METHOD_GET || method == SOUP_METHOD_POST || method == SOUP_METHOD_HEAD) {
         if (g_strcmp0(path, "/") == 0) {
-            soup_message_set_redirect(msg, SOUP_STATUS_MOVED_PERMANENTLY,
-                                      "/webroot/index.html");
+            soup_server_message_set_redirect(msg, SOUP_STATUS_MOVED_PERMANENTLY,
+                                             "/webroot/index.html");
             return;
         }
         file_path = g_strdup_printf(".%s", path);
         do_get(soup_server, msg, file_path);
     } else {
-        soup_message_set_status(msg, SOUP_STATUS_NOT_IMPLEMENTED);
+        soup_server_message_set_status(msg, SOUP_STATUS_NOT_IMPLEMENTED,NULL);
         gchar *txt = "what you want?";
-        soup_message_set_response(msg, "text/plain",
+        soup_server_message_set_response(msg, "text/plain",
                                   SOUP_MEMORY_STATIC, txt, strlen(txt));
     }
 
@@ -805,7 +807,7 @@ extern GstConfigData config_data;
 
 static char *
 digest_auth_callback(SoupAuthDomain *auth_domain,
-                     SoupMessage *msg,
+                     SoupServerMessage *msg,
                      const char *username,
                      gpointer data) {
     JsonParser *parser;
@@ -815,7 +817,7 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
     gchar *ret;
     const gchar *user;
 
-    const gchar *auth = soup_message_headers_get_one(msg->request_headers, "authorization");
+    const gchar *auth = soup_message_headers_get_one(soup_server_message_get_request_headers(msg), "authorization");
     if (auth == NULL)
         return NULL;
     // g_print("auth:  %s\n", auth);
@@ -823,14 +825,14 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
     if (g_str_has_suffix(uri, ".html")) {
         // add http access to database http_log table.
         gchar *dname = get_auth_value_by_key(auth, "username");
-        const gchar *useragent = soup_message_headers_get_one(msg->request_headers, "User-Agent");
+        const gchar *useragent = soup_message_headers_get_one(soup_server_message_get_request_headers(msg), "User-Agent");
         // Cloudflare proxy and nginx.
-        const gchar *ipaddr = soup_message_headers_get_one(msg->request_headers, "X-Forwarded-For");
+        const gchar *ipaddr = soup_message_headers_get_one(soup_server_message_get_request_headers(msg), "X-Forwarded-For");
 
         gchar *sql = g_strdup_printf("INSERT INTO http_log(host,method,path,username,useragent,ipaddr)"
                                      "VALUES('%s','%s','%s','%s','%s','%s');",
-                                     soup_message_headers_get_one(msg->request_headers, "Host"),
-                                     msg->method,
+                                     soup_message_headers_get_one(soup_server_message_get_request_headers(msg), "Host"),
+                                     soup_server_message_get_method(msg),
                                      uri, dname, useragent, ipaddr == NULL ? "" : ipaddr);
         g_free(dname);
         g_free(uri);
@@ -871,13 +873,13 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
         return NULL;
     ret = g_strdup(json_object_get_string_member(root_obj, "pwd"));
     gchar *uid = g_strdup_printf("% " G_GINT64_FORMAT, json_object_get_int_member(root_obj, "uid"));
-    soup_message_headers_append(msg->request_headers, "Uid", uid);
+    soup_message_headers_append(soup_server_message_get_request_headers(msg), "Uid", uid);
     g_free(uid);
 
     uid = g_strdup_printf("% " G_GINT64_FORMAT, json_object_get_int_member(root_obj, "role"));
-    soup_message_headers_append(msg->request_headers, "Role", uid);
+    soup_message_headers_append(soup_server_message_get_request_headers(msg), "Role", uid);
 
-    soup_message_headers_append(msg->request_headers, "Active", json_object_get_int_member(root_obj, "active") ? "on" : "off");
+    soup_message_headers_append(soup_server_message_get_request_headers(msg), "Active", json_object_get_int_member(root_obj, "active") ? "on" : "off");
     g_free(uid);
     // ret = soup_auth_domain_digest_encode_password(username,
     //                                               realm,
@@ -972,8 +974,8 @@ void start_http(webrtc_callback fn, int port, int clients) {
     data->fn = fn;
     data->webrtc_connected_table = webrtc_connected_table;
     soup_server =
-        soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server",
-                        SOUP_SERVER_TLS_CERTIFICATE, cert,
+        soup_server_new("server-header", "webrtc-soup-server",
+                        "tls-certificate", cert,
                         NULL);
     g_object_unref(cert);
     // g_signal_connect(soup_server, "request_started",
@@ -984,7 +986,7 @@ void start_http(webrtc_callback fn, int port, int clients) {
 
     auth_domain = soup_auth_domain_digest_new(
         "realm", HTTP_AUTH_DOMAIN_REALM,
-        SOUP_AUTH_DOMAIN_DIGEST_AUTH_CALLBACK,
+        "auth-callback",
         digest_auth_callback,
         NULL);
     // soup_auth_domain_add_path(auth_domain, "/Digest");

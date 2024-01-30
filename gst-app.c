@@ -418,8 +418,27 @@ static GstElement *get_hardware_h265_encoder() {
     return encoder;
 }
 
+#if 0   // test cuda load
+#include <cuda.h>
+static int child_proc(void) {
+    CUdevice device;
+    CUresult rc;
+
+    rc = cuInit(0);
+    if (rc != CUDA_SUCCESS)
+        g_print("pid=%u failed on cuInit: %ld \n", getpid(), (long)rc);
+
+    rc = cuDeviceGet(&device, 0);
+    if (rc != CUDA_SUCCESS)
+        g_print("cuDeviceGet failed: %ld \n", (long)rc);
+
+    return 0;
+}
+#endif
+
 static GstElement *get_hardware_h264_encoder() {
     GstElement *encoder;
+    // child_proc();
     guint bitrate = get_exact_bitrate();
     // https://www.intel.com/content/www/us/en/developer/articles/technical/gstreamer-vaapi-media-sdk-command-line-examples.html
     if (gst_element_factory_find("vah264lpenc")) {
@@ -431,6 +450,12 @@ static GstElement *get_hardware_h264_encoder() {
         // VA-API H264 encoder
         encoder = gst_element_factory_make("vaapih264enc", NULL);
         g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, NULL);
+    } else if (gst_element_factory_find("nvh264enc")) {
+        // NVENC H.264 Video Encoder
+        encoder = gst_element_factory_make("nvh264enc", NULL);
+    } else if (gst_element_factory_find("nvcudah264enc")) {
+        // NVENC H.264 Video Encoder CUDA Mode
+        encoder = gst_element_factory_make("nvcudah264enc", NULL);
     } else if (gst_element_factory_find("nvv4l2h264enc")) {
         // https://docs.nvidia.com/jetson/archives/r34.1/DeveloperGuide/text/SD/Multimedia/AcceleratedGstreamer.html#supported-h-264-h-265-vp9-av1-encoder-features-with-gstreamer-1-0
         gchar *drvname = get_video_driver_name(config_data.v4l2src_data.device);
@@ -451,6 +476,7 @@ static GstElement *get_hardware_h264_encoder() {
         // g_object_set(G_OBJECT(encoder), "key-int-max", 2, NULL);
         g_object_set(G_OBJECT(encoder), "bitrate", bitrate / 1000, "speed-preset", 1, "tune", 4, "key-int-max", 30, NULL);
     } else {
+        g_printerr("Failed to create h264 encoder\n");
         return NULL;
     }
 
@@ -677,6 +703,11 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
     // g_print("class name:%s\n", klassname);
 #if GST_VERSION_MINOR >= 20
     src_pad = gst_element_request_pad_simple(src, "src_%u");
+
+    if(src_pad == NULL)
+    {
+      src_pad = gst_element_get_static_pad(src, "src");
+    }
     sink_pad = g_str_has_suffix(klassname, "WebRTC") ? gst_element_request_pad_simple(dst, "sink_%u") : gst_element_get_static_pad(dst, "sink");
 #else
     src_pad = gst_element_get_request_pad(src, "src_%u");
@@ -3044,6 +3075,10 @@ GThread *start_inotify_thread(void) {
     tid = g_thread_new("_inotify_thread", _inotify_thread, g_strdup(abpath));
 
     return tid;
+}
+
+void start_daily_monitor_record() {
+
 }
 
 GstElement *create_instance() {

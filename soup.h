@@ -70,7 +70,7 @@ struct _DcFile {
 /* Structure to contain all our information, so we can pass it to callbacks */
 struct _WebrtcItem {
     SoupWebsocketConnection *connection;
-    SoupClientContext *client;
+    // SoupClientContext *client;
     GstElement *sendpipe;
     GstElement *sendbin;
     user_cb stop_webrtc;
