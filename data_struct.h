@@ -40,13 +40,13 @@ struct _webrtc {
     const gchar *stun;
     struct _udpsink {
         gboolean multicast;
-        int port;
+        int32_t port;
         gchar *addr;
     } udpsink;
 };
 
 struct _http_data {
-    int port;
+    int32_t port;
     gchar *host;
     gchar *user;
     gchar *password;
@@ -54,21 +54,25 @@ struct _http_data {
 
 typedef struct  {
     gchar *device;
-    int width;
-    int height;
-    int framerate;
-    int io_mode;
+    int32_t width;
+    int32_t height;
+    int32_t framerate;
+    int32_t io_mode;
     gchar *type;
     gchar *format;
 } _v4l2src_data;
 
 struct _GstConfigData {
     _v4l2src_data v4l2src_data;
-    int clients;             // How many clients can be allowed to connect to the server.
+    int32_t clients;             // How many clients can be allowed to connect to the server.
     gchar *videnc;           // i.e; h264,h265,vp9
     gchar *root_dir;         // streams output root path;
     gboolean showdot;        // generate gstreamer pipeline graphs;
-    gboolean splitfile_sink; // splitmuxsink save multipart file.
+    struct _splitfile_sink {
+        gboolean enable;
+        int32_t max_files;
+        int64_t max_size_time; // seconds of video split.
+    } splitfile_sink;        // splitmuxsink save multipart file.
     gboolean app_sink;       // appsink for filesink save.
     struct _hls_onoff {
         gboolean av_hlssink;         // audio and video hls output.
@@ -81,21 +85,21 @@ struct _GstConfigData {
     struct _udp_data { // udp multicastsink hls output.
         gboolean enable;
         gboolean multicast;
-        int port;
+        int32_t port;
         gchar *host;
     } udp;
     struct _hls_data {
-        int files;
-        int duration;
+        int32_t files;
+        int32_t duration;
         gboolean showtext; // show some custom text overlay video;
     } hls;
     struct _audio_data {
         gboolean enable;
-        int path;
-        int buf_time;
+        int32_t path;
+        int32_t buf_time;
         gchar *device; // for alsasrc  and puslesrc
     } audio;
-    int rec_len; // motion detect record duration, seconds.
+    int32_t rec_len; // motion detect record duration, seconds.
     gboolean motion_rec;
     gboolean sysinfo; // show system info brief
     struct _webrtc webrtc;

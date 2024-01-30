@@ -170,7 +170,14 @@ static void read_config_json(gchar *fullpath) {
     config_data.v4l2src_data.height = json_object_get_int_member(object, "height");
     config_data.v4l2src_data.io_mode = json_object_get_int_member(object, "io_mode");
     config_data.v4l2src_data.framerate = json_object_get_int_member(object, "framerate");
-    config_data.splitfile_sink = json_object_get_boolean_member(root_obj, "splitfile_sink");
+
+    // extract splitfile_sink config
+    object = json_object_get_object_member(root_obj, "splitfile_sink");
+    if (object) {
+        config_data.splitfile_sink.enable = json_object_get_int_member(object, "enable");
+        config_data.splitfile_sink.max_files = json_object_get_int_member(object, "max_files");
+        config_data.splitfile_sink.max_size_time = json_object_get_int_member(object, "max_size_time");
+    }
     config_data.app_sink = json_object_get_boolean_member(root_obj, "app_sink");
     object = json_object_get_object_member(root_obj, "hls_onoff");
 
