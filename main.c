@@ -40,6 +40,8 @@ static const gchar *video_encodecs[] = {
     "vp9",
     "vp8"};
 
+static gchar *config_path;
+
 // static GThread *inotify_watch = NULL;
 
 static void _get_cpuid() {
@@ -255,19 +257,26 @@ static void read_config_json(gchar *fullpath) {
     g_object_unref(parser);
 }
 
-static gchar *_get_config_path() {
+static u_int32_t _get_config_path() {
+
+    // set into the /etc/default/gwc
+    config_path =  g_strdup(g_getenv("GWC_CONFIG_PATH"));
+    if (access(config_path, F_OK) == 0) {
+        return 0;
+    }
     gchar *current_dir = g_get_current_dir();
-    gchar *fullpath = g_strconcat(current_dir, "/config.json", NULL);
+    config_path = g_strconcat(current_dir, "/config.json", NULL);
     g_free(current_dir);
-    if (access(fullpath, F_OK) == 0) {
-        return fullpath;
+    if (access(config_path, F_OK) == 0) {
+        return 0;
     }
 
-    fullpath = g_strconcat("/home/", g_getenv("USER"), "/.config/config.json", NULL);
-    if (access(fullpath, F_OK) == 0) {
-        return fullpath;
+    config_path = g_strconcat("/home/", g_getenv("USER"), "/.config/config.json", NULL);
+    if (access(config_path, F_OK) == 0) {
+        return 0;
     }
-    return NULL;
+
+    return -1;
 }
 
 #if defined(HAS_JETSON_NANO)
@@ -326,11 +335,35 @@ load_deepstream_plugin(const gchar *name) {
 }
 #endif
 
+static GOptionEntry entries[] = {
+    {"config", 'c', 0, G_OPTION_ARG_STRING, &config_path,
+     "application config ", "CONFIG"},
+    {NULL}};
+
 int main(int argc, char *argv[]) {
-    gchar *fullpath = _get_config_path();
-    if (fullpath != NULL) {
-        read_config_json(fullpath);
-        g_free(fullpath);
+    GOptionContext *context;
+    GError *error = NULL;
+
+    context = g_option_context_new("- gstreamer webrtc camera");
+    g_option_context_add_main_entries(context, entries, NULL);
+    g_option_context_add_group(context, gst_init_get_option_group());
+    if (!g_option_context_parse(context, &argc, &argv, &error)) {
+        gst_printerr("Error initializing: %s\n", error->message);
+        g_option_context_free(context);
+        g_clear_error(&error);
+        return -1;
+    }
+
+    g_option_context_free(context);
+
+    if(config_path == NULL)
+    {
+        _get_config_path();
+    }
+    if (config_path != NULL) {
+        g_print("read config from: %s\n", config_path);
+        read_config_json(config_path);
+        g_free(config_path);
     } else {
         g_error("Not found config.json, exit!!!\n");
         exit(1);

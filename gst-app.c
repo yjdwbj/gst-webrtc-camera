@@ -2538,16 +2538,24 @@ int start_av_appsink() {
 int splitfile_sink() {
     if (!_check_initial_status())
         return -1;
-    GstElement *splitmuxsink, *videoparse, *vqueue;
+    GstElement *splitmuxsink, *videoparse, *vqueue, *clock, *encoder, *textoverlay;
+
     gchar *tmpfile;
-    // encoder = get_hardware_h264_encoder();
+    encoder = get_hardware_h264_encoder();
     gchar *outdir = g_strconcat(config_data.root_dir, "/daily_record", NULL);
     MAKE_ELEMENT_AND_ADD(splitmuxsink, "splitmuxsink");
     MAKE_ELEMENT_AND_ADD(videoparse, "h264parse");
     MAKE_ELEMENT_AND_ADD(vqueue, "queue");
+    MAKE_ELEMENT_AND_ADD(clock, "clockoverlay");
+    g_object_set(clock, "time-format", "%D %H:%M:%S", NULL);
+    MAKE_ELEMENT_AND_ADD(textoverlay, "textoverlay");
+    g_object_set(textoverlay, "text", g_getenv("LANG"),
+                 "valignment", 1, // bottom
+                 "halignment", 0, // left
+                 NULL);
 
     g_object_set(vqueue, "leaky", 1, NULL);
-    if (!gst_element_link_many(vqueue, videoparse, splitmuxsink, NULL)) {
+    if (!gst_element_link_many(vqueue, clock, textoverlay, encoder, videoparse, splitmuxsink, NULL)) {
         g_error("Failed to link elements splitmuxsink.\n");
         return -1;
     }
@@ -2561,7 +2569,7 @@ int splitfile_sink() {
     _mkdir(outdir, 0755);
     g_free(outdir);
 
-    link_request_src_pad(video_encoder, vqueue);
+    link_request_src_pad(video_source, vqueue);
 
 #if 0
     // add audio to muxer.
