@@ -1,15 +1,27 @@
 
 CC=gcc
 CFLAGS :=-g -Wall -fno-omit-frame-pointer -fsanitize=address -DJETSON_NANO=$$(bash -c 'if  [ -f /etc/nv_tegra_release ]; then  echo 1; else echo 0; fi')
-EXE=gst-webrtc-camera
+EXE=gwc
 
 # https://makefiletutorial.com/#makefile-cookbook
 # https://github.com/theicfire/makefiletutorial
 #
+#
+BLIBS	:= $(shell pkg-config --libs --cflags gstreamer-webrtc-1.0 gstreamer-sdp-1.0 libsoup-3.0 json-glib-1.0)
+
 CFLAGS := $(CFLAGS) $$(pkg-config --cflags glib-2.0 gstreamer-1.0 json-glib-1.0 gstreamer-webrtc-1.0 gstreamer-sdp-1.0 libsoup-3.0 sqlite3)
 LIBS=$$(pkg-config --libs glib-2.0 gstreamer-1.0 gstreamer-webrtc-1.0 gstreamer-sdp-1.0 gstreamer-app-1.0 gstreamer-base-1.0 libsoup-3.0 json-glib-1.0 sqlite3)
-all:
-	${CC} -Wall v4l2ctl.c sql.c soup.c gst-app.c main.c -g -O0 -o ${EXE} ${CFLAGS} ${LIBS}
+
+
+all: webrtc-sendonly rtspsrc-webrtc gwc
+webrtc-sendonly: webrtc-sendonly.c v4l2ctl.c
+	"$(CC)" $(CFLAGS) $^ $(BLIBS) -o $@
+
+rtspsrc-webrtc: rtspsrc-webrtc.c v4l2ctl.c
+	"$(CC)" $(CFLAGS) $^ $(BLIBS) -o $@
+
+gwc: v4l2ctl.c sql.c soup.c gst-app.c main.c
+	"${CC}" -Wall  -g -O0  ${CFLAGS} $^ ${LIBS} -o $@
 
 
 clean:
