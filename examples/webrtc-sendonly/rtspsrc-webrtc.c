@@ -108,36 +108,38 @@ void soup_websocket_message_cb(SoupWebsocketConnection *connection,
 void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
                               gpointer user_data);
 
-void soup_http_handler(SoupServer *soup_server, SoupMessage *message,
-                       const char *path, GHashTable *query, SoupClientContext *client_context,
+void soup_http_handler(SoupServer *soup_server, SoupServerMessage *msg,
+                       const char *path, GHashTable *query,
                        gpointer user_data);
-void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
-                            SoupWebsocketConnection *connection, const char *path,
-                            SoupClientContext *client_context, gpointer user_data);
+
+static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
+                                   SoupServerMessage *msg, G_GNUC_UNUSED const char *path,
+                                   SoupWebsocketConnection *connection, gpointer user_data);
 
 static gchar *get_string_from_json_object(JsonObject *object);
 
+#if 0
 static void
 got_headers(SoupMessage *msg, gpointer user_data) {
     const char *location;
 
     g_print("    -> %d %s\n", msg->status_code,
             msg->reason_phrase);
-    location = soup_message_headers_get_one(msg->response_headers,
+    location = soup_message_headers_get_one(soup_server_message_get_request_headers(msg),
                                             "Location");
     if (location)
         g_print("       Location: %s\n", location);
 }
 
 static void
-restarted(SoupMessage *msg, gpointer user_data) {
+restarted(SoupServerMessage *msg, gpointer user_data) {
     SoupURI *uri = soup_message_get_uri(msg);
 
     g_print("    %s %s\n", msg->method, uri->path);
 }
 
 static void
-got_body(SoupMessage *msg, gpointer user_data) {
+got_body(SoupServerMessage *msg, gpointer user_data) {
     AppData *app = (AppData *)user_data;
     SoupURI *uri = soup_message_get_uri(msg);
     if (msg->request_body->length < 1024) {
@@ -154,29 +156,40 @@ got_body(SoupMessage *msg, gpointer user_data) {
     }
 }
 
+#endif
+
 static void login_camera(AppData *app) {
     SoupMessage *msg;
-
+    GBytes *response = NULL;
+    GBytes *request = NULL;
+    GError *error = NULL;
     gchar *formdata = g_strdup_printf(ZTE_V520_LOGIN_FORM, app->user, app->password);
     msg = soup_message_new(SOUP_METHOD_POST, app->url);
     soup_message_set_flags(msg, SOUP_MESSAGE_NO_REDIRECT);
-    soup_message_set_request(msg, "application/x-www-form-urlencoded",
-                             SOUP_MEMORY_COPY,
-                             formdata,
-                             strlen(formdata));
 
-    g_signal_connect(msg, "got_headers",
-                     G_CALLBACK(got_headers), NULL);
-    g_signal_connect(msg, "restarted",
-                     G_CALLBACK(restarted), NULL);
-    g_print("Request metod: %s, url: %s, form data: %s,status code: %d\n", SOUP_METHOD_GET, app->url, formdata, msg->status_code);
-    soup_session_send_message(app->session, msg);
+    request = g_bytes_new(formdata,strlen(formdata));
+    soup_message_set_request_body_from_bytes(msg, "application/x-www-form-urlencoded", request);
+
+    // g_signal_connect(msg, "got_headers",
+    //                  G_CALLBACK(got_headers), NULL);
+    // g_signal_connect(msg, "restarted",
+    //                  G_CALLBACK(restarted), NULL);
+
+    response = soup_session_send_and_read(app->session, msg, NULL, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(response);
+
+    // g_print("Request metod: %s, url: %s, form data: %s, response: %s\n", SOUP_METHOD_GET, app->url, formdata, g_bytes_get_data(response, NULL));
+    g_bytes_unref(response);
+    g_bytes_unref(request);
     g_object_unref(msg);
     g_free(formdata);
 }
 
 static void get_rtsp_url(AppData *app) {
     SoupMessage *msg;
+    GBytes *response = NULL;
+    GError *error = NULL;
     gchar *get_api = g_strdup_printf(ZTE_V520_GET_RTSP_URL, g_get_real_time());
 
     gchar *fullurl = g_strconcat(app->url, get_api, NULL);
@@ -184,18 +197,29 @@ static void get_rtsp_url(AppData *app) {
     msg = soup_message_new(SOUP_METHOD_GET, fullurl);
     soup_message_set_flags(msg, SOUP_MESSAGE_NO_REDIRECT);
 
-    soup_message_headers_append(msg->request_headers, "Connection", "keep-alive");
+    // soup_message_headers_append (soup_server_message_get_response_headers (msg), "Connection", "keep-alive");
 
     // g_signal_connect(msg, "got_headers",
     //                  G_CALLBACK(got_headers), NULL);
     // g_signal_connect(msg, "restarted",
     //                  G_CALLBACK(restarted), NULL);
 
-    g_signal_connect(msg, "got_body",
-                     G_CALLBACK(got_body), (gpointer)app);
+    response = soup_session_send_and_read(app->session, msg, NULL, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(response);
 
-    soup_session_send_message(app->session, msg);
-    g_print("Request metod: %s, url: %s, status code: %d\n", SOUP_METHOD_GET, fullurl, msg->status_code);
+    GMatchInfo *matchInfo;
+    GRegex *url_regex =
+        g_regex_new("rtsp://[^ ><$]+", G_REGEX_OPTIMIZE | G_REGEX_MULTILINE, 0, NULL);
+
+    g_regex_match(url_regex, g_bytes_get_data(response, NULL), 0, &matchInfo);
+    if (g_match_info_matches(matchInfo)) {
+        app->rtsp_url = g_match_info_fetch(matchInfo, 0);
+        g_print("rtsp_url ---> : %s\n", app->rtsp_url);
+    }
+
+    // g_print("Request metod: %s, url: %s, get response: %s\n", SOUP_METHOD_GET, fullurl, g_bytes_get_data(response,NULL));
+    g_bytes_unref(response);
     g_object_unref(msg);
     g_free(get_api);
     g_free(fullurl);
@@ -222,28 +246,38 @@ static int get_navctrl_cmd(const gchar *cmd) {
 
 static void set_autotrack(AppData *app, int value) {
     SoupMessage *msg;
-
+    GBytes *response = NULL;
+    GBytes *request = NULL;
+    GError *error = NULL;
     gchar *formdata = g_strdup_printf(ZTE_V520_AUTOTRACK_FORM, value);
     gchar *fullurl = g_strconcat(app->url, ZTE_V520_AUTOTRACK_URL, NULL);
     msg = soup_message_new(SOUP_METHOD_POST, fullurl);
 
     // soup_message_set_flags(msg, SOUP_MESSAGE_CONTENT_DECODED);
-    soup_message_set_request(msg, "application/x-www-form-urlencoded",
-                             SOUP_MEMORY_COPY,
-                             formdata,
-                             strlen(formdata));
+    request = g_bytes_new(formdata, strlen(formdata));
+    soup_message_set_request_body_from_bytes(msg, "application/x-www-form-urlencoded", request);
 
-    soup_message_headers_append(msg->request_headers, "Connection", "keep-alive");
-    soup_session_send_message(app->session, msg);
-    g_print("Request metod: %s, url: %s, status code: %d\n", SOUP_METHOD_POST, fullurl, msg->status_code);
+    // soup_message_headers_append (soup_server_message_get_response_headers (msg), "Connection", "keep-alive");
+    response = soup_session_send_and_read(app->session, msg, NULL, &error);
 
-    g_free(formdata);
+    g_assert_no_error(error);
+    g_assert_nonnull(response);
+
+    // g_print("Request metod: %s, url: %s, response: %s\n", SOUP_METHOD_POST, fullurl, g_bytes_get_data(response, NULL));
+
+    g_bytes_unref(response);
+    g_bytes_unref(request);
+
     g_object_unref(msg);
+    g_free(formdata);
     g_free(fullurl);
 }
 
 static void send_navctrl_cmd(AppData *app, const gchar *cmd) {
     SoupMessage *msg;
+    GBytes *response = NULL;
+    GBytes *request = NULL;
+    GError *error = NULL;
     int cmdidx = get_navctrl_cmd(cmd);
     if (cmdidx < 0) {
         g_print("Invalid navigate command\n");
@@ -255,31 +289,37 @@ static void send_navctrl_cmd(AppData *app, const gchar *cmd) {
     msg = soup_message_new(SOUP_METHOD_POST, fullurl);
 
     // soup_message_set_flags(msg, SOUP_MESSAGE_CONTENT_DECODED);
-    soup_message_set_request(msg, "application/x-www-form-urlencoded",
-                             SOUP_MEMORY_COPY,
-                             formdata,
-                             strlen(formdata));
+    request = g_bytes_new(formdata, strlen(formdata));
+    soup_message_set_request_body_from_bytes(msg, "application/x-www-form-urlencoded", request);
 
-    soup_message_headers_append(msg->request_headers, "Connection", "keep-alive");
+    // soup_message_headers_append (soup_server_message_get_response_headers (msg), "Connection", "keep-alive");
 
-    soup_session_send_message(app->session, msg);
-    g_print("Request metod: %s, url: %s, status code: %d\n", SOUP_METHOD_POST, fullurl, msg->status_code);
+    response = soup_session_send_and_read(app->session, msg, NULL, &error);
+
+    g_assert_no_error(error);
+    g_assert_nonnull(response);
+
+    // g_print("Request metod: %s, url: %s, response: %d\n", SOUP_METHOD_POST, fullurl, g_bytes_get_data(response, NULL));
+
+    g_bytes_unref(response);
+    g_bytes_unref(request);
+    g_object_unref(msg);
     if (cmdidx != NAVIGATE_ORIGIN) {
-        SoupMessage *stop;
+        // stop navigate.
         g_free(formdata);
-        stop = soup_message_new(SOUP_METHOD_POST, fullurl);
+        msg = soup_message_new(SOUP_METHOD_POST, fullurl);
         formdata = g_strdup_printf(ZTE_V520_NAVCTRL_FORM, NAVIGATE_STOP);
-        soup_message_set_request(stop, "application/x-www-form-urlencoded",
-                                 SOUP_MEMORY_COPY,
-                                 formdata,
-                                 strlen(formdata));
-        soup_session_send_message(app->session, stop);
-        g_print("Request metod: %s, url: %s, status code: %d\n", SOUP_METHOD_POST, fullurl, msg->status_code);
-        g_object_unref(stop);
+        request = g_bytes_new(formdata, strlen(formdata));
+        soup_message_set_request_body_from_bytes(msg, "application/x-www-form-urlencoded", request);
+
+        response = soup_session_send_and_read(app->session, msg, NULL, &error);
+        // g_print("Request metod: %s, url: %s, response: %s\n", SOUP_METHOD_POST, fullurl, g_bytes_get_data(response, NULL));
+        g_object_unref(msg);
+        g_bytes_unref(response);
+        g_bytes_unref(request);
     }
 
     g_free(formdata);
-    g_object_unref(msg);
     g_free(fullurl);
 }
 
@@ -691,12 +731,11 @@ void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
 }
 
 void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
-                       SoupMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
-                       G_GNUC_UNUSED SoupClientContext *client_context,
+                       SoupServerMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
                        G_GNUC_UNUSED gpointer user_data) {
-    if (msg->method == SOUP_METHOD_GET) {
+    if (soup_server_message_get_method(msg)) {
         GMappedFile *mapping;
-        SoupBuffer *buffer;
+        GBytes *buffer;
         g_print("to get path is: %s\n", path);
         if (g_str_has_suffix(path, INDEX_HTML) || g_str_has_suffix(path, "/") || g_str_has_suffix(path, "index.html")) {
             mapping = g_mapped_file_new(INDEX_HTML, FALSE, NULL);
@@ -705,27 +744,27 @@ void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
         } else if (g_str_has_suffix(path, BOOTSTRAP_CSS)) {
             mapping = g_mapped_file_new(BOOTSTRAP_CSS, FALSE, NULL);
         } else {
-            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
             return;
         }
 
         if (!mapping) {
-            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
             return;
         }
 
-        buffer = soup_buffer_new_with_owner(g_mapped_file_get_contents(mapping),
+        buffer = g_bytes_new_with_free_func(g_mapped_file_get_contents(mapping),
                                             g_mapped_file_get_length(mapping),
-                                            mapping, (GDestroyNotify)g_mapped_file_unref);
-        soup_message_body_append_buffer(msg->response_body, buffer);
-        soup_buffer_free(buffer);
+                                            (GDestroyNotify)g_mapped_file_unref,mapping);
+        soup_message_body_append_bytes(soup_server_message_get_response_body(msg), buffer);
+        g_bytes_unref(buffer);
     }
-    soup_message_set_status(msg, SOUP_STATUS_OK);
+    soup_server_message_set_status(msg, SOUP_STATUS_OK, NULL);
 }
 
 void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
-                            SoupWebsocketConnection *connection, G_GNUC_UNUSED const char *path,
-                            G_GNUC_UNUSED SoupClientContext *client_context, gpointer user_data) {
+                            SoupServerMessage *msg, G_GNUC_UNUSED const char *path,
+                            SoupWebsocketConnection *connection, gpointer user_data) {
     ReceiverEntry *receiver_entry;
     AppData *app = (AppData *)user_data;
     gst_print("Processing new websocket connection %p\n", (gpointer)connection);
@@ -827,8 +866,8 @@ static void start_http(AppData *app) {
         g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL,
                               destroy_receiver_entry);
     app->soup_server =
-        soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server",
-                        SOUP_SERVER_TLS_CERTIFICATE, cert,
+        soup_server_new("server-header", "webrtc-soup-server",
+                        "tls-certificate", cert,
                         NULL);
 
     g_object_unref(cert);
@@ -838,7 +877,7 @@ static void start_http(AppData *app) {
 
     auth_domain = soup_auth_domain_digest_new(
         "realm", HTTP_AUTH_DOMAIN_REALM,
-        SOUP_AUTH_DOMAIN_DIGEST_AUTH_CALLBACK,
+        "auth-callback",
         digest_auth_callback,
         NULL);
     // soup_auth_domain_add_path(auth_domain, "/Digest");

@@ -85,12 +85,9 @@ void soup_websocket_message_cb(SoupWebsocketConnection *connection,
 void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
                               gpointer user_data);
 
-void soup_http_handler(SoupServer *soup_server, SoupMessage *message,
-                       const char *path, GHashTable *query, SoupClientContext *client_context,
+void soup_http_handler(SoupServer *soup_server, SoupServerMessage *msg,
+                       const char *path, GHashTable *query,
                        gpointer user_data);
-void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
-                            SoupWebsocketConnection *connection, const char *path,
-                            SoupClientContext *client_context, gpointer user_data);
 
 static gchar *get_string_from_json_object(JsonObject *object);
 
@@ -432,12 +429,11 @@ void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
 #define BOOTSTRAP_CSS "bootstrap.min.css"
 
 void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
-                       SoupMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
-                       G_GNUC_UNUSED SoupClientContext *client_context,
+                       SoupServerMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
                        G_GNUC_UNUSED gpointer user_data) {
-    if (msg->method == SOUP_METHOD_GET) {
+    if (soup_server_message_get_method(msg)) {
         GMappedFile *mapping;
-        SoupBuffer *buffer;
+        GBytes *buffer;
         g_print("to get path is: %s\n", path);
         if (g_str_has_suffix(path, INDEX_HTML) || g_str_has_suffix(path, "/")) {
             mapping = g_mapped_file_new(INDEX_HTML, FALSE, NULL);
@@ -448,27 +444,27 @@ void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
         } else if (g_str_has_suffix(path, MAIN_JS)) {
             mapping = g_mapped_file_new(MAIN_JS, FALSE, NULL);
         } else {
-            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
             return;
         }
 
         if (!mapping) {
-            soup_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+            soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
             return;
         }
 
-        buffer = soup_buffer_new_with_owner(g_mapped_file_get_contents(mapping),
+        buffer = g_bytes_new_with_free_func(g_mapped_file_get_contents(mapping),
                                             g_mapped_file_get_length(mapping),
-                                            mapping, (GDestroyNotify)g_mapped_file_unref);
-        soup_message_body_append_buffer(msg->response_body, buffer);
-        soup_buffer_free(buffer);
+                                            (GDestroyNotify)g_mapped_file_unref, mapping);
+        soup_message_body_append_bytes(soup_server_message_get_response_body(msg), buffer);
+        g_bytes_unref(buffer);
     }
-    soup_message_set_status(msg, SOUP_STATUS_OK);
+    soup_server_message_set_status(msg, SOUP_STATUS_OK, NULL);
 }
 
-void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
-                            SoupWebsocketConnection *connection, G_GNUC_UNUSED const char *path,
-                            G_GNUC_UNUSED SoupClientContext *client_context, gpointer user_data) {
+static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
+                                   SoupServerMessage *msg, G_GNUC_UNUSED const char *path,
+                                   SoupWebsocketConnection *connection, gpointer user_data) {
     ReceiverEntry *receiver_entry;
     AppData *app = (AppData *)user_data;
     gst_print("Processing new websocket connection %p\n", (gpointer)connection);
@@ -572,8 +568,8 @@ static void start_http(AppData *app) {
         g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL,
                               destroy_receiver_entry);
     app->soup_server =
-        soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-soup-server",
-                        SOUP_SERVER_TLS_CERTIFICATE, cert,
+        soup_server_new("server-header", "webrtc-soup-server",
+                        "tls-certificate", cert,
                         NULL);
     g_object_unref(cert);
     soup_server_add_handler(app->soup_server, "/", soup_http_handler, NULL, NULL);
@@ -582,7 +578,7 @@ static void start_http(AppData *app) {
 
     auth_domain = soup_auth_domain_digest_new(
         "realm", HTTP_AUTH_DOMAIN_REALM,
-        SOUP_AUTH_DOMAIN_DIGEST_AUTH_CALLBACK,
+        "auth-callback",
         digest_auth_callback,
         NULL);
     // soup_auth_domain_add_path(auth_domain, "/Digest");
