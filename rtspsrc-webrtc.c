@@ -831,7 +831,6 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     g_hash_table_insert(app->receiver_entry_table, connection, receiver_entry);
 }
 
-#define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
 
 static char *
 digest_auth_callback(SoupAuthDomain *auth_domain,

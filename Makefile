@@ -27,7 +27,7 @@ gwc: v4l2ctl.c sql.c soup.c gst-app.c main.c
 clean:
 # ifeq must be at the same indentation level in the makefile as the name of the target
 ifneq (,$(wildcard $(EXE)))
-	rm ${EXE}
+	rm ${EXE} rtspsrc-webrtc  webrtc-sendonly
 endif
 
 
