@@ -52,6 +52,9 @@
         max-width: 1000px;
         margin: 0 auto;
       }
+      #title{
+        font-size: 32px;
+      }
     }
   </style>
 </head>
@@ -72,7 +75,7 @@
     </div>
     <div id="elapse"></div>
     <canvas style="display: none" id="videoCanvas"></canvas>
-    <section class="main-controls d-flex justify-content-center flex-column align-items-center">
+    <section class="main-controls d-flex justify-content-center  justify-content-xl-center flex-column align-items-center align-items-xl-center justify-content-sm-start align-items-sm-start">
       <div class="mt-3" id="buttons">
         <button type="button" class="btn btn-info" id="startWatch">
           Start
@@ -100,7 +103,7 @@
           Control Panel
         </button>
       </div>
-      <div class="form-floating w-25 m-0">
+      <div class="form-floating d-flex  col-sm-12 col-md-4 col-lg-3 col-xl-2 m-0">
         <select class="form-select" id="codecSelect" aria-label="Floating label select example">
           <option value="" selected>Default</option>
         </select>

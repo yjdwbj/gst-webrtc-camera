@@ -23,6 +23,7 @@
 #include <gst/gst.h>
 #include <gst/sdp/sdp.h>
 #include <locale.h>
+#include "soup_const.h"
 
 #ifdef G_OS_UNIX
 #include <glib-unix.h>
@@ -46,7 +47,6 @@
 #define RTP_CAPS_OPUS "application/x-rtp,media=audio,encoding-name=OPUS,payload="
 
 #define SOUP_HTTP_PORT 57778
-#define STUN_SERVER "stun://stun.l.google.com:19302"
 
 typedef struct _APPData AppData;
 struct _APPData {
@@ -423,31 +423,34 @@ void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
     gst_print("Closed websocket connection %p\n", (gpointer)connection);
 }
 
-#define INDEX_HTML "main.html"
-#define MAIN_JS "main.js"
-#define BOOTSTRAP_JS "bootstrap.bundle.min.js"
-#define BOOTSTRAP_CSS "bootstrap.min.css"
+#include <sys/stat.h>
+static void
+do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
+    struct stat st;
 
-void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
-                       SoupServerMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
-                       G_GNUC_UNUSED gpointer user_data) {
-    if (soup_server_message_get_method(msg)) {
+    if (stat(path, &st) == -1) {
+        if (errno == EPERM)
+            soup_server_message_set_status(msg, SOUP_STATUS_FORBIDDEN, NULL);
+        else if (errno == ENOENT)
+            soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
+        else
+            soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+        return;
+    }
+
+    if (!(g_str_has_suffix(path, HTTP_SRC_BOOT_CSS) ||
+        g_str_has_suffix(path, HTTP_SRC_BOOT_JS) ||
+        g_str_has_suffix(path, HTTP_SRC_JQUERY_JS) ||
+        g_str_has_suffix(path, HTTP_SRC_MAIN_HTML) ||
+        g_str_has_suffix(path, HTTP_SRC_MAIN_JS))) {
+        soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+        return;
+    }
+
+    if (soup_server_message_get_method(msg) == SOUP_METHOD_GET) {
         GMappedFile *mapping;
         GBytes *buffer;
-        g_print("to get path is: %s\n", path);
-        if (g_str_has_suffix(path, INDEX_HTML) || g_str_has_suffix(path, "/")) {
-            mapping = g_mapped_file_new(INDEX_HTML, FALSE, NULL);
-        } else if (g_str_has_suffix(path, BOOTSTRAP_JS)) {
-            mapping = g_mapped_file_new(BOOTSTRAP_JS, FALSE, NULL);
-        } else if (g_str_has_suffix(path, BOOTSTRAP_CSS)) {
-            mapping = g_mapped_file_new(BOOTSTRAP_CSS, FALSE, NULL);
-        } else if (g_str_has_suffix(path, MAIN_JS)) {
-            mapping = g_mapped_file_new(MAIN_JS, FALSE, NULL);
-        } else {
-            soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-            return;
-        }
-
+        mapping = g_mapped_file_new(path, FALSE, NULL);
         if (!mapping) {
             soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
             return;
@@ -458,7 +461,51 @@ void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
                                             (GDestroyNotify)g_mapped_file_unref, mapping);
         soup_message_body_append_bytes(soup_server_message_get_response_body(msg), buffer);
         g_bytes_unref(buffer);
+
+    } else /* msg->method == SOUP_METHOD_HEAD */ {
+        char *length;
+
+        /* We could just use the same code for both GET and
+         * HEAD (soup-message-server-io.c will fix things up).
+         * But we'll optimize and avoid the extra I/O.
+         */
+        length = g_strdup_printf("%lu", (gulong)st.st_size);
+
+        // follow code for libsoup-2.4
+        // soup_message_headers_append(msg->response_headers,
+        //                             "Content-Length", length);
+
+        // follow code for libsoup-3.-
+        soup_message_headers_append(soup_server_message_get_response_headers(msg),
+                                    "Content-Length", length);
+        g_free(length);
     }
+
+    soup_server_message_set_status(msg, SOUP_STATUS_OK, NULL);
+}
+
+void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
+                       SoupServerMessage *msg, const char *path, G_GNUC_UNUSED GHashTable *query,
+                       G_GNUC_UNUSED gpointer user_data) {
+    char *file_path;
+    const char *method = soup_server_message_get_method(msg);
+
+    if (method == SOUP_METHOD_GET || method == SOUP_METHOD_POST || method == SOUP_METHOD_HEAD) {
+        if (g_strcmp0(path, "/") == 0) {
+            soup_server_message_set_redirect(msg, SOUP_STATUS_MOVED_PERMANENTLY,
+                                             "/webroot/main.html");
+            return;
+        }
+        file_path = g_strdup_printf(".%s", path);
+        do_get(soup_server, msg, file_path);
+    } else {
+        soup_server_message_set_status(msg, SOUP_STATUS_NOT_IMPLEMENTED, NULL);
+        gchar *txt = "what you want?";
+        soup_server_message_set_response(msg, "text/plain",
+                                         SOUP_MEMORY_STATIC, txt, strlen(txt));
+    }
+
+    g_free(file_path);
     soup_server_message_set_status(msg, SOUP_STATUS_OK, NULL);
 }
 
@@ -479,7 +526,6 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     g_free(videoCtrls);
 }
 
-#define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
 
 static char *
 digest_auth_callback(SoupAuthDomain *auth_domain,
@@ -514,16 +560,16 @@ static void start_http(AppData *app) {
                               destroy_receiver_entry);
     app->soup_server =
         soup_server_new("server-header", "webrtc-soup-server",
-                        "tls-certificate", cert,
+                        SOUP_TLS_CERTIFICATE, cert,
                         NULL);
     g_object_unref(cert);
-    soup_server_add_handler(app->soup_server, "/", soup_http_handler, NULL, NULL);
+    soup_server_add_handler(app->soup_server, NULL, soup_http_handler, NULL, NULL);
     soup_server_add_websocket_handler(app->soup_server, "/ws", NULL, NULL,
                                       soup_websocket_handler, app, NULL);
 
     auth_domain = soup_auth_domain_digest_new(
         "realm", HTTP_AUTH_DOMAIN_REALM,
-        "auth-callback",
+        SOUP_AUTH_CALLBACK,
         digest_auth_callback,
         NULL);
     // soup_auth_domain_add_path(auth_domain, "/Digest");

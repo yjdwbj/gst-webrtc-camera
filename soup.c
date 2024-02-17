@@ -25,6 +25,7 @@
 #include "sql.h"
 #include <gst/gst.h>
 #include <gst/gstbin.h>
+#include "soup_const.h"
 
 gchar *video_priority = NULL;
 gchar *audio_priority = NULL;
@@ -33,7 +34,6 @@ static GHashTable *webrtc_connected_table;
 
 extern GstConfigData config_data;
 
-#define HTTP_AUTH_DOMAIN_REALM "lcy-gsteramer-camera"
 static int client_limit = 3;
 static gchar *
 get_string_from_json_object(JsonObject *object) {
@@ -685,6 +685,17 @@ do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
         return;
     }
 
+    if (!(g_str_has_suffix(path, HTTP_SRC_BOOT_CSS) ||
+        g_str_has_suffix(path, HTTP_SRC_BOOT_JS) ||
+        g_str_has_suffix(path, HTTP_SRC_JQUERY_JS) ||
+        g_str_has_suffix(path, HTTP_SRC_INDEX_HTML) ||
+        g_str_has_suffix(path, HTTP_SRC_HLS_JS) ||
+        g_str_has_suffix(path, HTTP_SRC_WEBRTC_HTML) ||
+        g_str_has_suffix(path, HTTP_SRC_WEBRTC_JS))) {
+        soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+        return;
+    }
+
     if (soup_server_message_get_method(msg) == SOUP_METHOD_GET) {
         GMappedFile *mapping;
         GBytes *buffer;
@@ -920,7 +931,7 @@ void start_http(webrtc_callback fn, int port, int clients) {
     data->webrtc_connected_table = webrtc_connected_table;
     soup_server =
         soup_server_new("server-header", "webrtc-soup-server",
-                        "tls-certificate", cert,
+                        SOUP_TLS_CERTIFICATE, cert,
                         NULL);
     g_object_unref(cert);
     // g_signal_connect(soup_server, "request_started",
@@ -931,7 +942,7 @@ void start_http(webrtc_callback fn, int port, int clients) {
 
     auth_domain = soup_auth_domain_digest_new(
         "realm", HTTP_AUTH_DOMAIN_REALM,
-        "auth-callback",
+        SOUP_AUTH_CALLBACK,
         digest_auth_callback,
         NULL);
     // soup_auth_domain_add_path(auth_domain, "/Digest");

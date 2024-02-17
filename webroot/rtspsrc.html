@@ -3,7 +3,8 @@
 <head>
     <meta charset="utf-8" http-equiv="Content-Language" content="en" />
     <meta name="description" content="WebRTC code samples">
-    <meta name="viewport" content="width=device-width, user-scalable=yes, initial-scale=1, maximum-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
     <meta itemprop="description" content="Client-side WebRTC code samples">
     <meta itemprop="name" content="WebRTC code samples">
     <meta name="mobile-web-app-capable" content="yes">
@@ -27,25 +28,45 @@
             width: 60% !important;
         }
 
-        .container {
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-        }
+
 
         .visualizer {
             height: 0%;
         }
 
         /* Adjustments for wider screens */
-        @media all and (min-width: 800px) {
+        /* Extra small devices (portrait phones, less than 576px) */
+        @media screen and (max-width: 575.98px) {
+            #title {
+                font-size: 24px;
+            }
+        }
 
-            /* Don't take all the space as readability is lost when line length
-       goes past a certain size */
-            .container {
-                width: 90%;
-                max-width: 1000px;
-                margin: 0 auto;
+        /* Small devices (landscape phones, 576px and up) */
+        @media screen and (min-width: 576px) and (max-width: 767.98px) {
+            #title {
+                font-size: 36px;
+            }
+        }
+
+        /* Medium devices (tablets, 768px and up) */
+        @media screen and (min-width: 768px) and (max-width: 991.98px) {
+            #title {
+                font-size: 48px;
+            }
+        }
+
+        /* Large devices (desktops, 992px and up) */
+        @media screen and (min-width: 992px) and (max-width: 1199.98px) {
+            #title {
+                font-size: 48px;
+            }
+        }
+
+        /* Extra large devices (large desktops, 1200px and up) */
+        @media screen and (min-width: 1200px) {
+            #title {
+                font-size: 48px;
             }
         }
     </style>
@@ -54,30 +75,56 @@
 
 <body>
     <div class="d-flex flex-column overflow-hidden" id="container">
-        <div class="row vh-100 overflow-hidden">
-            <div class="col-12 col-sm-6 col-xl-2 px-sm-2 px-0 bg-light text-light d-flex sticky-top ">
-                <div class="col-sm-6 d-flex flex-sm-column flex-row flex-grow-1 align-items-center align-items-sm-start"
+        <div class="row vh-100 overflow-hidden d-flex flex-row-reverse">
+            <div class="col-sm-4 col-md-8 col-xl-9 d-flex flex-column h-sm-100">
+                <div class="d-flex">
+                    <h1 class="text-center align-self-center flex-fill" id="title">Gstreamer Webrtc Camera</h1>
+                </div>
+                <video class="w-75 align-self-center" id="video0" playsinline autoplay></video>
+                <div class="text-center mb-5" id="loading" style="display: none">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
+                <div class="visualizer w-100 d-flex justify-content-center my-2" id="vis-dom">
+                    <canvas class="w-60" id="visualizer"></canvas>
+                </div>
+                <div id="elapse"></div>
+                <canvas style="display: none" id="videoCanvas"></canvas>
+                <section class="main-controls d-flex justify-content-center flex-column align-items-center">
+                    <div class="mt-3" id="buttons">
+                        <button type="button" class="btn btn-info" id="startWatch">
+                            Start
+                        </button>
+                        <button type="button" class="btn btn-light" id="screenShot">
+                            ScreenShot
+                        </button>
+                    </div>
+                </section>
+            </div>
+            <div class="col-12 col-sm-8 col-md-4 col-xl-3 px-sm-2 px-0 bg-light text-light d-flex sticky-top " id="status_tab">
+                <div class="row d-flex flex-sm-column flex-row flex-grow-1 align-items-center align-items-sm-start"
                     tabindex="-1" id="offcanvasRight">
-                    <ul class="nav nav-tabs d-flex" id="myTab" role="tablist">
-                        <li class="nav-item col-sm-6" role="presentation">
+                    <ul class="nav nav-tabs d-flex border-0" id="myTab" role="tablist">
+                        <li class="nav-item" role="presentation">
                             <button class="nav-link active" id="ctrl-panel" data-bs-toggle="tab" data-bs-target="#ctrl"
                                 type="button" role="tab" aria-controls="ctrl" aria-selected="true">
                                 Control Panel
                             </button>
                         </li>
-                        <li class="nav-item col-sm-6" role="presentation">
+                        <li class="nav-item" role="presentation">
                             <button class="nav-link" id="user-info" data-bs-toggle="tab" data-bs-target="#users"
                                 type="button" role="tab" aria-controls="users" aria-selected="false">
                                 Reports Panel
                             </button>
                         </li>
                     </ul>
-                    <div class="tab-content w-100" id="myTabContent">
+                    <div class="tab-content m-0 p-1" id="myTabContent">
                         <div class="tab-pane fade show active" id="ctrl" role="tabpanel" aria-labelledby="ctrl-panel">
-                            <div class="d-flex flex-column py-0 h-100">
-                                <div class="col-12 card">
+                            <div class="d-flex flex-column py-0">
+                                <div class="card border-0 mx-1">
                                     <div class="card-header text-primary">Navigation</div>
-                                    <div class="card-body m-0 p-0">
+                                    <div class="card-body border-0 p-0">
                                         <ul class="list-group" id="ctrls">
                                             <li class="list-group-item">
                                                 <div class="form-check form-switch">
@@ -103,7 +150,7 @@
                                         </ul>
                                     </div>
                                 </div>
-                                <div class="col-12">
+                                <div class="card border-0 mx-1">
                                     <nav>
                                         <div class="nav nav-tabs" id="nav-tab" role="tablist">
                                             <button class="nav-link active" id="tab-sdp" data-bs-toggle="tab"
@@ -115,10 +162,10 @@
                                                 Status</button>
                                         </div>
                                     </nav>
-                                    <div class="tab-content w-100" id="nav-tabContent">
+                                    <div class="tab-content" id="nav-tabContent">
                                         <div class="tab-pane fade show active m-0 p-0" id="nav-sdp" role="tabpanel"
                                             aria-labelledby="tab-sdp">
-                                            <textarea id="showsdp" class="w-100 mx-1 px-1"
+                                            <textarea id="showsdp" class="col-12"
                                                 style="min-height: 20rem;"></textarea>
                                         </div>
                                         <div class="tab-pane fade show m-0 p-0 w-100" id="nav-status" role="tabpanel"
@@ -195,32 +242,7 @@
                     </div>
                 </div>
             </div>
-            <div class="main-container col d-flex flex-column h-sm-100">
-                <div class="d-flex">
-                    <h1 class="text-center align-self-center flex-fill" id="title">Gstreamer Webrtc Camera</h1>
-                </div>
-                <video class="w-75 align-self-center" id="video0" playsinline autoplay></video>
-                <div class="text-center mb-5" id="loading" style="display: none">
-                    <div class="spinner-border" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                </div>
-                <div class="visualizer w-100 d-flex justify-content-center my-2" id="vis-dom">
-                    <canvas class="w-60" id="visualizer"></canvas>
-                </div>
-                <div id="elapse"></div>
-                <canvas style="display: none" id="videoCanvas"></canvas>
-                <section class="main-controls d-flex justify-content-center flex-column align-items-center">
-                    <div class="mt-3" id="buttons">
-                        <button type="button" class="btn btn-info" id="startWatch">
-                            Start
-                        </button>
-                        <button type="button" class="btn btn-light" id="screenShot">
-                            ScreenShot
-                        </button>
-                    </div>
-                </section>
-            </div>
+
         </div>
     </div>
 </body>
