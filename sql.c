@@ -20,15 +20,19 @@
  * Boston, MA 02110-1301, USA.
  */
 
+#include <glib.h>
 #include "sql.h"
 #include <sqlite3.h>
 #include <sys/stat.h>
+
 static sqlite3 *db;
 struct _SQLdata {
     gchar *ret;
 };
 
-static gchar *dbpath = "webrtc.db";
+static gchar *get_db_path(){
+    return g_strconcat("/home/", g_getenv("USER"), "/.config/gwc/webrtc.db", NULL);
+}
 
 static int callback(void *user_data, int argc, char **argv,
                     char **azColName) {
@@ -45,10 +49,12 @@ int init_db() {
     gchar *sql;
     int rc = SQLITE_OK;
     struct stat st;
+    gchar *dbpath = get_db_path();
     if (stat(dbpath, &st) == -1) {
         g_print("file not exists\n");
     }
     rc = sqlite3_open(dbpath, &db);
+    g_free(dbpath);
 
     if (rc != SQLITE_OK) {
         g_print("open db failed\n");
@@ -110,8 +116,9 @@ gchar *get_user_auth(const gchar *username, const gchar *realm) {
     int rc;
     gchar *errMsg;
     struct _SQLdata data = {.ret = NULL};
+    gchar *dbpath = get_db_path();
     rc = sqlite3_open(dbpath, &db);
-
+    g_free(dbpath);
     if (rc != SQLITE_OK) {
         g_print("open db failed\n");
         init_db();
@@ -122,7 +129,7 @@ gchar *get_user_auth(const gchar *username, const gchar *realm) {
     rc = sqlite3_exec(db, sql, callback, &data, &errMsg);
     sqlite3_close(db);
     if (rc != SQLITE_OK) {
-        g_print("sql error: %s \n", errMsg);
+        g_print("sql error: %s, db path:%s \n", errMsg, dbpath);
         return NULL;
     }
     g_free(sql);
@@ -135,7 +142,9 @@ gchar *get_online_user_list(const gchar *list) {
     gchar *errMsg;
     static GMutex mutex;
     struct _SQLdata data = {.ret = NULL};
+    gchar *dbpath = get_db_path();
     rc = sqlite3_open(dbpath, &db);
+    g_free(dbpath);
     if (rc != SQLITE_OK) {
         g_print("open db failed\n");
         init_db();
@@ -168,7 +177,9 @@ gchar *get_online_user_list(const gchar *list) {
 int add_http_access_log(const gchar *sql) {
     int rc;
     gchar *errMsg;
+    gchar *dbpath = get_db_path();
     rc = sqlite3_open(dbpath, &db);
+    g_free(dbpath);
 
     if (rc != SQLITE_OK) {
         g_print("open db failed\n");

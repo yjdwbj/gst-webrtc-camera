@@ -22,10 +22,11 @@
 
 #include "soup.h"
 #include "data_struct.h"
+#include "soup_const.h"
 #include "sql.h"
+#include "common_priv.h"
 #include <gst/gst.h>
 #include <gst/gstbin.h>
-#include "soup_const.h"
 
 gchar *video_priority = NULL;
 gchar *audio_priority = NULL;
@@ -677,7 +678,7 @@ do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
 
     if (stat(path, &st) == -1) {
         if (errno == EPERM)
-            soup_server_message_set_status(msg, SOUP_STATUS_FORBIDDEN,NULL);
+            soup_server_message_set_status(msg, SOUP_STATUS_FORBIDDEN, NULL);
         else if (errno == ENOENT)
             soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
         else
@@ -686,12 +687,12 @@ do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
     }
 
     if (!(g_str_has_suffix(path, HTTP_SRC_BOOT_CSS) ||
-        g_str_has_suffix(path, HTTP_SRC_BOOT_JS) ||
-        g_str_has_suffix(path, HTTP_SRC_JQUERY_JS) ||
-        g_str_has_suffix(path, HTTP_SRC_INDEX_HTML) ||
-        g_str_has_suffix(path, HTTP_SRC_HLS_JS) ||
-        g_str_has_suffix(path, HTTP_SRC_WEBRTC_HTML) ||
-        g_str_has_suffix(path, HTTP_SRC_WEBRTC_JS))) {
+          g_str_has_suffix(path, HTTP_SRC_BOOT_JS) ||
+          g_str_has_suffix(path, HTTP_SRC_JQUERY_JS) ||
+          g_str_has_suffix(path, HTTP_SRC_INDEX_HTML) ||
+          g_str_has_suffix(path, HTTP_SRC_HLS_JS) ||
+          g_str_has_suffix(path, HTTP_SRC_WEBRTC_HTML) ||
+          g_str_has_suffix(path, HTTP_SRC_WEBRTC_JS))) {
         soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
         return;
     }
@@ -733,7 +734,7 @@ do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
                 // g_print("auth:  %s, username: %s\n", auth, username);
                 // body = add_user_to_html(body, meta);
 
-                GString *html = g_string_new(g_bytes_get_data(buffer,NULL));
+                GString *html = g_string_new(g_bytes_get_data(buffer, NULL));
                 // soup_message_body_unref(oldbuf);
                 g_string_replace(html, "{{tag}}", meta, 0);
                 GBytes *newhtml = g_string_free_to_bytes(html);
@@ -791,7 +792,7 @@ static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
         soup_server_message_set_status(msg, SOUP_STATUS_INSUFFICIENT_STORAGE, NULL);
         gchar *txt = "The maximum number of connections has been reached.";
         soup_server_message_set_response(msg, "text/plain",
-                                  SOUP_MEMORY_STATIC, txt, strlen(txt));
+                                         SOUP_MEMORY_STATIC, txt, strlen(txt));
         return;
     }
     const char *method = soup_server_message_get_method(msg);
@@ -805,10 +806,10 @@ static void soup_http_handler(G_GNUC_UNUSED SoupServer *soup_server,
         file_path = g_strdup_printf(".%s", path);
         do_get(soup_server, msg, file_path);
     } else {
-        soup_server_message_set_status(msg, SOUP_STATUS_NOT_IMPLEMENTED,NULL);
+        soup_server_message_set_status(msg, SOUP_STATUS_NOT_IMPLEMENTED, NULL);
         gchar *txt = "what you want?";
         soup_server_message_set_response(msg, "text/plain",
-                                  SOUP_MEMORY_STATIC, txt, strlen(txt));
+                                         SOUP_MEMORY_STATIC, txt, strlen(txt));
     }
 
     g_free(file_path);
@@ -910,12 +911,15 @@ void start_http(webrtc_callback fn, int port, int clients) {
 
     // create self-signed certificate for local area network access
     // https://stackoverflow.com/questions/66558788/how-to-create-a-self-signed-or-signed-by-own-ca-ssl-certificate-for-ip-address
-
     GTlsCertificate *cert;
     GError *error = NULL;
-    gchar *current_dir = g_get_current_dir();
-    gchar *crt_path = g_strconcat(current_dir, "/server.crt", NULL);
-    g_free(current_dir);
+    gchar *crt_path = get_filepath_by_name("server.crt");
+    if (crt_path == NULL) {
+        g_printerr("failed to open certificate file: %s\n", crt_path);
+        g_free(crt_path);
+        return;
+    }
+
     cert = g_tls_certificate_new_from_file(crt_path, &error);
     g_free(crt_path);
     if (cert == NULL) {

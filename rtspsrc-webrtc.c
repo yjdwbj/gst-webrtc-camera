@@ -39,6 +39,7 @@
 #include <sys/stat.h>
 
 #include "v4l2ctl.h"
+#include "common_priv.h"
 
 #define STUN_SERVER "stun://stun.l.google.com:19302"
 
@@ -850,9 +851,12 @@ static void start_http(AppData *app) {
 
     GTlsCertificate *cert;
     GError *error = NULL;
-    gchar *current_dir = g_get_current_dir();
-    gchar *crt_path = g_strconcat(current_dir, "/server.crt", NULL);
-    g_free(current_dir);
+    gchar *crt_path = get_filepath_by_name("server.crt");
+    if (crt_path == NULL) {
+        g_printerr("failed to open certificate file: %s\n", crt_path);
+        g_free(crt_path);
+        return;
+    }
     cert = g_tls_certificate_new_from_file(crt_path, &error);
     g_free(crt_path);
     if (cert == NULL) {

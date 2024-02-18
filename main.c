@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include "sql.h"
 #include "v4l2ctl.h"
+#include "common_priv.h"
 
 static GMainLoop *loop;
 static GstElement *pipeline;
@@ -257,6 +258,7 @@ static void read_config_json(gchar *fullpath) {
     g_object_unref(parser);
 }
 
+#if 0
 static u_int32_t _get_config_path() {
 
     // set into the /etc/default/gwc
@@ -276,8 +278,14 @@ static u_int32_t _get_config_path() {
         return 0;
     }
 
+    config_path = g_strdup("/etc/gwc/config.json");
+    if (access(config_path, F_OK) == 0) {
+        return 0;
+    }
+
     return -1;
 }
+#endif
 
 #if defined(HAS_JETSON_NANO)
 static void
@@ -358,7 +366,8 @@ int main(int argc, char *argv[]) {
 
     if(config_path == NULL)
     {
-        _get_config_path();
+        // _get_config_path();
+        config_path = get_filepath_by_name("config.json");
     }
     if (config_path != NULL) {
         g_print("read config from: %s\n", config_path);

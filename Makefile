@@ -14,13 +14,13 @@ LIBS=$$(pkg-config --libs glib-2.0 gstreamer-1.0 gstreamer-webrtc-1.0 gstreamer-
 
 
 all: webrtc-sendonly rtspsrc-webrtc gwc
-webrtc-sendonly: webrtc-sendonly.c v4l2ctl.c
+webrtc-sendonly: webrtc-sendonly.c v4l2ctl.c common_priv.c
 	"$(CC)" $(CFLAGS) $^ $(BLIBS) -o $@
 
-rtspsrc-webrtc: rtspsrc-webrtc.c v4l2ctl.c
+rtspsrc-webrtc: rtspsrc-webrtc.c v4l2ctl.c common_priv.c
 	"$(CC)" $(CFLAGS) $^ $(BLIBS) -o $@
 
-gwc: v4l2ctl.c sql.c soup.c gst-app.c main.c
+gwc: v4l2ctl.c sql.c soup.c gst-app.c main.c common_priv.c
 	"${CC}" -Wall  -g -O0  ${CFLAGS} $^ ${LIBS} -o $@
 
 
