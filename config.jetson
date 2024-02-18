@@ -22,6 +22,7 @@
     "device": "hw0"
   },
   "rootdir": "./",
+  "webroot": "~/.config/gwc",
   "showdot": true,
   "clients": 4,
   "udp": {

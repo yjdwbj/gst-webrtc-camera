@@ -204,8 +204,20 @@ static void read_config_json(gchar *fullpath) {
         gst_println("Unsupported video encoding, please use the default h264. ");
         config_data.videnc = "h264";
     }
+    const gchar *tpath = json_object_get_string_member(root_obj, "rootdir");
+    if (tpath[0] == '~') {
+        config_data.root_dir = g_strconcat("/home/", g_getenv("USER"), &tpath[1], NULL);
+    } else {
+        config_data.root_dir = g_strdup(json_object_get_string_member(root_obj, "rootdir"));
+    }
 
-    config_data.root_dir = g_strdup(json_object_get_string_member(root_obj, "rootdir"));
+    tpath = json_object_get_string_member(root_obj, "webroot");
+    if(tpath[0] == '~') {
+        config_data.webroot = g_strconcat("/home/", g_getenv("USER"),&tpath[1], NULL);
+    } else {
+        config_data.webroot = g_strdup(json_object_get_string_member(root_obj, "webroot"));
+    }
+
 
     config_data.showdot = json_object_get_boolean_member(root_obj, "showdot");
     config_data.sysinfo = json_object_get_boolean_member(root_obj, "sysinfo");

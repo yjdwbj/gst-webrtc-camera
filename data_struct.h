@@ -67,7 +67,8 @@ struct _GstConfigData {
     int32_t clients;             // How many clients can be allowed to connect to the server.
     gchar *videnc;           // i.e; h264,h265,vp9
     gchar *root_dir;         // streams output root path;
-    gboolean showdot;        // generate gstreamer pipeline graphs;
+    gchar *webroot;
+    gboolean showdot; // generate gstreamer pipeline graphs;
     struct _splitfile_sink {
         gboolean enable;
         int32_t max_files;

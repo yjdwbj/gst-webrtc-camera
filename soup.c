@@ -675,8 +675,8 @@ static gchar *get_auth_value_by_key(const gchar *auth, const gchar *key) {
 static void
 do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
     struct stat st;
-
-    if (stat(path, &st) == -1) {
+    gchar *full_path = g_strconcat(config_data.webroot, path[0] == '.' ? &path[1] : path, NULL);
+    if (stat(full_path, &st) == -1) {
         if (errno == EPERM)
             soup_server_message_set_status(msg, SOUP_STATUS_FORBIDDEN, NULL);
         else if (errno == ENOENT)
@@ -700,7 +700,7 @@ do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
     if (soup_server_message_get_method(msg) == SOUP_METHOD_GET) {
         GMappedFile *mapping;
         GBytes *buffer;
-        mapping = g_mapped_file_new(path, FALSE, NULL);
+        mapping = g_mapped_file_new(full_path, FALSE, NULL);
         if (!mapping) {
             soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
             return;
@@ -940,6 +940,7 @@ void start_http(webrtc_callback fn, int port, int clients) {
     g_object_unref(cert);
     // g_signal_connect(soup_server, "request_started",
     //                  G_CALLBACK(request_started_callback), webrtc_connected_table);
+    gchar *webroot_path = g_strconcat("/home/", g_getenv("USER"), "/.config/gwc/", NULL);
     soup_server_add_handler(soup_server, NULL, soup_http_handler, (gpointer)data, NULL);
     soup_server_add_websocket_handler(soup_server, "/ws", NULL, NULL,
                                       soup_websocket_handler, (gpointer)data, NULL);
@@ -960,4 +961,5 @@ void start_http(webrtc_callback fn, int port, int clients) {
                            SOUP_SERVER_LISTEN_HTTPS, &error);
 
     gst_print("WebRTC page link: http://127.0.0.1:%d/\n", (gint)port);
+    g_free(webroot_path);
 }
