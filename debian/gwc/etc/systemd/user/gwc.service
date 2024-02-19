@@ -1,0 +1,15 @@
+[Unit]
+Description=Gstreamer webrtc camera
+Documentation=https://github.com/yjdwbj/gst-webrtc-camera
+After=multi-user.target
+
+[Service]
+ExecStart=/usr/sbin/gwc
+Restart=no
+Type=simple
+StandardOutput=append:/tmp/gwc.log
+StandardError=append:/tmp/gwc.log
+
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,11 @@
+Package: gwc
+Version: 0.1.0
+Architecture: amd64
+Maintainer: Michael Liu <yjdwbj@gmail.com>
+Installed-Size: 1421
+Depends: libglib2.0-0 (>= 2.74), gstreamer1.0-x (>= 1.22), libgstreamer-plugins-bad1.0-0 (>= 1.22), libgstreamer-plugins-base1.0-0 (>= 1.22), libgstreamer1.0-0 (>= 1.22), libsoup-3.0-0 (>= 3.2.2), libjson-glib-1.0-0, sqlite3
+Section: misc
+Priority: optional
+Homepage: https://github.com/yjdwbj/
+Description: webrtc camera base on gstreamer
+ Gst-webrtc-camera project base on gstreamer,project function cover the offical's tutorial and more. ex: hlssink,udpsink,appsink,splitmuxsink, and webrtc. It's privider offer webrtc camera and hls access and also record audio and video to file triggered by timer or some signal.

@@ -10,7 +10,7 @@
     "height": 600,
     "framerate": 30,
     "io_mode": 2,
-    "device": "/dev/video0",
+    "device": "/dev/video1",
     "type": "image/jpeg",
     "format": "NV12"
   },
@@ -21,8 +21,7 @@
     "buf_time": 5000000,
     "device": "hw1"
   },
-  "rootdir": "~/gwc",
-  "webroot": "~/.config/gwc",
+  "rootdir": "./",
   "showdot": true,
   "clients": 4,
   "udp": {

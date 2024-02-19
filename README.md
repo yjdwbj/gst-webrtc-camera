@@ -17,6 +17,16 @@ You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library,
 * sqlite3
 * libasan6 (optional just for -fsanitize=address)
 
+## Install
+
+* User config path at `~/.config/gwc`.
+
+```sh
+~$ dpkg -i install gwc-*.deb
+~$ systemctl --user start gwc
+~$ tail -f /tmp/gwc.log
+```
+
 ## Jetson Nano B01
 
 * In Jetson nano, I tested my custom build ubuntu-20.10 (groovy) and it can run nvvidconv and nvarguscamerasrc together.
