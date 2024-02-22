@@ -40,7 +40,7 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt-get -qq install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libsoup-3.0-dev libjson-glib-dev libsqlite3-dev -y
+          sudo -E apt-get -qq install libglib2.0-dev -y
 
       - name: clean apt-get
         env:
