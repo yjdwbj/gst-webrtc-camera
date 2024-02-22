@@ -1,0 +1,66 @@
+# This is a basic workflow to help you get started with Actions
+
+name: Compile Linux Kernel For x86_64
+
+# Controls when the workflow will run
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  push:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: 2 20 * * *
+
+env:
+  REPO_BRANCH: main
+  TZ: Asia/Shanghai
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    name: Build debian package
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@main
+        with:
+          ref: ${{ github.ref }}
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install build-essential wget git tree libelf-dev debmake debhelper -y
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+
+      - name: Release
+        run: |
+          ./build_debian_package.sh
+          cp ../*.deb ${{ github.workspace }}/
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: gwc-0.1.0.deb
+          path: ${{ github.workspace }}/*.deb
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          echo "::set-output name=release_tag::$(date +"%Y.%m.%d-%H%M")"
+          echo "Read change logs in ChangeLog" > release.txt
+          echo "::set-output name=status::success"
+
+      - name: Upload firmware to release
+        uses: softprops/action-gh-release@v1
+        if: steps.tag.outputs.status == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: release.txt
+          body_path: release.txt
+          files: ${{ github.workspace }}/*.deb
