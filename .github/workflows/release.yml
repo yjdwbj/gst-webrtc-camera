@@ -14,6 +14,7 @@ env:
   REPO_BRANCH: main
   TZ: Asia/Shanghai
 
+
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   # This workflow contains a single job called "build"
@@ -33,7 +34,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install build-essential wget git tree libelf-dev debmake debhelper make gcc binutils
+          sudo -E apt-get -qq install build-essential wget git tree libelf-dev debmake debhelper make -y
           sudo -E apt-get -qq install libglib2.0-dev gstreamer1.0-x libgstreamer-plugins-bad1.0-dev \
             libgstreamer-plugins-base1.0-dev libgstreamer1.0-dev libsoup-3.0-dev libjson-glib-dev libsqlite3-dev
           sudo -E apt-get -qq autoremove --purge
