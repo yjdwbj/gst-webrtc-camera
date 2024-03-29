@@ -2,16 +2,15 @@
 
 GWC_USER_PATH=/home/${SUDO_USER}/.config/gwc
 
-
-
 if [ ! -d ${GWC_USER_PATH} ]; then
+    echo "Not found old config files, then create new.
     mkdir ${GWC_USER_PATH}
     cp -a /etc/gwc/config.example  ${GWC_USER_PATH}/config.json
     cp -a /etc/gwc/webroot ${GWC_USER_PATH}/
     cp -a /etc/gwc/*.sh ${GWC_USER_PATH}/
     cd ${GWC_USER_PATH}/
     ./create-server-cert.sh
-    ./add_user.sh test  test lcy-gsteramer-camera ${GWC_USER_PATH}/webrtc.db
+    ./add_user.sh -u test -p test -r lcy-gsteramer-camera -d ${GWC_USER_PATH}/webrtc.db
     chown ${SUDO_USER}:${SUDO_USER} -R ${GWC_USER_PATH}
 fi
 exit 0

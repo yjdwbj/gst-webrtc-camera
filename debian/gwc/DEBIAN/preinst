@@ -2,8 +2,8 @@
 
 GWC_USER_PATH=/home/${SUDO_USER}/.config/gwc
 
-if [ -d ${GWC_USER_PATH} ]; then
-    rm -rf ${GWC_USER_PATH}
-fi
+# if [ -d ${GWC_USER_PATH} ]; then
+#     rm -rf ${GWC_USER_PATH}
+# fi
 
 exit 0

@@ -3,7 +3,7 @@
 export script_name="$(basename "${0}")"
 usage(){
     echo "Usage:"
-	echo "${script_name} <user>  <password> [realm] [dbfile]"
+	echo "${script_name} -u <user>  -p <password> -r [realm] -d [dbfile]"
 }
 
 init_user_table(){
@@ -24,15 +24,23 @@ if [ ${#@} -lt 2 ]; then
    exit 1
 fi
 
-user=$1
-password=$2
+while getopts u:p:r:d: flag
+do
+    case "${flag}" in
+        u) user=${OPTARG};;
+        d) db=${OPTARG};;
+        p) password=${OPTARG};;
+        r) realm=${OPTARG};;
+    esac
+done
 
-[ ${#@} -gt 3 ] && realm=$3 || realm="lcy-gsteramer-camera"
-[ ${#@} -ge 4 ] && db=$4 || db="webrtc.db"
+realm=${realm:-"lcy-gsteramer-camera"}
+db=${db:-"webrtc.db"}
+
+echo "username: ${user}, passwd: ${passwd}, realm: ${realm}, db: ${db}"
 
 hashpwd=$(echo -n "${user}:${realm}:${password}" | md5sum | awk '{print $1}')
 sql="INSERT INTO webrtc_user(username,password,realm) VALUES('"${user}"','"${hashpwd}"','"${realm}"');"
 init_user_table ${db}
 sqlite3 "${db}"  "${sql}"
 sqlite3 "${db}"  "SELECT * FROM webrtc_user LIMIT 50;"
-
