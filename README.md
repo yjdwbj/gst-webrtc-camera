@@ -27,6 +27,12 @@ You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library,
 ~$ tail -f /tmp/gwc.log
 ```
 
+## Install Development Environment (Optional)
+
+```sh
+~$ sudo apt-get install libgstreamer{1.0-dev,-plugins-{bad1.0-dev,base1.0-dev}} libsoup-3.0-dev libsqlite3-dev libjson-glib-dev -y
+```
+
 ## Jetson Nano B01
 
 * In Jetson nano, I tested my custom build ubuntu-20.10 (groovy) and it can run nvvidconv and nvarguscamerasrc together.
