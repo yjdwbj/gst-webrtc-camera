@@ -24,7 +24,9 @@
 #define _COMMON_PRIV_H
 #include <glib.h>
 #include <sys/stat.h>
+#define MAX_URL_LEN 1024
 
 gchar *get_filepath_by_name(const gchar *name);
+
 
 #endif // _COMMON_PRIV_H

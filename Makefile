@@ -1,6 +1,7 @@
 
 CC=gcc
-CFLAGS :=-g -Wall -fno-omit-frame-pointer -fsanitize=address -DJETSON_NANO=$$(bash -c 'if  [ -f /etc/nv_tegra_release ]; then  echo 1; else echo 0; fi')
+# -fsanitize=address is optional
+CFLAGS :=-g -Wall -fno-omit-frame-pointer  -DJETSON_NANO=$$(bash -c 'if  [ -f /etc/nv_tegra_release ]; then  echo 1; else echo 0; fi')
 EXE=gwc
 
 # https://makefiletutorial.com/#makefile-cookbook

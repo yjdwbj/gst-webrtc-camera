@@ -4,7 +4,6 @@ gchar *get_filepath_by_name(const gchar *name)
 {
     struct stat st;
     gchar *full_path = g_strconcat("/home/", g_getenv("USER"), "/.config/gwc/", name, NULL);
-
     if (stat(full_path, &st) == -1) {
         g_free(full_path);
         gchar *current_dir = g_get_current_dir();

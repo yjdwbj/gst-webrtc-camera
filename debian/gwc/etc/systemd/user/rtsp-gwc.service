@@ -1,0 +1,16 @@
+[Unit]
+Description=Rtsp redirect by gstreamer webrtc
+Documentation=https://github.com/yjdwbj/gst-webrtc-camera
+After=multi-user.target
+
+[Service]
+EnvironmentFile=/etc/default/rtsp-gwc
+ExecStart=/usr/sbin/rtspsrc-webrtc -c ${RTSP_URL} -u ${RTSP_USER} -p ${RTSP_PWD} --port=${RTSP_PORT}
+Restart=no
+Type=simple
+StandardOutput=append:/tmp/rtsp-gwc.log
+StandardError=append:/tmp/rtsp-gwc.log
+
+
+[Install]
+WantedBy=default.target

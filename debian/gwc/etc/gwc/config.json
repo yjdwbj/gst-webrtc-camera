@@ -50,6 +50,7 @@
     "max_files": 10,
     "enable": true
   },
+  "webroot": "~/.config/gwc",
   "app_sink": false,
   "motion_rec": false,
   "sysinfo": true,

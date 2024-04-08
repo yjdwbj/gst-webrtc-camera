@@ -671,12 +671,24 @@ static gchar *get_auth_value_by_key(const gchar *auth, const gchar *key) {
     return realm;
 }
 
+static gchar full_web_path[MAX_URL_LEN] = {0};
+
 #include <sys/stat.h>
 static void
 do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
     struct stat st;
-    gchar *full_path = g_strconcat(config_data.webroot, path[0] == '.' ? &path[1] : path, NULL);
-    if (stat(full_path, &st) == -1) {
+    gchar *tpath = g_strconcat(config_data.webroot, path[0] == '.' ? &path[1] : path, NULL);
+    if(strlen(tpath) >= MAX_URL_LEN)
+    {
+        soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+        g_free(tpath);
+        return;
+    }
+    memset(&full_web_path,0,MAX_URL_LEN);
+    memcpy(full_web_path,tpath,strlen(tpath));
+    g_free(tpath);
+
+    if (stat(full_web_path, &st) == -1) {
         if (errno == EPERM)
             soup_server_message_set_status(msg, SOUP_STATUS_FORBIDDEN, NULL);
         else if (errno == ENOENT)
@@ -700,7 +712,7 @@ do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
     if (soup_server_message_get_method(msg) == SOUP_METHOD_GET) {
         GMappedFile *mapping;
         GBytes *buffer;
-        mapping = g_mapped_file_new(full_path, FALSE, NULL);
+        mapping = g_mapped_file_new(full_web_path, FALSE, NULL);
         if (!mapping) {
             soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
             return;

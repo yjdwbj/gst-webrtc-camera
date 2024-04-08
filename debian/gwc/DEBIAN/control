@@ -1,5 +1,5 @@
 Package: gst-webrtc-camera
-Version: 0.1.0
+Version: 0.1.1
 Architecture: amd64
 Maintainer: Michael Liu <yjdwbj@gmail.com>
 Installed-Size: 1421

@@ -737,11 +737,24 @@ void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
     gst_print("Closed websocket connection %p\n", (gpointer)connection);
 }
 
+static gchar full_web_path[MAX_URL_LEN] = {0};
+
 static void
 do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
     struct stat st;
-
-    if (stat(path, &st) == -1) {
+    gchar *web_root = g_strconcat("/home/", g_getenv("USER"), "/.config/gwc", NULL);
+    gchar *tpath = g_strconcat(web_root, path[0] == '.' ? &path[1] : path, NULL);
+    g_free(web_root);
+    if(strlen(tpath) >= MAX_URL_LEN)
+    {
+        soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+        g_free(tpath);
+        return;
+    }
+    memset(&full_web_path,0,MAX_URL_LEN);
+    memcpy(full_web_path,tpath,strlen(tpath));
+    g_free(tpath);
+    if (stat(full_web_path, &st) == -1) {
         if (errno == EPERM)
             soup_server_message_set_status(msg, SOUP_STATUS_FORBIDDEN, NULL);
         else if (errno == ENOENT)
@@ -762,7 +775,7 @@ do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
     if (soup_server_message_get_method(msg) == SOUP_METHOD_GET) {
         GMappedFile *mapping;
         GBytes *buffer;
-        mapping = g_mapped_file_new(path, FALSE, NULL);
+        mapping = g_mapped_file_new(full_web_path, FALSE, NULL);
         if (!mapping) {
             soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
             return;
@@ -773,7 +786,6 @@ do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
                                             (GDestroyNotify)g_mapped_file_unref, mapping);
         soup_message_body_append_bytes(soup_server_message_get_response_body(msg), buffer);
         g_bytes_unref(buffer);
-
     } else /* msg->method == SOUP_METHOD_HEAD */ {
         char *length;
 
