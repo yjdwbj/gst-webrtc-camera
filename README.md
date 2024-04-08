@@ -41,6 +41,10 @@ You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library,
 
 * In RiotBoard (imx6 armv7l), I tested it can run v4l2src and v4l2jpegdec together. You can download [Pre-built RiotBoard uSD Image](https://github.com/yjdwbj/imx6-riotboard) to testing this project.
 
+## EAIDK-310 (rk3228h ARM64)
+
+* In EAIDK-310 (rk3228h ARM64), I tested it can run v4l2src and v4l2jpegdec together. You can download [Pre-built EAIDK-310 uSD Image](https://github.com/yjdwbj/rockchip-eaidk-310) to testing this project.
+
 ## Picture Gallery
 
 ![mainview-control.png](images/mainview-control.png)

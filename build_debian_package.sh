@@ -4,8 +4,6 @@ ARCH=$(dpkg --print-architecture)
 make clean
 make
 
-
-
 if [ -d deb_root ]; then
    rm -rf deb_root
 fi

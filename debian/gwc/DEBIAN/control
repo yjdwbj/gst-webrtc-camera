@@ -8,4 +8,5 @@ Section: misc
 Priority: optional
 Homepage: https://github.com/yjdwbj/
 Description: webrtc camera base on gstreamer
- Gst-webrtc-camera project base on gstreamer,project function cover the offical's tutorial and more. ex: hlssink,udpsink,appsink,splitmuxsink, and webrtc. It's privider offer webrtc camera and hls access and also record audio and video to file triggered by timer or some signal.
+ Gst-webrtc-camera project base on gstreamer,project function cover the offical's tutorial and more.
+ ex: hlssink,udpsink,appsink,splitmuxsink, and webrtc. It's privider offer webrtc camera and hls access and also record audio and video to file triggered by timer or some signal.

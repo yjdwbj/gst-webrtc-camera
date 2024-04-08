@@ -167,6 +167,10 @@ static void login_camera(AppData *app) {
     GBytes *request = NULL;
     GError *error = NULL;
     gchar *formdata = g_strdup_printf(ZTE_V520_LOGIN_FORM, app->user, app->password);
+
+    if(app->session == NULL)
+        app->session = soup_session_new();
+
     msg = soup_message_new(SOUP_METHOD_POST, app->url);
     soup_message_set_flags(msg, SOUP_MESSAGE_NO_REDIRECT);
 
