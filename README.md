@@ -9,7 +9,7 @@
 
 You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library, and the following librarys.
 
-* gstreamer >= 1.23.0
+* gstreamer >= 1.22.0
 * pkg-config
 * libjson-glib-dev >= 1.66
 * libsoup2.4-dev
@@ -25,6 +25,15 @@ You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library,
 ~$ dpkg -i install gwc-*.deb
 ~$ systemctl --user start gwc
 ~$ tail -f /tmp/gwc.log
+```
+
+## Install runtime Environment
+
+```sh
+~$ sudo apt-get install -y gstreamer1.0-x gstreamer1.0-opencv gstreamer1.0-plugins-bad \
+        gstreamer1.0-plugins-good gstreamer1.0-plugins-base gstreamer1.0-plugins-ugly \
+        libgstreamer-plugins-bad1.0-0 libgstreamer-plugins-base1.0-0 libgstreamer-plugins-opencv1.0-0 \
+        libgstreamer1.0-0 libsoup-3.0-0 libjson-glib-1.0-0 sqlite3
 ```
 
 ## Install Development Environment (Optional)
