@@ -35,6 +35,7 @@ gchar *get_device_json(const gchar* device);
 int set_ctrl_value(const gchar *device,int ctrl_id, int ctrl_val);
 int reset_user_ctrls(const gchar *device);
 int dump_video_device_fmt(const gchar *device);
-gboolean find_video_device_fmt(_v4l2src_data *data);
+gboolean find_video_device_fmt(_v4l2src_data *data, const gboolean showdump);
+gboolean get_capture_device(_v4l2src_data *data);
 
 #endif // _V4L2CTL_H

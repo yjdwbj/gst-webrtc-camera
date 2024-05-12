@@ -390,8 +390,9 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    if (!find_video_device_fmt(&config_data.v4l2src_data)) {
-        g_error("Set video pixformat failed !!!\n");
+    if (!find_video_device_fmt(&config_data.v4l2src_data,TRUE) &&
+        !get_capture_device(&config_data.v4l2src_data)) {
+        g_error("No video capture device found!!!\n");
         exit(1);
     }
 

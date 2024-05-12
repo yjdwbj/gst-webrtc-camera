@@ -21,6 +21,8 @@
  */
 #include "v4l2ctl.h"
 #include <json-glib/json-glib.h>
+#include <linux/media.h>
+#include <dirent.h>
 
 static int ctrl_list[] = {V4L2_CID_BRIGHTNESS, V4L2_CID_CONTRAST, V4L2_CID_AUTO_WHITE_BALANCE, V4L2_CID_SHARPNESS, V4L2_CID_WHITENESS};
 
@@ -382,12 +384,122 @@ int dump_video_device_fmt(const gchar *device) {
     return 0;
 }
 
-gboolean find_video_device_fmt(_v4l2src_data *data) {
+static gboolean get_default_capture_device(_v4l2src_data *data) {
+    // This is used if the wrong video configuration is set but a valid device is found on the system.
     gboolean match = FALSE;
     int fd = -1;
     struct v4l2_fmtdesc fmtdesc;
     struct v4l2_frmsizeenum frmsize;
     struct v4l2_frmivalenum frmval;
+    struct v4l2_capability capability;
+
+    memset(&fmtdesc, 0, sizeof(fmtdesc));
+    memset(&frmsize, 0, sizeof(frmsize));
+    memset(&frmval, 0, sizeof(frmval));
+    fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    fmtdesc.index = 0;
+    fmtdesc.mbus_code = 0;
+
+    fd = open(data->device, O_RDWR);
+    if (fd < 0) {
+        return match;
+    }
+
+    if (0 > ioctl(fd, VIDIOC_QUERYCAP, &capability)) {
+        goto invalid_dev;
+    }
+
+    if (g_str_has_prefix((const gchar *)&capability.bus_info, "platform:")) {
+        goto invalid_dev;
+    }
+
+    for (; 0 == ioctl(fd, VIDIOC_ENUM_FMT, &fmtdesc) && !match ; fmtdesc.index++) {
+        frmsize.pixel_format = fmtdesc.pixelformat;
+        frmsize.index = 0;
+        for (; 0 == ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &frmsize) && !match; frmsize.index++) {
+            if (frmsize.type != V4L2_FRMSIZE_TYPE_DISCRETE)
+                continue;
+            data->width = frmsize.discrete.width;
+            data->height = frmsize.discrete.height;
+            frmval.pixel_format = fmtdesc.pixelformat;
+            frmval.index = 0;
+            frmval.width = frmsize.discrete.width;
+            frmval.height = frmsize.discrete.height;
+            for (; 0 == ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &frmval); frmval.index++) {
+                gfloat fps = ((1.0 * frmval.discrete.denominator) / frmval.discrete.numerator);
+                data->framerate = (int)fps;
+                match = TRUE;
+                g_warning("!!!found an valid device: %dx%d/%d at %s\n", data->width, data->height, data->framerate, data->device);
+                break;
+            }
+        }
+    }
+
+invalid_dev:
+    close(fd);
+    return match;
+}
+
+gboolean get_capture_device(_v4l2src_data *data) {
+    GList *videolist = NULL;
+    gboolean found = FALSE;
+    DIR *devdir;
+    struct dirent *dir;
+    devdir = opendir("/dev/");
+    if(devdir) {
+        while((dir = readdir(devdir)) != NULL) {
+            if (strlen(dir->d_name) > 5 &&  g_str_has_prefix(dir->d_name, "video")) {
+                videolist = g_list_append(videolist, g_strdup_printf("/dev/%s", dir->d_name));
+            }
+        }
+        closedir(devdir);
+    }
+
+    // find an video capture device.
+    for (GList *iter = videolist; iter != NULL; iter = iter->next ){
+        _v4l2src_data item;
+        item.device = iter->data;
+        item.width = data->width;
+        item.height = data->height;
+        item.format = data->format;
+        item.framerate = data->framerate;
+        if (find_video_device_fmt(&item,FALSE)) {
+            g_warning("found video capture : %s, but not match you video capture configuration!!!\n", (const gchar *)(iter->data));
+            g_free(data->device);
+            data->device = g_strdup(iter->data);
+            found = TRUE;
+            goto found_dev;
+        }
+    }
+
+    // find an default video capture settings.
+
+    for (GList *iter = videolist; iter != NULL; iter = iter->next) {
+        _v4l2src_data item;
+        item.device = iter->data;
+        if (get_default_capture_device(&item)) {
+            g_free(data->device);
+            data->device = g_strdup(iter->data);
+            data->width = item.width;
+            data->height = item.height;
+            data->framerate = item.framerate;
+            found = TRUE;
+            break;
+        }
+    }
+
+found_dev:
+    g_list_free_full(videolist, g_free);
+    return found;
+}
+
+gboolean find_video_device_fmt(_v4l2src_data *data, const gboolean showdump) {
+    gboolean match = FALSE;
+    int fd = -1;
+    struct v4l2_fmtdesc fmtdesc;
+    struct v4l2_frmsizeenum frmsize;
+    struct v4l2_frmivalenum frmval;
+    struct v4l2_capability capability;
 
     memset(&fmtdesc, 0, sizeof(fmtdesc));
     memset(&frmsize, 0, sizeof(frmsize));
@@ -400,6 +512,27 @@ gboolean find_video_device_fmt(_v4l2src_data *data) {
     if (fd < 0) {
         return match;
     }
+
+    if( 0 > ioctl(fd, VIDIOC_QUERYCAP, &capability))
+    {
+        goto no_match;
+    }
+
+    if (g_str_has_prefix((const gchar *)&capability.bus_info,"platform:")) {
+        goto no_match;
+    }
+
+#if 0
+    struct media_device_info mdi;
+    if (0 == ioctl(fd, MEDIA_IOC_DEVICE_INFO, &mdi)) {
+        if (mdi.bus_info[0])
+            g_print("ioctl: has bus_info[0]: %s\n",(const gchar *)(mdi.bus_info));
+        else
+            g_print("ioctl: driver info: %s\n", (const gchar *)(mdi.driver));
+    } else {
+        g_print("ioctl: cap info: %s\n", (const gchar *)(capability.bus_info));
+    }
+#endif
 
     for (; 0 == ioctl(fd, VIDIOC_ENUM_FMT, &fmtdesc); fmtdesc.index++) {
         frmsize.pixel_format = fmtdesc.pixelformat;
@@ -426,8 +559,10 @@ gboolean find_video_device_fmt(_v4l2src_data *data) {
             }
         }
     }
+
+no_match:
     close(fd);
-    if (!match)
+    if (!match && showdump)
         dump_video_device_fmt(data->device);
     return match;
 }
