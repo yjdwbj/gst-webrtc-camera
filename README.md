@@ -42,17 +42,23 @@ You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library,
 ~$ sudo apt-get install libgstreamer{1.0-dev,-plugins-{bad1.0-dev,base1.0-dev}} libsoup-3.0-dev libsqlite3-dev libjson-glib-dev -y
 ```
 
-## Jetson Nano B01
+## Supported SBC
+
+### Jetson Nano B01
 
 * In Jetson nano, I tested my custom build ubuntu-20.10 (groovy) and it can run nvvidconv and nvarguscamerasrc together.
 
-## RiotBoard(armv7l)
+### RiotBoard(armv7l)
 
 * In RiotBoard (imx6 armv7l), I tested it can run v4l2src and v4l2jpegdec together. You can download [Pre-built RiotBoard uSD Image](https://github.com/yjdwbj/imx6-riotboard) to testing this project.
 
-## EAIDK-310 (rk3228h ARM64)
+### EAIDK-310 (rk3228h ARM64)
 
 * In EAIDK-310 (rk3228h ARM64), I tested it can run v4l2src and v4l2jpegdec together. You can download [Pre-built EAIDK-310 uSD Image](https://github.com/yjdwbj/rockchip-eaidk-310) to testing this project.
+
+### PINE A64+ (allwiner  sun50i-a64 ARM64)
+
+* The Pine64 is a cost-optimized board sporting ARMv8 (64-bit ARM) capable cores. It was one of the first available boards with a 64-bit Allwinner chip, and one of the first affordable boards with an 64-bit ARM core in general. You can download [Pre-built PINE A64+ uSD Image](https://github.com/yjdwbj/sun50i-a64-pine64) to testing this project. It has enabled support for the Cedrus H.264 encoder.
 
 ## Picture Gallery
 
