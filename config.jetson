@@ -1,7 +1,7 @@
 {
   "videnc": "h264",
   "http": {
-    "port": 57778,
+    "port": 9001,
     "host": "127.0.0.1",
     "user": "test",
     "password": "testsoup"
@@ -11,6 +11,7 @@
     "height": 2464,
     "framerate": 21,
     "io_mode": 2,
+    "devtype": "USB", /* USB for uvc camera, I2C for DVP and CSI camera */
     "device": "/dev/video0",
     "type": "video/x-raw(memory:NVMM)",
     "format": "NV12"

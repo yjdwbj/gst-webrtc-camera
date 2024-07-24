@@ -1,6 +1,6 @@
 {
   "http": {
-    "port": 57778,
+    "port": 9001,
     "host": "127.0.0.1",
     "user": "test",
     "password": "testsoup"
@@ -10,6 +10,7 @@
     "height": 600,
     "framerate": 30,
     "io_mode": 2,
+    "devtype": "USB", /* USB for uvc camera, I2C for DVP and CSI camera */
     "device": "/dev/video0",
     "type": "image/jpeg",
     "format": "NV12"

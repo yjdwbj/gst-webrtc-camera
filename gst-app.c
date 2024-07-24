@@ -58,6 +58,7 @@ static GMutex G_appsrc_lock;
 static GList *G_AppsrcList;
 
 GstConfigData config_data;
+GHashTable *capture_htable = NULL;
 
 #define MAKE_ELEMENT_AND_ADD(elem, name)                          \
     G_STMT_START {                                                \
@@ -667,7 +668,7 @@ static GstElement *get_audio_src() {
     filter = gst_element_factory_make("ladspa-sine-so-sine-faaa", NULL);
 
     if (!teesrc || !source || !amp || !postconv || !enc || !filter) {
-        g_printerr("audio source all elements could be created.\n");
+        g_warning("audio source all elements could be created.\n");
         return NULL;
     }
 
@@ -718,7 +719,7 @@ static GstPadLinkReturn link_request_src_pad_with_dst_name(GstElement *src, GstE
     if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
         gchar *sname = gst_pad_get_name(src_pad);
         gchar *dname = gst_pad_get_name(sink_pad);
-        g_print("Src pad %s link to sink pad %s failed . return: %s\n", sname, dname, get_link_error(lret));
+        g_print("1Src pad %s link to sink pad %s failed . return: %s\n", sname, dname, get_link_error(lret));
         get_pad_caps_info(src_pad);
         get_pad_caps_info(sink_pad);
         g_free(sname);
@@ -741,6 +742,7 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
         gst_element_class_get_metadata(klass, GST_ELEMENT_METADATA_KLASS);
     // g_print("class name:%s\n", klassname);
 #if GST_VERSION_MINOR >= 20
+    g_print("GST_VERSION_MINOR >=20\n");
     src_pad = gst_element_request_pad_simple(src, "src_%u");
 
     if(src_pad == NULL)
@@ -756,7 +758,7 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
     if ((lret = gst_pad_link(src_pad, sink_pad)) != GST_PAD_LINK_OK) {
         gchar *sname = gst_pad_get_name(src_pad);
         gchar *dname = gst_pad_get_name(sink_pad);
-        g_print("Src pad %s link to sink pad %s failed . return: %s\n", sname, dname, get_link_error(lret));
+        g_print("2Src pad %s link to sink pad %s failed . return: %s\n", sname, dname, get_link_error(lret));
         get_pad_caps_info(src_pad);
         get_pad_caps_info(sink_pad);
         g_free(sname);
@@ -2093,32 +2095,25 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
     gchar *upenc = g_ascii_strup(config_data.videnc, strlen(config_data.videnc));
     // here must have rtph264depay and rtph264pay to be compatible with  mobile browser.
 
-    if (g_str_has_prefix(config_data.videnc, "h26"))
-    {
-#if defined(HAS_JETSON_NANO)
-        video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s socket-timestamp=1  ! "
-                                    " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
-                                    " rtp%sdepay ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
-                                    config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, config_data.videnc, config_data.videnc, webrtc_name);
-#else
+    if (g_str_has_prefix(config_data.videnc, "h26")) {
         gchar *rtp = get_rtp_args();
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo  socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                     " %s ! rtp%spay  config-interval=-1  aggregate-mode=1 ! %s. ",
                                     config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, rtp, config_data.videnc, webrtc_name);
+
         g_free(rtp);
-#endif
     } else
         video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo socket-timestamp=1  ! "
                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)%s,payload=(int)96 ! "
                                     " %s. ",
                                     config_data.webrtc.udpsink.port, config_data.webrtc.udpsink.addr, upenc, webrtc_name);
-    g_free(upenc);
 
+    g_free(upenc);
     if (audio_source != NULL) {
         gchar *audio_src = udpsrc_audio_cmdline(webrtc_name);
         cmdline = g_strdup_printf("webrtcbin name=%s stun-server=stun://%s %s %s ", webrtc_name, config_data.webrtc.stun, audio_src, video_src);
-        g_print("webrtc cmdline: %s \n", cmdline);
+        // g_print("webrtc cmdline: %s \n", cmdline);
         g_free(audio_src);
         g_free(video_src);
     } else {
@@ -2128,7 +2123,7 @@ void start_udpsrc_webrtcbin(WebrtcItem *item) {
         cmdline = g_strdup_printf("webrtcbin name=%s stun-server=stun://%s %s", webrtc_name, config_data.webrtc.stun, video_src);
         // g_free(turn_srv);
     }
-
+    // g_print("webrtc cmdline: %s \n", cmdline);
     item->sendpipe = gst_parse_launch(cmdline, NULL);
     gst_element_set_state(item->sendpipe, GST_STATE_READY);
 
@@ -3073,6 +3068,7 @@ int edgedect_hlssink() {
 static void _initial_device() {
     if (is_initial)
         return;
+
     _mkdir(config_data.root_dir, 0755);
     record_time = config_data.rec_len;
 
@@ -3125,9 +3121,32 @@ GThread *start_inotify_thread(void) {
 
 GstElement *create_instance() {
     pipeline = gst_pipeline_new("pipeline");
+
+    if (!capture_htable)
+        capture_htable = initial_capture_hashtable();
+
+    if (config_data.v4l2src_data.spec_drv) {
+        _v4l2src_data *data = &config_data.v4l2src_data;
+
+        g_print("found specfic capture driver is: %s\n", data->spec_drv);
+        gchar *cmdformat = g_hash_table_lookup(capture_htable, data->spec_drv);
+        gchar *cmdline = g_strdup_printf(cmdformat, data->device, data->format, data->width,
+                                         data->height, data->framerate,
+                                         config_data.webrtc.udpsink.addr,
+                                         config_data.webrtc.udpsink.port);
+        GstElement *cmdlinebin = gst_parse_launch(cmdline, NULL);
+        gst_element_set_state(cmdlinebin, GST_STATE_READY);
+        g_print("run cmdline: %s\n", cmdline);
+        gst_element_set_state(cmdlinebin, GST_STATE_PLAYING);
+        g_free(cmdline);
+
+        // gst_element_sync_state_with_parent(cmdlinebin);
+        gst_bin_add(GST_BIN(pipeline), cmdlinebin);
+        return pipeline;
+    }
+
     if (!is_initial)
         _initial_device();
-
 
     // start_av_fakesink();
     if (config_data.splitfile_sink.enable)
@@ -3156,8 +3175,8 @@ GstElement *create_instance() {
         start_av_appsink();
     }
 
-    if (config_data.webrtc.enable) {
+    if (config_data.webrtc.enable)
         start_av_udpsink();
-    }
+
     return pipeline;
 }

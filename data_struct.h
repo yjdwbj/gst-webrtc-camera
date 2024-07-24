@@ -54,6 +54,8 @@ struct _http_data {
 
 typedef struct  {
     gchar *device;
+    gchar *devtype;
+    gchar *spec_drv; // specified command line, i.e: gst-launch-1.0 -v v4l2src device=${device} num-buffers=-1 ...
     int32_t width;
     int32_t height;
     int32_t framerate;

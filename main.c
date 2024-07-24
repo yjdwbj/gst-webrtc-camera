@@ -164,6 +164,7 @@ static void read_config_json(gchar *fullpath) {
 
     object = json_object_get_object_member(root_obj, "v4l2src");
     config_data.v4l2src_data.device = g_strdup(json_object_get_string_member(object, "device"));
+    config_data.v4l2src_data.devtype = g_strdup(json_object_get_string_member(object, "devtype"));
     config_data.v4l2src_data.format = g_strdup(json_object_get_string_member(object, "format"));
     config_data.v4l2src_data.type = g_strdup(json_object_get_string_member(object, "type"));
 
@@ -390,8 +391,8 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    if (!find_video_device_fmt(&config_data.v4l2src_data,TRUE) &&
-        !get_capture_device(&config_data.v4l2src_data)) {
+    if (!find_video_device_fmt(&config_data.v4l2src_data, TRUE)
+        && !get_capture_device(&config_data.v4l2src_data)) {
         g_error("No video capture device found!!!\n");
         exit(1);
     }

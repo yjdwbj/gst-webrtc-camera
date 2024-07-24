@@ -667,7 +667,7 @@ static gchar *get_auth_value_by_key(const gchar *auth, const gchar *key) {
         }
         // g_print("name: %s, value: %s\n", name, value);
     }
-    g_free(pairs);
+    g_strfreev(pairs);
     return realm;
 }
 
