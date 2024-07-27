@@ -742,7 +742,6 @@ static GstPadLinkReturn link_request_src_pad(GstElement *src, GstElement *dst) {
         gst_element_class_get_metadata(klass, GST_ELEMENT_METADATA_KLASS);
     // g_print("class name:%s\n", klassname);
 #if GST_VERSION_MINOR >= 20
-    g_print("GST_VERSION_MINOR >=20\n");
     src_pad = gst_element_request_pad_simple(src, "src_%u");
 
     if(src_pad == NULL)
@@ -3136,7 +3135,7 @@ GstElement *create_instance() {
                                          config_data.webrtc.udpsink.port);
         GstElement *cmdlinebin = gst_parse_launch(cmdline, NULL);
         gst_element_set_state(cmdlinebin, GST_STATE_READY);
-        g_print("run cmdline: %s\n", cmdline);
+        // g_print("run cmdline: %s\n", cmdline);
         gst_element_set_state(cmdlinebin, GST_STATE_PLAYING);
         g_free(cmdline);
 

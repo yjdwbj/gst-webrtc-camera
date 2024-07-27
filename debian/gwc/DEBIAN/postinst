@@ -1,7 +1,7 @@
 #!/bin/bash
 
 GWC_USER_PATH=/home/${SUDO_USER}/.config/gwc
-
+echo "Running post install script."
 if [ ! -d ${GWC_USER_PATH} ]; then
     echo "Not found old config files, then create new."
     mkdir -pv ${GWC_USER_PATH}

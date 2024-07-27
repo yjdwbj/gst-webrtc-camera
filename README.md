@@ -39,7 +39,9 @@ You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library,
 ## Install Development Environment (Optional)
 
 ```sh
-~$ sudo apt-get install libgstreamer{1.0-dev,-plugins-{bad1.0-dev,base1.0-dev}} libsoup-3.0-dev libsqlite3-dev libjson-glib-dev -y
+~$ sudo apt-get install libgstreamer{1.0-dev,-plugins-{bad1.0-dev,base1.0-dev}} \
+                libsoup-3.0-dev libsqlite3-dev libjson-glib-dev libudev-dev libblkid-dev \
+                libmount-dev -y
 ```
 
 ## Supported SBC

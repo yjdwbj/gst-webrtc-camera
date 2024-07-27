@@ -34,7 +34,9 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install build-essential wget git tree libelf-dev debmake debhelper make -y
+          sudo -E apt-get -qq install build-essential wget git tree make bison flex yasm
+          sudo -E apt-get -qq install gcc-arm-linux-gnueabi libelf-dev debmake debhelper make -y
+          sudo -E apt-get -qq install gcc g++ binutils binutils-arm-linux-gnueabi gcc-arm-linux-gnueabi -y
 
       - name: Install gstreamera library
         env:

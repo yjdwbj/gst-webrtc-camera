@@ -206,7 +206,7 @@ static gchar *get_table_list() {
     gchar *list = g_strdup("( ");
     GList *item = g_hash_table_get_keys(webrtc_connected_table);
     for (; item; item = item->next) {
-        gchar *td = g_strdup_printf("%" G_GUINT64_FORMAT ",", (intptr_t)(item->data));
+        gchar *td = g_strdup_printf("%" G_GUINT64_FORMAT ",", (u_long)(item->data));
         gchar *tmp = g_strconcat(list, td, NULL);
         g_free(list);
         g_free(td);
@@ -510,7 +510,7 @@ static void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
     // webrtc_entry->client = client_context;
     webrtc_entry->send_channel = NULL;
     webrtc_entry->receive_channel = NULL;
-    webrtc_entry->hash_id = (intptr_t)(webrtc_entry->connection);
+    webrtc_entry->hash_id = (u_long)(webrtc_entry->connection);
 
     g_object_ref(G_OBJECT(connection));
 

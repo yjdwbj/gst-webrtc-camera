@@ -425,7 +425,7 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     get_rtsp_url(app);
 
     // gchar *turn_srv = NULL;
-    gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (intptr_t)(receiver_entry->connection));
+    gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (u_long)(receiver_entry->connection));
     gchar *video_src = g_strdup_printf("udpsrc %s  ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " %s. ",

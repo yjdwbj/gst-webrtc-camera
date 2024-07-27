@@ -154,7 +154,7 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
                      G_CALLBACK(soup_websocket_message_cb), (gpointer)receiver_entry);
 
     // gchar *turn_srv = NULL;
-    gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (intptr_t)(receiver_entry->connection));
+    gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (u_long)(receiver_entry->connection));
     gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! rtph264pay config-interval=-1  aggregate-mode=1 ! %s. ",
