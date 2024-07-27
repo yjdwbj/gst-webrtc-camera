@@ -128,16 +128,12 @@ function build_target() {
          CROSS_COMPILE=arm-linux-gnueabi-
          CC=${CROSS_COMPILE}gcc
          SYSROOT=${HOME}/3TB-DISK/gitlab/docker-cross-compile-qt5/builds/riotboard/debian-4.0-stable/debian-armhf
-         # PKG_CONFIG_PATH=${SYSROOT}/usr/lib/arm-linux-gnueabihf/pkgconfig
-         # LDFLAGS=--sysroot=${SYSROOT} -L${SYSROOT}/usr/lib/arm-linux-gnueabihf -Wl,-dynamic-linker,/lib/ld-linux-armhf.so.3 -Wl,-rpath-link ${SYSROOT}/usr/lib/arm-linux-gnueabihf
          ;;
       arm64)
          ARCH=${TARGET_ARCH}
          CROSS_COMPILE=aarch64-linux-gnu-
          CC=${CROSS_COMPILE}gcc
          SYSROOT=${HOME}/3TB-DISK/gitlab/docker-cross-compile-qt5/builds/sun50i_a64-repo/debian-4.0-bookworm/debian-arm64
-         # PKG_CONFIG_PATH=${SYSROOT}/usr/lib/arm-linux-gnueabihf/pkgconfig
-         # LDFLAGS=--sysroot=${SYSROOT} -L${SYSROOT}/usr/lib/arm-linux-gnueabihf -Wl,-dynamic-linker,/lib/ld-linux-armhf.so.3 -Wl,-rpath-link ${SYSROOT}/usr/lib/arm-linux-gnueabihf
          ;;
       *)
          echo "build native mode"
