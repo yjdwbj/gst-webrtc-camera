@@ -560,8 +560,10 @@ static GstElement *get_video_src() {
             jpegdec = gst_element_factory_make("vajpegdec", NULL);
         else if (gst_element_factory_find("vaapijpegdec"))
             jpegdec = gst_element_factory_make("vaapijpegdec", NULL);
+#if 0
         else if (gst_element_factory_find("v4l2jpegdec"))
             jpegdec = gst_element_factory_make("v4l2jpegdec", NULL);
+#endif
         else {
             jpegdec = gst_element_factory_make("jpegdec", NULL);
             jpegparse = gst_element_factory_make("jpegparse", NULL);
@@ -2167,7 +2169,7 @@ int start_av_udpsink() {
     if (g_str_has_prefix(config_data.videnc, "h26")) {
         g_object_set(video_pay, "config-interval", -1, "aggregate-mode", 1, NULL);
     }
-    g_object_set(vqueue, "max-size-time", 100000000, NULL);
+    // g_object_set(vqueue, "max-size-time", 100000000, NULL);
 
     if (g_strcmp0(config_data.videnc, "vp8")) {
         // vp8parse not avavilable ?

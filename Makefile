@@ -4,7 +4,7 @@
 EXE=gwc
 
 ifeq ($(ARCH),arm)
-CFLAGS :=-g -Wall -fno-omit-frame-pointer
+CFLAGS :=-g -Wall -fno-omit-frame-pointer -DJETSON_NANO=0
 ARCH := arm
 CROSS_COMPILE := arm-linux-gnueabi-
 CC :=$(CROSS_COMPILE)gcc
@@ -15,6 +15,7 @@ endif
 
 ifeq ($(ARCH),arm64)
 CFLAGS :=-g -Wall -fno-omit-frame-pointer   -DJETSON_NANO=$$(bash -c 'if  [ -f /etc/nv_tegra_release ]; then  echo 1; else echo 0; fi')
+
 ARCH := arm64
 CROSS_COMPILE := aarch64-linux-gnu-
 CC :=$(CROSS_COMPILE)gcc
@@ -24,7 +25,7 @@ LDFLAGS :=--sysroot=${SYSROOT} -L${SYSROOT}/usr/lib/aarch64-linux-gnu -Wl,-dynam
 endif
 
 ifeq ($(ARCH),amd64)
-CFLAGS :=-g -Wall -fno-omit-frame-pointer
+CFLAGS :=-g -Wall -fno-omit-frame-pointer   -DJETSON_NANO=0
 
 endif
 

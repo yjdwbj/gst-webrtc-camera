@@ -63,11 +63,17 @@ struct _APPData {
     int port;
     gchar *udphost; // for udpsink and udpsrc
     int udpport;
+    gchar *iface; // multicast iface
 };
 
 static AppData gs_app = {
     NULL, NULL, NULL, NULL,
-    "/dev/video0", "video/x-raw,width=800,height=600,format=YUY2,framerate=25/1", NULL, "test", "test1234", 57778, "127.0.0.1", 5000};
+    "/dev/video0",
+    "video/x-raw,width=800,height=600,format=YUY2,framerate=25/1",
+    NULL,
+    "test",
+    "test1234", 57778, "127.0.0.1", 5000,
+    "lo"};
 
 static void start_http(AppData *app);
 
@@ -145,6 +151,7 @@ ReceiverEntry *
 create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     ReceiverEntry *receiver_entry;
     gchar *cmdline = NULL;
+    GError *error = NULL;
 
     receiver_entry = g_new0(ReceiverEntry, 1);
     receiver_entry->connection = connection;
@@ -155,16 +162,16 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
 
     // gchar *turn_srv = NULL;
     gchar *webrtc_name = g_strdup_printf("send_%" G_GUINT64_FORMAT, (u_long)(receiver_entry->connection));
-    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo ! "
+    gchar *video_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=%s ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! rtph264pay config-interval=-1  aggregate-mode=1 ! %s. ",
-                                       app->udpport, app->udphost, webrtc_name);
+                                       app->udpport, app->udphost, app->iface, webrtc_name);
     if (app->audio_dev != NULL) {
-        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=lo ! "
+        gchar *audio_src = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=%s ! "
                                            " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
                                            " rtpopusdepay ! rtpopuspay !  "
                                            " queue leaky=1 ! %s.",
-                                           app->udpport + 1, app->udphost, webrtc_name);
+                                           app->udpport + 1, app->udphost, app->iface, webrtc_name);
         cmdline = g_strdup_printf("webrtcbin name=%s stun-server=%s %s %s ", webrtc_name, STUN_SERVER, audio_src, video_src);
         g_print("webrtc cmdline: %s \n", cmdline);
         g_free(audio_src);
@@ -177,7 +184,14 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
         // g_free(turn_srv);
     }
     g_print("webrtc cmdline: %s\n", cmdline);
-    receiver_entry->pipeline = gst_parse_launch(cmdline, NULL);
+    receiver_entry->pipeline = gst_parse_launch(cmdline, &error);
+    if (error) {
+        gchar *message = g_strdup_printf("Unable to start cmdline: %s\n", error->message);
+        g_print("%s", message);
+        g_free(message);
+        g_error_free(error);
+    }
+
     gst_element_set_state(receiver_entry->pipeline, GST_STATE_READY);
     g_free(cmdline);
 
@@ -424,12 +438,24 @@ void soup_websocket_closed_cb(SoupWebsocketConnection *connection,
     gst_print("Closed websocket connection %p\n", (gpointer)connection);
 }
 
+static gchar full_web_path[MAX_URL_LEN] = {0};
+
 #include <sys/stat.h>
 static void
 do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
     struct stat st;
 
-    if (stat(path, &st) == -1) {
+    gchar *tpath = g_strconcat("/home/", g_getenv("USER"), "/.config/gwc/", path[0] == '.' ? &path[1] : path, NULL);
+    if (strlen(tpath) >= MAX_URL_LEN) {
+        soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+        g_free(tpath);
+        return;
+    }
+    memset(&full_web_path, 0, MAX_URL_LEN);
+    memcpy(full_web_path, tpath, strlen(tpath));
+    g_free(tpath);
+
+    if (stat(full_web_path, &st) == -1) {
         if (errno == EPERM)
             soup_server_message_set_status(msg, SOUP_STATUS_FORBIDDEN, NULL);
         else if (errno == ENOENT)
@@ -451,7 +477,7 @@ do_get(SoupServer *server, SoupServerMessage *msg, const char *path) {
     if (soup_server_message_get_method(msg) == SOUP_METHOD_GET) {
         GMappedFile *mapping;
         GBytes *buffer;
-        mapping = g_mapped_file_new(path, FALSE, NULL);
+        mapping = g_mapped_file_new(full_web_path, FALSE, NULL);
         if (!mapping) {
             soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
             return;
@@ -667,6 +693,7 @@ static GOptionEntry entries[] = {
     {"port", 0, 0, G_OPTION_ARG_INT, &gs_app.port, "Port to listen on (default: 57778 )", "PORT"},
     {"udphost", 0, 0, G_OPTION_ARG_STRING, &gs_app.udphost, "Address for udpsink (default : 224.1.1.5)", "ADDR"},
     {"udpport", 0, 0, G_OPTION_ARG_INT, &gs_app.udpport, "Port for udpsink (default: 5000 )", "PORT"},
+    {"iface", 0, 0, G_OPTION_ARG_STRING, &gs_app.iface, "multicast iface (default: lo )", "IFACE"},
     {NULL}};
 
 int main(int argc, char *argv[]) {
@@ -701,7 +728,7 @@ int main(int argc, char *argv[]) {
     if (gst_element_factory_find("vaapih264enc"))
         enc = g_strdup("vaapih264enc");
     else if (gst_element_factory_find("v4l2h264enc"))
-        enc = g_strdup(" video/x-raw,format=I420 ! v4l2h264enc");
+        enc = g_strdup(" video/x-raw,format=I420 ! v4l2h264enc ");
     else
         enc = g_strdup(" video/x-raw,format=I420 ! x264enc ! h264parse");
 
@@ -718,11 +745,16 @@ int main(int argc, char *argv[]) {
             jpegdec = g_strdup("vaapijpegdec");
             strvcaps = g_strdup_printf("%s ! %s ", app->video_caps, jpegdec);
         } else {
+#if 0
             if (gst_element_factory_find("v4l2jpegdec")) {
                 jpegdec = g_strdup("v4l2jpegdec");
             } else {
                 jpegdec = g_strdup("jpegdec");
             }
+#else
+            jpegdec = g_strdup("jpegdec");
+#endif
+
             strvcaps = g_strdup_printf("%s ! jpegparse ! %s ", app->video_caps, jpegdec);
         }
 
@@ -732,16 +764,16 @@ int main(int argc, char *argv[]) {
     gchar *cmdline = g_strdup_printf(
         "v4l2src device=%s ! %s ! videoconvert ! %s ! %s ! %s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
         " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-        " queue leaky=1  ! udpsink port=%d host=%s multicast-iface=lo async=false sync=false ",
-        app->video_dev, strvcaps, clockstr, textoverlay, enc, app->udpport, app->udphost);
+        " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=%s async=false sync=false ",
+        app->video_dev, strvcaps, clockstr, textoverlay, enc, app->udpport, app->udphost, app->iface);
     g_free(strvcaps);
     g_free(enc);
 
     if (app->audio_dev != NULL) {
         gchar *tmp = g_strdup_printf("alsasrc device=%s ! audioconvert ! opusenc ! rtpopuspay ! "
                                      " application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)97 ! "
-                                     " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=lo async=false sync=false  %s",
-                                     app->audio_dev, app->udpport + 1, app->udphost, cmdline);
+                                     " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=%s async=false sync=false  %s",
+                                     app->audio_dev, app->udpport + 1, app->udphost, app->iface, cmdline);
         g_free(cmdline);
         cmdline = g_strdup(tmp);
         g_free(tmp);

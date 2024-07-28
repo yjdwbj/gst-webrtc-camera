@@ -32,8 +32,10 @@ You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library,
 ## Install runtime Environment
 
 ```sh
-~$ sudo apt-get install -y
-        gstreamer1.0-x gstreamer1.0-opencv \
+~$ sudo apt-get install \
+        gstreamer1.0-x \
+        gstreamer1.0-nice \
+        gstreamer1.0-opencv \
         gstreamer1.0-plugins-bad \
         gstreamer1.0-plugins-good \
         gstreamer1.0-plugins-base \
@@ -42,7 +44,7 @@ You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library,
         libgstreamer-plugins-base1.0-0 \
         libgstreamer-opencv1.0-0 \
         libgstreamer1.0-0 libsoup-3.0-0 \
-        libjson-glib-1.0-0 sqlite3
+        libjson-glib-1.0-0 sqlite3 -y
 ```
 
 ## Install Development Environment (Optional)
