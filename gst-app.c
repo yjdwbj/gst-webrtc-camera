@@ -208,6 +208,19 @@ gchar *get_shellcmd_results(const gchar *shellcmd) {
     return val;
 }
 
+static gchar *get_cpu_info_by_sysfs() {
+    // static gchar *soc_path = "/sys/devices/soc0";
+    FILE *fp;
+    gchar *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    fp = fopen("/sys/devices/soc0/machine", "r");
+    if (fp == NULL || (read = getline(&line, &len, fp)) == -1)
+        return NULL;
+    fclose(fp);
+    return line;
+}
+
 #include <sys/utsname.h>
 static gchar *get_basic_sysinfo() {
     // g_file_get_contents("/etc/lsb-release", &contents, NULL, NULL);
@@ -215,7 +228,8 @@ static gchar *get_basic_sysinfo() {
     memset(&buffer, 0, sizeof(buffer));
     uname(&buffer);
 
-    gchar *cpumodel = get_shellcmd_results("cat /proc/cpuinfo | grep 'model name' | head -n1 | awk -F ':' '{print \"CPU:\"$2}'");
+    gchar *cpumodel = get_cpu_info_by_sysfs();
+
     gchar *memsize = get_shellcmd_results("free -h | awk 'NR==2{print $1$2}'");
     // gchar *kerstr = get_shellcmd_results("uname -a");
     gchar *line = g_strconcat(cpumodel, "\t", memsize, "\n",
@@ -223,7 +237,8 @@ static gchar *get_basic_sysinfo() {
                               buffer.release, "\t", buffer.version, "\t",
                               buffer.machine, NULL);
 
-    g_free(cpumodel);
+    if(cpumodel != NULL)
+        g_free(cpumodel);
     g_free(memsize);
     // g_free(kerstr);
     return line;
@@ -3128,7 +3143,7 @@ GstElement *create_instance() {
 
     if (config_data.v4l2src_data.spec_drv) {
         _v4l2src_data *data = &config_data.v4l2src_data;
-
+        // CSI and DVP cameras must first be linked using media-ctl.
         g_print("found specfic capture driver is: %s\n", data->spec_drv);
         gchar *cmdformat = g_hash_table_lookup(capture_htable, data->spec_drv);
         gchar *cmdline = g_strdup_printf(cmdformat, data->device, data->format, data->width,

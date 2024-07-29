@@ -28,6 +28,18 @@
       width: 60% !important;
     }
 
+    .w-75 {
+      width: 75% !important;
+    }
+
+    .h-60 {
+      height: 60% !important;
+    }
+
+    .h-80 {
+      height: 80% !important;
+    }
+
     .container {
       height: 100%;
       display: flex;
@@ -49,6 +61,7 @@
         margin: 0 auto;
       }
     }
+
   </style>
   <title>GStreamer webrtc camera</title>
 </head>
@@ -57,7 +70,7 @@
     <h1 class="text-center align-self-center flex-fill" id="title">Gstreamer Webrtc Camera</h1>
   </div>
   <div class="text-center" id="container">
-    <video class="w-60" id="video0" playsinline autoplay></video>
+    <video class="w-80 h-80" id="video0" playsinline autoplay></video>
     <div class="text-center mb-5" id="loading" style="display: none">
       <div class="spinner-border" role="status">
         <span class="visually-hidden">Loading...</span>

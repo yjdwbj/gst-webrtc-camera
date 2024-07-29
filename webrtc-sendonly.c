@@ -64,6 +64,7 @@ struct _APPData {
     gchar *udphost; // for udpsink and udpsrc
     int udpport;
     gchar *iface; // multicast iface
+    int videoflip; // video flip direction
 };
 
 static AppData gs_app = {
@@ -73,7 +74,7 @@ static AppData gs_app = {
     NULL,
     "test",
     "test1234", 57778, "127.0.0.1", 5000,
-    "lo"};
+    "lo",8};
 
 static void start_http(AppData *app);
 
@@ -666,17 +667,32 @@ static gchar *get_shellcmd_results(const gchar *shellcmd) {
     return val;
 }
 
+static gchar *get_cpu_info_by_sysfs() {
+    // static gchar *soc_path = "/sys/devices/soc0";
+    FILE *fp;
+    gchar *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    fp = fopen("/sys/devices/soc0/machine", "r");
+    if (fp == NULL || (read = getline(&line, &len, fp)) == -1)
+        return NULL;
+    fclose(fp);
+    return line;
+}
+
 static gchar *get_basic_sysinfo() {
     // g_file_get_contents("/etc/lsb-release", &contents, NULL, NULL);
-    gchar *cpumodel = get_shellcmd_results("cat /proc/cpuinfo | grep 'model name' | head -n1 | awk -F ':' '{print \"CPU:\"$2}'");
+    // gchar *cpumodel = get_shellcmd_results("cat /proc/cpuinfo | grep 'model name' | head -n1 | awk -F ':' '{print \"CPU:\"$2}'");
+    gchar *cpumodel = get_cpu_info_by_sysfs();
     gchar *memsize = get_shellcmd_results("free -h | awk 'NR==2{print $1$2}'");
     gchar *kerstr = get_shellcmd_results("uname -a");
-    gchar *line = g_strconcat(cpumodel, "\t", memsize, kerstr, NULL);
+    gchar *line = g_strconcat(cpumodel, memsize, kerstr, NULL);
 
     g_free(kerstr);
-    g_free(cpumodel);
+    if (cpumodel != NULL)
+        g_free(cpumodel);
     g_free(memsize);
-    return line;
+    return g_strchomp(line);
 }
 
 static GOptionEntry entries[] = {
@@ -694,6 +710,7 @@ static GOptionEntry entries[] = {
     {"udphost", 0, 0, G_OPTION_ARG_STRING, &gs_app.udphost, "Address for udpsink (default : 224.1.1.5)", "ADDR"},
     {"udpport", 0, 0, G_OPTION_ARG_INT, &gs_app.udpport, "Port for udpsink (default: 5000 )", "PORT"},
     {"iface", 0, 0, G_OPTION_ARG_STRING, &gs_app.iface, "multicast iface (default: lo )", "IFACE"},
+    {"videoflip", 0, 0, G_OPTION_ARG_INT, &gs_app.videoflip, "video flip direction, see detail for videoflip (default: 8 )", "DIRECTION"},
     {NULL}};
 
 int main(int argc, char *argv[]) {
@@ -728,7 +745,11 @@ int main(int argc, char *argv[]) {
     if (gst_element_factory_find("vaapih264enc"))
         enc = g_strdup("vaapih264enc");
     else if (gst_element_factory_find("v4l2h264enc"))
+#if defined(__ARM_ARCH_7__) // here has been tested on riotboard, imx6 armv7l
         enc = g_strdup(" video/x-raw,format=I420 ! v4l2h264enc ");
+#else
+        enc = g_strdup(" v4l2h264enc ");
+#endif
     else
         enc = g_strdup(" video/x-raw,format=I420 ! x264enc ! h264parse");
 
@@ -761,11 +782,12 @@ int main(int argc, char *argv[]) {
         g_free(jpegdec);
     }
 
+    // CSI and DVP cameras must first be linked using media-ctl.
     gchar *cmdline = g_strdup_printf(
-        "v4l2src device=%s ! %s ! videoconvert ! %s ! %s ! %s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
+        "v4l2src device=%s !  %s ! videoflip video-direction=%d ! %s ! %s ! %s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
         " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
         " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=%s async=false sync=false ",
-        app->video_dev, strvcaps, clockstr, textoverlay, enc, app->udpport, app->udphost, app->iface);
+        app->video_dev, strvcaps, app->videoflip, clockstr, textoverlay, enc, app->udpport, app->udphost, app->iface);
     g_free(strvcaps);
     g_free(enc);
 
