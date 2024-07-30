@@ -60,11 +60,13 @@ struct _APPData {
     gchar *audio_dev;  // only for alsasrc device
     gchar *user;
     gchar *password;
+    int videoflip; // video flip direction
     int port;
     gchar *udphost; // for udpsink and udpsrc
     int udpport;
-    gchar *iface; // multicast iface
-    int videoflip; // video flip direction
+    gchar *iface;  // multicast iface
+    gchar *record_path; // Format string pattern for the location of the files to write (e.g. video%05d.mp4)
+    int max_time;    // The duration of recording video files, in minutes. 0 means no recording or saving of video files.
 };
 
 static AppData gs_app = {
@@ -73,8 +75,8 @@ static AppData gs_app = {
     "video/x-raw,width=800,height=600,format=YUY2,framerate=25/1",
     NULL,
     "test",
-    "test1234", 57778, "127.0.0.1", 5000,
-    "lo",8};
+    "test1234", 8, 57778, "127.0.0.1", 5000,
+    "lo","",0};
 
 static void start_http(AppData *app);
 
@@ -711,6 +713,8 @@ static GOptionEntry entries[] = {
     {"udpport", 0, 0, G_OPTION_ARG_INT, &gs_app.udpport, "Port for udpsink (default: 5000 )", "PORT"},
     {"iface", 0, 0, G_OPTION_ARG_STRING, &gs_app.iface, "multicast iface (default: lo )", "IFACE"},
     {"videoflip", 0, 0, G_OPTION_ARG_INT, &gs_app.videoflip, "video flip direction, see detail for videoflip (default: 8 )", "DIRECTION"},
+    {"record_path", 0, 0, G_OPTION_ARG_STRING, &gs_app.record_path, "Format string pattern for the location of the files to write (e.g. video%05d.mp4)", "PATH"},
+    {"max_time", 0, 0, G_OPTION_ARG_INT, &gs_app.max_time, "The duration of recording video files, in minutes.0 means no recording or saving of video files.", "MAX_TIME"},
     {NULL}};
 
 int main(int argc, char *argv[]) {
@@ -782,12 +786,32 @@ int main(int argc, char *argv[]) {
         g_free(jpegdec);
     }
 
-    // CSI and DVP cameras must first be linked using media-ctl.
     gchar *cmdline = g_strdup_printf(
-        "v4l2src device=%s !  %s ! videoflip video-direction=%d ! %s ! %s ! %s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
-        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-        " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=%s async=false sync=false ",
-        app->video_dev, strvcaps, app->videoflip, clockstr, textoverlay, enc, app->udpport, app->udphost, app->iface);
+        "v4l2src device=%s !  %s ! videoflip video-direction=%d ! %s ! %s ! %s ",
+        app->video_dev, strvcaps, app->videoflip, clockstr, textoverlay, enc);
+
+    if (app->max_time > 0) {
+        gchar *tmp = g_strdup_printf("%s ! tee name=t ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
+                                     " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                     " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=%s async=false sync=false "
+                                     " t. ! h264parse ! queue ! splitmuxsink max-size-time=%"G_GUINT64_FORMAT" location=\"%s\" max-files=100",
+                                     cmdline, app->udpport, app->udphost, app->iface, (app->max_time * 60 * GST_SECOND), app->record_path);
+        g_free(cmdline);
+        cmdline = g_strdup(tmp);
+        g_free(tmp);
+    } else {
+        // CSI and DVP cameras must first be linked using media-ctl.
+        gchar *tmp = g_strdup_printf(
+            " %s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
+            " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+            " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=%s async=false sync=false ",
+            cmdline, app->udpport, app->udphost, app->iface);
+
+        g_free(cmdline);
+        cmdline = g_strdup(tmp);
+        g_free(tmp);
+    }
+
     g_free(strvcaps);
     g_free(enc);
 
