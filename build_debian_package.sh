@@ -3,7 +3,7 @@
 # ARCH=$(dpkg --print-architecture)
 # make clean
 # make
-VERSION=0.1.2
+VERSION=0.1.3
 TAG=v${VERSION}
 
 if [ -d deb_root ]; then
@@ -60,12 +60,14 @@ if [ ! -d \${GWC_USER_PATH} ]; then
     echo "Not found old config files, then create new."
     mkdir -pv \${GWC_USER_PATH}
     cp -a /etc/gwc/config.example  \${GWC_USER_PATH}/config.json
-    cp -a /etc/gwc/webroot \${GWC_USER_PATH}/
+    cp -a /etc/gwc/webroot/* \${GWC_USER_PATH}/webroot/
     cp -a /etc/gwc/*.sh \${GWC_USER_PATH}/
     cd \${GWC_USER_PATH}/
     ./create-server-cert.sh
     ./add_user.sh -u test -p test -r lcy-gsteramer-camera -d \${GWC_USER_PATH}/webrtc.db
     chown \${SUDO_USER}:\${SUDO_USER} -R \${GWC_USER_PATH}
+else
+   cp -a /etc/gwc/webroot/* \${GWC_USER_PATH}/webroot/
 fi
 exit 0
 EOF
