@@ -32,6 +32,15 @@
       width: 60% !important;
     }
 
+    .w-70 {
+      width: 70% !important;
+    }
+
+    .w-95 {
+      width: 95% !important;
+    }
+
+
     .container {
       height: 100%;
       display: flex;
@@ -60,8 +69,10 @@
 </head>
 <body>
   <div class="d-flex">
-    <a class="btn btn-primary align-self-start m-2" href="index.html" role="button">Show HLS Stream</a>
-    <h1 class="text-center align-self-center flex-fill" id="title">Gstreamer Webrtc Camera</h1>
+    <a class="btn btn-primary align-self-start m-2 btn-sm" href="index.html" id="switch-pc" role="button" style="display: none">Show HLS Stream</a>
+    <a class="btn btn-sm btn-primary align-self-start m-2 btn-sm" href="index.html" id="switch-mobile" role="button" style="display: none">Show HLS Stream</a>
+    <h1 class="text-center align-self-center flex-fill" id="title-pc" style="display: none">Gstreamer Webrtc Camera</h1>
+    <h5 class="text-center align-self-center flex-fill" id="title-mobile" style="display: none">Gstreamer Webrtc Camera</h5>
   </div>
   <div class="text-center" id="container">
     <video class="w-60" id="video0" playsinline autoplay></video>
