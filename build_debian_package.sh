@@ -69,6 +69,8 @@ if [ ! -d \${GWC_USER_PATH} ]; then
 else
    cp -a /etc/gwc/webroot/* \${GWC_USER_PATH}/webroot/
 fi
+
+systemctl daemon-reload
 exit 0
 EOF
    chmod 755 ${DEB_PKG_ROOT}/DEBIAN/postinst
@@ -137,6 +139,12 @@ function build_target() {
          CC=${CROSS_COMPILE}gcc
          SYSROOT=${HOME}/3TB-DISK/gitlab/docker-cross-compile-qt5/builds/sun50i_a64-repo/debian-4.0-bookworm/debian-arm64
          ;;
+      amd64)
+          ARCH=${TARGET_ARCH}
+          unset CROSS_COMPILE
+          unset CC
+          unset SYSROOT
+          ;;
       *)
          echo "build native mode"
    esac
@@ -155,11 +163,11 @@ function build_target() {
    TARGET_FILE=../gwc-git-$(date +%Y-%m-%d)_${hash_tag}_${TAG}_${TARGET_ARCH}.deb
    [ -f ${TARGET_FILE} ] && rm -rf  ${TARGET_FILE}
    dpkg-deb --root-owner-group -b ${DEB_PKG_ROOT} ${TARGET_FILE}
-   ./upload-github-release-asset.sh  tag="LATEST" filename=${TARGET_FILE}
+   ./upload-github-release-asset.sh  tag="Latest" filename=${TARGET_FILE}
 }
 
 
-for arch in arm amd64 arm64
+for arch in amd64 arm64 arm
 do
    build_target $arch
 done

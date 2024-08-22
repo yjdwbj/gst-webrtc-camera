@@ -43,22 +43,21 @@ AUTH="Authorization: token ${GITHUB_TOKEN}"
 WGET_ARGS="--content-disposition --auth-no-challenge --no-cookie"
 CURL_ARGS="-LJO#"
 
-if [[ "$tag" == 'LATEST' ]]; then
-  GH_TAGS="$GH_REPO/releases/latest"
-fi
+GH_TAGS="$GH_REPO/releases/latest"
 
 # Validate token.
 curl -o /dev/null -sH "$AUTH" $GH_REPO || { echo "Error: Invalid repo, token or network issue!";  exit 1; }
 
-# Read asset tags.
-response=$(curl -sH "$AUTH" $GH_TAGS)
+# Read asset tags
+id=$(curl -sH "$AUTH" $GH_TAGS | jq '.id')
+#response=$(curl -sH "$AUTH" $GH_TAGS)
 
 # Get ID of the asset based on given filename.
-eval $(echo "$response" | grep -m 1 "id.:" | grep -w id | tr : = | tr -cd '[[:alnum:]]=')
-[ "$id" ] || { echo "Error: Failed to get release id for tag: $tag"; echo "$response" | awk 'length($0)<100' >&2; exit 1; }
+#eval $(echo "$response" | grep -m 1 "id.:" | grep -w id | tr : = | tr -cd '[[:alnum:]]=')
+#[ "$id" ] || { echo "Error: Failed to get release id for tag: $tag"; echo "$response" | awk 'length($0)<100' >&2; exit 1; }
 
 # Upload asset
-echo "Uploading asset... "
+echo "Uploading asset... $id "
 
 # Construct url
 GH_ASSET="https://uploads.github.com/repos/${OWNER}/${REPO_NAME}/releases/$id/assets?name=$(basename $filename)"
