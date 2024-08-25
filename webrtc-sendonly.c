@@ -755,7 +755,7 @@ int main(int argc, char *argv[]) {
         enc = g_strdup(" v4l2h264enc ");
 #endif
     else
-        enc = g_strdup(" video/x-raw,format=I420 ! x264enc ! h264parse");
+        enc = g_strdup(" video/x-raw,format=I420  ! x264enc ! h264parse");
 
     gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
     GstCaps *vcaps = gst_caps_from_string(app->video_caps);
@@ -787,16 +787,22 @@ int main(int argc, char *argv[]) {
     }
 
     gchar *cmdline = g_strdup_printf(
-        "v4l2src device=%s !  %s ! videoflip video-direction=%d ! %s ! %s ! %s ",
+        "v4l2src device=%s !  %s ! videoflip video-direction=%d ! videoconvert ! %s ! %s ! %s ",
         app->video_dev, strvcaps, app->videoflip, clockstr, textoverlay, enc);
 
+
     if (app->max_time > 0) {
-        gchar *tmp = g_strdup_printf("%s ! tee name=t ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
+        gchar *splitfile = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=%s ! "
+                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                       " rtph264depay ! h264parse ! splitmuxsink muxer=matroskamux muxer-factory=matroskamux "
+                                       " max-size-time=%"G_GUINT64_FORMAT" location=%s/video%s.mkv max-files=100",
+                                       app->udpport, app->udphost, app->iface,(app->max_time * 60 * GST_SECOND), app->record_path,"%05d");
+        gchar *tmp = g_strdup_printf("%s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
                                      " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                     " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=%s async=false sync=false "
-                                     " t. ! h264parse ! queue ! splitmuxsink max-size-time=%"G_GUINT64_FORMAT" location=\"%s\" max-files=100",
-                                     cmdline, app->udpport, app->udphost, app->iface, (app->max_time * 60 * GST_SECOND), app->record_path);
+                                     " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=%s async=false sync=false %s ",
+                                     cmdline, app->udpport, app->udphost, app->iface ,splitfile);
         g_free(cmdline);
+        g_free(splitfile);
         cmdline = g_strdup(tmp);
         g_free(tmp);
     } else {
