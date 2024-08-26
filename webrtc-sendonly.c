@@ -67,6 +67,7 @@ struct _APPData {
     gchar *iface;  // multicast iface
     gchar *record_path; // Format string pattern for the location of the files to write (e.g. video%05d.mp4)
     int max_time;    // The duration of recording video files, in minutes. 0 means no recording or saving of video files.
+    gboolean show_sys; // show system basic info
 };
 
 static AppData gs_app = {
@@ -76,7 +77,7 @@ static AppData gs_app = {
     NULL,
     "test",
     "test1234", 8, 57778, "127.0.0.1", 5000,
-    "lo","",0};
+    "lo","",0, FALSE};
 
 static void start_http(AppData *app);
 
@@ -715,11 +716,11 @@ static GOptionEntry entries[] = {
     {"videoflip", 0, 0, G_OPTION_ARG_INT, &gs_app.videoflip, "video flip direction, see detail for videoflip (default: 8 )", "DIRECTION"},
     {"record_path", 0, 0, G_OPTION_ARG_STRING, &gs_app.record_path, "Format string pattern for the location of the files to write (e.g. video%05d.mp4)", "PATH"},
     {"max_time", 0, 0, G_OPTION_ARG_INT, &gs_app.max_time, "The duration of recording video files, in minutes.0 means no recording or saving of video files.", "MAX_TIME"},
+    {"show_sys", 's', 0, G_OPTION_ARG_INT, &gs_app.show_sys, "show system info", "SHOW_SYS"},
     {NULL}};
 
 int main(int argc, char *argv[]) {
     GOptionContext *context;
-    gchar *contents;
     GError *error = NULL;
     gchar *strvcaps;
     gchar *enc = NULL;
@@ -745,7 +746,6 @@ int main(int argc, char *argv[]) {
     g_assert(app->loop != NULL);
 
     const gchar *clockstr = "clockoverlay time-format=\"%D %H:%M:%S\"";
-    contents = get_basic_sysinfo();
     if (gst_element_factory_find("vaapih264enc"))
         enc = g_strdup("vaapih264enc");
     else if (gst_element_factory_find("v4l2h264enc"))
@@ -756,8 +756,8 @@ int main(int argc, char *argv[]) {
 #endif
     else
         enc = g_strdup(" video/x-raw,format=I420  ! x264enc ! h264parse");
-
-    gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
+    
+    
     GstCaps *vcaps = gst_caps_from_string(app->video_caps);
     GstStructure *structure = gst_caps_get_structure(vcaps, 0);
     g_print(" caps name is: %s\n", gst_structure_get_name(structure));
@@ -786,10 +786,23 @@ int main(int argc, char *argv[]) {
         g_free(jpegdec);
     }
 
-    gchar *cmdline = g_strdup_printf(
+    gchar *cmdline = NULL;
+
+    if(app->show_sys) {
+        gchar *contents;
+        contents = get_basic_sysinfo();    
+        gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
+        cmdline =  g_strdup_printf(
         "v4l2src device=%s !  %s ! videoflip video-direction=%d ! videoconvert ! %s ! %s ! %s ",
         app->video_dev, strvcaps, app->videoflip, clockstr, textoverlay, enc);
-
+        g_free(textoverlay);
+        g_free(contents);
+    } else {
+         cmdline =  g_strdup_printf(
+        "v4l2src device=%s !  %s ! videoflip video-direction=%d ! videoconvert ! %s ! %s ",
+        app->video_dev, strvcaps, app->videoflip, clockstr, enc);
+    }
+  
 
     if (app->max_time > 0) {
         gchar *splitfile = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=%s ! "
@@ -842,8 +855,7 @@ int main(int argc, char *argv[]) {
     }
 
     g_free(cmdline);
-    g_free(textoverlay);
-    g_free(contents);
+  
 
     if (gst_element_set_state(app->pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         g_printerr("unable to set the pipeline to playing state %d. maybe the alsasrc device is wrong. \n", GST_STATE_CHANGE_FAILURE);
