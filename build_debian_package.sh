@@ -70,14 +70,6 @@ else
    cp -a /etc/gwc/webroot/* \${GWC_USER_PATH}/webroot/
 fi
 
-memtotal=\$(cat /proc/meminfo | grep "MemTotal:" | awk '{print \$2}')
-mem2g=\$((1003284 * 1024 * 2))
-
-if [[ \$memtoal -lt \$mem2g ]]; then
-   rm -rf /etc/systemd/user/gwc.service
-fi
-
-
 systemctl daemon-reload
 exit 0
 EOF
@@ -98,11 +90,11 @@ EOF
 # Default settings for webrtc-sendonly.
 # systemctl --user status webrtc-gwc
 
-USER=admin
-PWD=admin1234
+W_USER=admin
+W_PWD=admin1234
 IFACE=eth0
 UDPHOST=224.1.1.5
-PORT=9001
+W_PORT=9001
 CAPS=video/x-raw,width=1280,height=720,framerate=10/1,format=YUY2
 EOF
 
@@ -114,7 +106,7 @@ After=multi-user.target
 
 [Service]
 EnvironmentFile=/etc/default/webrtc-gwc
-ExecStart=/usr/sbin/webrtc-sendonly -c \${CAPS} --udphost=\$UDPHOST  --iface=\$IFACE --port=\$PORT -u \$USER -p \$PWD
+ExecStart=/usr/sbin/webrtc-sendonly -c \${CAPS} --udphost=\${UDPHOST}  --iface=\${IFACE} --port=\${W_PORT} -u \${W_USER} -p \${W_PWD}
 Restart=no
 Type=simple
 StandardOutput=append:/tmp/webrtc-sendoly.log
@@ -124,7 +116,7 @@ StandardError=append:/tmp/webrtc-sendoly.log
 [Install]
 WantedBy=default.target
 EOF
-
+   chmod 755 ${DEB_PKG_ROOT}/etc/systemd/user/webrtc-gwc.service
    cat > ${DEB_PKG_ROOT}/etc/systemd/user/gwc.service <<EOF
 [Unit]
 Description=Gstreamer webrtc camera
