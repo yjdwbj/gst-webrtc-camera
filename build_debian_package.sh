@@ -55,10 +55,17 @@ EOF
 #!/bin/bash
 
 GWC_USER_PATH=/home/\${SUDO_USER}/.config/gwc
+USER_SYSTEMD=/home/\${SUDO_USER}/.config/systemd/user/default.target.wants
+
+if [ ! -d \${USER_SYSTEMD} ]; then
+   mkdir -pv \${USER_SYSTEMD}
+fi
+
+chown \${SUDO_USER}:\${SUDO_USER} -R /home/\${SUDO_USER}/.config
 
 if [ ! -d \${GWC_USER_PATH} ]; then
     echo "Not found old config files, then create new."
-    mkdir -pv \${GWC_USER_PATH}
+    mkdir -pv \${GWC_USER_PATH} 
     cp -a /etc/gwc/config.example  \${GWC_USER_PATH}/config.json
     cp -a /etc/gwc/webroot/* \${GWC_USER_PATH}/webroot/
     cp -a /etc/gwc/*.sh \${GWC_USER_PATH}/
@@ -79,10 +86,11 @@ EOF
 # Default settings for rtsp-gwc.
 # systemctl --user status rtsp-gwc
 
+RTSP_URL=http://192.168.1.30
 RTSP_USER=admin
-RTSP_PWD=admin
-RTSP_URL=http://192.168.2.10
+RTSP_PWD=admin 
 RTSP_PORT=9002
+
 EOF
 
 
@@ -90,12 +98,16 @@ EOF
 # Default settings for webrtc-sendonly.
 # systemctl --user status webrtc-gwc
 
-W_USER=admin
-W_PWD=admin1234
-IFACE=eth0
+CAPS=video/x-raw,width=1280,height=720,framerate=10/1,format=YUY2 
+VIDEO_PATH=/mnt/nfs
 UDPHOST=224.1.1.5
-W_PORT=9001
-CAPS=video/x-raw,width=1280,height=720,framerate=10/1,format=YUY2
+WEB_PORT=9001
+AUTH_USER=admin
+AUTH_PWD=admin
+MAX_TIME=10
+IFACE=eth0
+
+
 EOF
 
  cat > ${DEB_PKG_ROOT}/etc/systemd/user/webrtc-gwc.service <<EOF
@@ -106,8 +118,7 @@ After=multi-user.target
 
 [Service]
 EnvironmentFile=/etc/default/webrtc-gwc
-ExecStart=/usr/sbin/webrtc-sendonly -c \${CAPS} --udphost=\${UDPHOST}  --iface=\${IFACE} --port=\${W_PORT} -u \${W_USER} -p \${W_PWD}
-Restart=no
+ExecStart=/usr/sbin/webrtc-sendonly -c \${CAPS} -u \${AUTH_USER} -p \${AUTH_PWD} --port=\${WEB_PORT} --udphost=\${UDPHOST}
 Type=simple
 StandardOutput=append:/tmp/webrtc-sendoly.log
 StandardError=append:/tmp/webrtc-sendoly.log
