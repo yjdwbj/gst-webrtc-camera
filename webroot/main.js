@@ -194,6 +194,11 @@ window.onload = function () {
     document.getElementById('title-pc').style['display'] = runOnMoble ? "none" : "block";
     document.getElementById('title-mobile').style['display'] = runOnMoble ? "block" : "none";
 
+    if(runOnMoble) {
+        document.getElementById('video0').classList.remove("w-60");
+        document.getElementById('video0').classList.add("w-95");
+      }
+
 
     // enableTalk.disabled = true;
 
