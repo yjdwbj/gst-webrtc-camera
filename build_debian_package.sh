@@ -3,7 +3,7 @@
 # ARCH=$(dpkg --print-architecture)
 # make clean
 # make
-VERSION=0.1.3
+VERSION=0.1.4
 TAG=v${VERSION}
 
 if [ -d deb_root ]; then
@@ -26,6 +26,7 @@ Architecture: ${PKG_ARCH}
 Maintainer: Michael Liu <yjdwbj@gmail.com>
 Installed-Size: 1421
 Depends: libglib2.0-0 (>= 2.74),
+        gstreamer1.0-nice,
         gstreamer1.0-x (>= 1.22),
         gstreamer1.0-opencv (>= 1.22),
         gstreamer1.0-plugins-bad (>= 1.22),
@@ -54,7 +55,7 @@ EOF
    cat > ${DEB_PKG_ROOT}/DEBIAN/postinst <<EOF
 #!/bin/bash
 
-GWC_USER_PATH=/home/\${SUDO_USER}/.config/gwc
+GWC_USER_PATH=/home/\${SUDO_USER}/.config/gwc/webroot
 USER_SYSTEMD=/home/\${SUDO_USER}/.config/systemd/user/default.target.wants
 
 if [ ! -d \${USER_SYSTEMD} ]; then
@@ -100,12 +101,12 @@ EOF
 
 CAPS=video/x-raw,width=1280,height=720,framerate=10/1,format=YUY2 
 VIDEO_PATH=/mnt/nfs
-UDPHOST=224.1.1.5
+UDPHOST=127.0.0.1
 WEB_PORT=9001
 AUTH_USER=admin
 AUTH_PWD=admin
+# 10 mintues
 MAX_TIME=10
-IFACE=eth0
 
 
 EOF

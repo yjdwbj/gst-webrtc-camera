@@ -11,9 +11,10 @@
 You'll need `meson`, the `gstreamer-plugins-bad,gstreamer-plugins-good` library, and the following librarys.
 
 * gstreamer >= 1.22.0
+* gstreamer1.0-nice
 * pkg-config
 * libjson-glib-dev >= 1.66
-* libsoup2.4-dev
+* libsoup-3.0-dev
 * glib-2.0 >= 2.74.6
 * sqlite3
 * libudev

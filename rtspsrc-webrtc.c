@@ -43,6 +43,17 @@
 
 #define STUN_SERVER "stun://stun.l.google.com:19302"
 
+const char *g_stun_sv[] = {
+  "stun.l.google.com:19302",
+  "stun1.l.google.com:19302",
+  "stun2.l.google.com:19302",
+  "stun3.l.google.com:19302",
+  "stun4.l.google.com:19302",
+  "stun.ekiga.net",
+  "stun.stunprotocol.org:3478",
+  "stun.voipbuster.com",
+  "stun.voipstunt.com"};
+
 #define AUDIO_PORT "6006"
 #define VIDEO_PORT "6005"
 #define MUDP_ADDR "224.1.1.4"

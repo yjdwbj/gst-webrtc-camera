@@ -803,13 +803,13 @@ int main(int argc, char *argv[]) {
         app->video_dev, strvcaps, app->videoflip, clockstr, enc);
     }
   
-
+#define NS_OF_SECOND 1000000000
     if (app->max_time > 0) {
         gchar *splitfile = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=%s ! "
                                        " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                        " rtph264depay ! h264parse ! splitmuxsink muxer=matroskamux muxer-factory=matroskamux "
                                        " max-size-time=%"G_GUINT64_FORMAT" location=%s/video%s.mkv max-files=100",
-                                       app->udpport, app->udphost, app->iface,(app->max_time * 60 * GST_SECOND), app->record_path,"%05d");
+                                       app->udpport, app->udphost, app->iface,(app->max_time * 60 * NS_OF_SECOND), app->record_path,"%05d");
         gchar *tmp = g_strdup_printf("%s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
                                      " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                      " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=%s async=false sync=false %s ",
