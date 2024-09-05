@@ -25,6 +25,11 @@
 #include <locale.h>
 #include <sys/stat.h>
 #include "soup_const.h"
+#include <arpa/inet.h>
+#include <netinet/in.h>		/* sockaddr_in, htons, in_addr */
+#include <netinet/in_systm.h>	/* misc crud that netinet/ip.h references */
+#include <netinet/ip.h>		/* IPOPT_LSRR, header stuff */
+#include <netinet/tcp.h>
 
 #ifdef G_OS_UNIX
 #include <glib-unix.h>
@@ -172,11 +177,57 @@ got_body(SoupServerMessage *msg, gpointer user_data) {
 
 #endif
 
-static void login_camera(AppData *app) {
+static int try_connect(const char *dest_uri) {
+    int ret = -1;
+    int netfd = socket (AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    int synRetries = 2; // Send a total of 3 SYN packets => Timeout ~7s
+    setsockopt(netfd, IPPROTO_TCP, TCP_SYNCNT, &synRetries, sizeof(synRetries));
+    struct sockaddr_in srv_addr;
+    GError *error = NULL;
+    //GUri *uri = g_uri_parse ("http://host/path?query=http%3A%2F%2Fhost%2Fpath%3Fparam%3Dvalue", G_URI_FLAGS_ENCODED, &error);
+
+    GUri *uri = g_uri_parse (dest_uri, SOUP_HTTP_URI_FLAGS, &error);
+    if (error) {
+       g_print("get parse error: %s\r\n", error->message);
+       g_error_free(error);
+       return ret;
+    }
+    char *hostname = g_strdup(g_uri_get_host (uri));
+    short port = g_uri_get_port(uri);
+    g_uri_unref(uri);
+  
+    if(netfd < 0)
+    {
+        fprintf(stderr,"Open network socket failed\n");
+        return ret;
+    }
+
+    if (g_hostname_is_ip_address (hostname)) {
+        srv_addr.sin_family = AF_INET;
+        srv_addr.sin_port = htons(port);
+        srv_addr.sin_addr.s_addr =  inet_addr (hostname);
+        ret = connect (netfd,(struct sockaddr *)&srv_addr, sizeof (srv_addr));
+    }
+    close(netfd);
+    g_free(hostname);
+    
+    return ret;
+}
+
+
+static int login_camera(AppData *app) {
     SoupMessage *msg;
-    GBytes *response = NULL;
+    GBytes *response = NULL; 
     GBytes *request = NULL;
     GError *error = NULL;
+    int ret = -1;
+    printf("login url: %s\n",app->url);
+    ret = try_connect(app->url);
+
+    if( ret < 0 ) {
+        g_warning("Can not to connect source server: %s\n",app->url);
+        return ret ;
+    }
     gchar *formdata = g_strdup_printf(ZTE_V520_LOGIN_FORM, app->user, app->password);
 
     if(app->session == NULL)
@@ -202,6 +253,7 @@ static void login_camera(AppData *app) {
     g_bytes_unref(request);
     g_object_unref(msg);
     g_free(formdata);
+    return ret;
 }
 
 static void get_rtsp_url(AppData *app) {
@@ -345,7 +397,8 @@ static GstElement *start_to_fetch_rtspsrc(AppData *app) {
     GError *error = NULL;
     gchar *cmdline;
     GstElement *fetch_pipeline;
-    login_camera(app);
+    if(login_camera(app) < 0)
+        return NULL;
     get_rtsp_url(app);
     // profile-level-id=(string)640028
     // profile-level-id=(string)42e01f
@@ -425,14 +478,17 @@ create_receiver_entry(SoupWebsocketConnection *connection, AppData *app) {
     gchar *video_priority = "high";
     gchar *audio_priority = "medium";
 #endif
+    if(login_camera(app) < 0) {
+        return NULL;
+    }
     receiver_entry = g_new0(ReceiverEntry, 1);
     receiver_entry->connection = connection;
-
     g_object_ref(G_OBJECT(connection));
     g_signal_connect(G_OBJECT(connection), "message",
                      G_CALLBACK(soup_websocket_message_cb), (gpointer)receiver_entry);
 
-    login_camera(app);
+    
+
     get_rtsp_url(app);
 
     // gchar *turn_srv = NULL;
@@ -855,8 +911,11 @@ void soup_websocket_handler(G_GNUC_UNUSED SoupServer *server,
                      G_CALLBACK(soup_websocket_closed_cb), app);
 
     receiver_entry = create_receiver_entry(connection, app);
+    if(receiver_entry == NULL ) return ;
+
     receiver_entry->rtspsrcpipe = start_to_fetch_rtspsrc(app);
-    g_hash_table_insert(app->receiver_entry_table, connection, receiver_entry);
+    if(receiver_entry->rtspsrcpipe != NULL) 
+        g_hash_table_insert(app->receiver_entry_table, connection, receiver_entry);
 }
 
 
@@ -872,6 +931,7 @@ digest_auth_callback(SoupAuthDomain *auth_domain,
                                                    HTTP_AUTH_DOMAIN_REALM,
                                                    gs_app.password);
 }
+
 
 static void start_http(AppData *app) {
     SoupAuthDomain *auth_domain;

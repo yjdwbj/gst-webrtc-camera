@@ -78,7 +78,10 @@ else
    cp -a /etc/gwc/webroot/* \${GWC_USER_PATH}/webroot/
 fi
 
-systemctl daemon-reload
+su - \${SUDO_USER}  \
+      -c "export XDG_RUNTIME_DIR=/run/user/\${SUDO_UID}  DBUS_SESSION_BUS_ADDRESS='unix:path=\${XDG_RUNTIME_DIR}/bus' ;\
+      systemctl --user daemon-reload; systemctl --user start gwc; systemctl --user start webrtc-gwc"
+
 exit 0
 EOF
    chmod 755 ${DEB_PKG_ROOT}/DEBIAN/postinst
