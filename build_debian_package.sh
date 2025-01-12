@@ -66,7 +66,7 @@ chown \${SUDO_USER}:\${SUDO_USER} -R /home/\${SUDO_USER}/.config
 
 if [ ! -d \${GWC_USER_PATH} ]; then
     echo "Not found old config files, then create new."
-    mkdir -pv \${GWC_USER_PATH} 
+    mkdir -pv \${GWC_USER_PATH}
     cp -a /etc/gwc/config.example  \${GWC_USER_PATH}/config.json
     cp -a /etc/gwc/webroot/* \${GWC_USER_PATH}/webroot/
     cp -a /etc/gwc/*.sh \${GWC_USER_PATH}/
@@ -75,7 +75,7 @@ if [ ! -d \${GWC_USER_PATH} ]; then
     ./add_user.sh -u test -p test -r lcy-gsteramer-camera -d \${GWC_USER_PATH}/webrtc.db
     chown \${SUDO_USER}:\${SUDO_USER} -R \${GWC_USER_PATH}
 else
-   cp -a /etc/gwc/webroot/* \${GWC_USER_PATH}/webroot/
+   cp -a /etc/gwc/webroot/* \${GWC_USER_PATH}/
 fi
 
 su - \${SUDO_USER}  \
@@ -92,7 +92,7 @@ EOF
 
 RTSP_URL=http://192.168.1.30
 RTSP_USER=admin
-RTSP_PWD=admin 
+RTSP_PWD=admin
 RTSP_PORT=9002
 
 EOF
@@ -102,7 +102,7 @@ EOF
 # Default settings for webrtc-sendonly.
 # systemctl --user status webrtc-gwc
 
-CAPS=video/x-raw,width=1280,height=720,framerate=10/1,format=YUY2 
+CAPS=video/x-raw,width=1280,height=720,framerate=10/1,format=YUY2
 VIDEO_PATH=/mnt/nfs
 UDPHOST=127.0.0.1
 WEB_PORT=9001
@@ -122,7 +122,7 @@ After=multi-user.target
 
 [Service]
 EnvironmentFile=/etc/default/webrtc-gwc
-ExecStart=/usr/sbin/webrtc-sendonly -c \${CAPS} -u \${AUTH_USER} -p \${AUTH_PWD} --port=\${WEB_PORT} --udphost=\${UDPHOST}
+ExecStart=/usr/sbin/webrtc-sendonly -c \${CAPS} -u \${AUTH_USER} -p \${AUTH_PWD} --port=\${WEB_PORT} --udphost=\${UDPHOST} --max_time=\${MAX_TIME} --record_path=\${VIDEO_PATH}
 Type=simple
 StandardOutput=append:/tmp/webrtc-sendoly.log
 StandardError=append:/tmp/webrtc-sendoly.log

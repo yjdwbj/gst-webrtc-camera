@@ -756,8 +756,8 @@ int main(int argc, char *argv[]) {
 #endif
     else
         enc = g_strdup(" video/x-raw,format=I420  ! x264enc ! h264parse");
-    
-    
+
+
     GstCaps *vcaps = gst_caps_from_string(app->video_caps);
     GstStructure *structure = gst_caps_get_structure(vcaps, 0);
     g_print(" caps name is: %s\n", gst_structure_get_name(structure));
@@ -790,7 +790,7 @@ int main(int argc, char *argv[]) {
 
     if(app->show_sys) {
         gchar *contents;
-        contents = get_basic_sysinfo();    
+        contents = get_basic_sysinfo();
         gchar *textoverlay = g_strdup_printf("textoverlay text=\"%s\" valignment=bottom line-alignment=left halignment=left ", contents);
         cmdline =  g_strdup_printf(
         "v4l2src device=%s !  %s ! videoflip video-direction=%d ! videoconvert ! %s ! %s ! %s ",
@@ -802,14 +802,16 @@ int main(int argc, char *argv[]) {
         "v4l2src device=%s !  %s ! videoflip video-direction=%d ! videoconvert ! %s ! %s ",
         app->video_dev, strvcaps, app->videoflip, clockstr, enc);
     }
-  
+
 #define NS_OF_SECOND 1000000000
     if (app->max_time > 0) {
+        u_int64_t maxsizetime = (u_int64_t)app->max_time * (60L) * GST_SECOND;
+        g_print("++record max size time: %lld\n", maxsizetime);
         gchar *splitfile = g_strdup_printf("udpsrc port=%d multicast-group=%s multicast-iface=%s ! "
-                                       " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
-                                       " rtph264depay ! h264parse ! splitmuxsink muxer=matroskamux muxer-factory=matroskamux "
-                                       " max-size-time=%"G_GUINT64_FORMAT" location=%s/video%s.mkv max-files=100",
-                                       app->udpport, app->udphost, app->iface,(app->max_time * 60 * NS_OF_SECOND), app->record_path,"%05d");
+                                           " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
+                                           " rtph264depay ! h264parse ! splitmuxsink muxer=matroskamux muxer-factory=matroskamux "
+                                           " max-size-time=%lld location=%s/video%s.mkv max-files=100",
+                                           app->udpport, app->udphost, app->iface, maxsizetime, app->record_path, "%05d");
         gchar *tmp = g_strdup_printf("%s ! rtph264pay config-interval=-1  aggregate-mode=1 ! "
                                      " application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264,payload=(int)96 ! "
                                      " queue leaky=1 ! udpsink port=%d host=%s multicast-iface=%s async=false sync=false %s ",
@@ -855,7 +857,7 @@ int main(int argc, char *argv[]) {
     }
 
     g_free(cmdline);
-  
+
 
     if (gst_element_set_state(app->pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         g_printerr("unable to set the pipeline to playing state %d. maybe the alsasrc device is wrong. \n", GST_STATE_CHANGE_FAILURE);
