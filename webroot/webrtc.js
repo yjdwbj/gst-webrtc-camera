@@ -554,17 +554,26 @@ window.onload = function () {
       if (reconnectTimerId)
         clearTimeout(reconnectTimerId);
 
-      $.getJSON('https://api.ipify.org?format=json', function (data) {
-        let info = {
-          client: {
-            ip: data.ip,
-            username: document.querySelector('meta[name="user"]').content,
-            useragent: navigator.userAgent,
-            path: document.location.pathname,
-            origin: document.location.origin
-          }
-        };
-        websocketConnection.send(JSON.stringify(info));
+      
+      $.ajax({
+        url: 'https://ipinfo.io/ip',
+        method: 'GET',
+        dataType: 'text', // or 'html', 'xml', 'text' based on expected response
+        success: function (data) {
+          let info = {
+            client: {
+              ip: data,
+              username: document.querySelector('meta[name="user"]').content,
+              useragent: navigator.userAgent,
+              path: document.location.pathname,
+              origin: document.location.origin
+            }
+          };
+          websocketConnection.send(JSON.stringify(info));
+        },
+        error: function (xhr, status, error) {
+          console.error("AJAX Error:", error);
+        }
       });
     })
       .catch((err) => {

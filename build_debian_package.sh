@@ -17,7 +17,11 @@ function create_debian_folder() {
    if [ -d ${DEB_PKG_ROOT} ]; then
       rm -rf ${DEB_PKG_ROOT}
    fi
-   mkdir -pv ${DEB_PKG_ROOT}/{DEBIAN,etc/{gwc,default,systemd/user},usr/sbin}
+   mkdir -pv ${DEB_PKG_ROOT}/DEBIAN
+   mkdir -pv ${DEB_PKG_ROOT}/etc/gwc,
+   mkdir -pv ${DEB_PKG_ROOT}/etc/default,systemd/user
+   mkdir -pv ${DEB_PKG_ROOT}/etc/systemd/user
+   mkdir -pv ${DEB_PKG_ROOT}/usr/sbin
 
    cat > ${DEB_PKG_ROOT}/DEBIAN/control<< EOF
 Package: gst-webrtc-camera
@@ -58,9 +62,8 @@ EOF
 GWC_USER_PATH=/home/\${SUDO_USER}/.config/gwc/webroot
 USER_SYSTEMD=/home/\${SUDO_USER}/.config/systemd/user/default.target.wants
 
-if [ ! -d \${USER_SYSTEMD} ]; then
-   mkdir -pv \${USER_SYSTEMD}
-fi
+mkdir -pv \${USER_SYSTEMD}
+mkdir -pv \${GWC_USER_PATH}
 
 chown \${SUDO_USER}:\${SUDO_USER} -R /home/\${SUDO_USER}/.config
 
@@ -137,13 +140,19 @@ EOF
 Description=Gstreamer webrtc camera
 Documentation=https://github.com/yjdwbj/gst-webrtc-camera
 After=multi-user.target
+StartLimitIntervalSec=20
+StartLimitBurst=2
+
 
 [Service]
 ExecStart=/usr/sbin/gwc
-Restart=no
+
+
+Restart=on-failure
+RestartSec=5s
 Type=simple
-StandardOutput=append:/tmp/gwc.log
-StandardError=append:/tmp/gwc.log
+StandardOutput=append:/var/log/gwc.log
+StandardError=append:/var/log/gwc.log
 
 
 [Install]
