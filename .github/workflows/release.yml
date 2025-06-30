@@ -57,7 +57,7 @@ jobs:
           ./build_debian_package.sh
           cp ../*.deb ${{ github.workspace }}/
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: gwc-0.1.0.deb
           path: ${{ github.workspace }}/*.deb
@@ -70,7 +70,7 @@ jobs:
           echo "::set-output name=status::success"
 
       - name: Upload firmware to release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: steps.tag.outputs.status == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
