@@ -18,8 +18,8 @@ function create_debian_folder() {
       rm -rf ${DEB_PKG_ROOT}
    fi
    mkdir -pv ${DEB_PKG_ROOT}/DEBIAN
-   mkdir -pv ${DEB_PKG_ROOT}/etc/gwc,
-   mkdir -pv ${DEB_PKG_ROOT}/etc/default,systemd/user
+   mkdir -pv ${DEB_PKG_ROOT}/etc/gwc
+   mkdir -pv ${DEB_PKG_ROOT}/etc/default
    mkdir -pv ${DEB_PKG_ROOT}/etc/systemd/user
    mkdir -pv ${DEB_PKG_ROOT}/usr/sbin
 
